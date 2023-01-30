@@ -72,19 +72,19 @@ impl Contract<Empty> for Transmuter<'_> {
     }
 }
 
-pub struct Suite {
+pub struct TestEnv {
     pub app: App,
     pub creator: Addr,
     pub contract: Addr,
     pub accounts: HashMap<String, Addr>,
 }
 
-pub struct SuiteBuilder {
+pub struct TestEnvBuilder {
     account_balances: HashMap<String, Vec<Coin>>,
     instantiate_msg: Option<InstantiateMsg>,
 }
 
-impl SuiteBuilder {
+impl TestEnvBuilder {
     pub fn new() -> Self {
         Self {
             account_balances: HashMap::new(),
@@ -102,7 +102,7 @@ impl SuiteBuilder {
         self
     }
 
-    pub fn build(self) -> Suite {
+    pub fn build(self) -> TestEnv {
         let mut app = AppBuilder::default().build(|router, _, storage| {
             for (account, balance) in self.account_balances.clone() {
                 router
@@ -125,7 +125,7 @@ impl SuiteBuilder {
             )
             .unwrap();
 
-        Suite {
+        TestEnv {
             app,
             creator,
             contract,

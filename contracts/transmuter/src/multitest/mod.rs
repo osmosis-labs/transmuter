@@ -1,82 +1,74 @@
-mod suite;
+mod test_env;
 
 use crate::contract::{ExecMsg, InstantiateMsg};
-use cosmwasm_std::{Coin, CosmosMsg, OverflowError, OverflowOperation, StdError};
+use cosmwasm_std::{Coin, OverflowError, OverflowOperation, StdError};
 use cw_multi_test::Executor;
-use suite::*;
+use test_env::*;
 
 #[test]
-fn instantiate_fund_and_transmute() {
-    let mut suite = SuiteBuilder::new()
-        .with_account("user", vec![Coin::new(1_500, "uusdc")])
+fn test_transmute() {
+    let eth_usdc = "ibc/AXLETHUSDC";
+    let cosmos_usdc = "ibc/COSMOSUSDC";
+
+    let mut t = TestEnvBuilder::new()
+        .with_account("user", vec![Coin::new(1_500, eth_usdc)])
         .with_account(
             "provider",
-            vec![Coin::new(1_000, "uusdc"), Coin::new(1_000, "uusdt")],
+            vec![Coin::new(1_000, eth_usdc), Coin::new(1_000, cosmos_usdc)],
         )
         .with_instantiate_msg(InstantiateMsg {
-            asset_a: "uusdt".to_string(),
-            asset_b: "uusdc".to_string(),
+            asset_a: eth_usdc.to_string(),
+            asset_b: cosmos_usdc.to_string(),
         })
         .build();
 
     // fund transmuter
-    let funded_amount = vec![Coin::new(1_000, "uusdc"), Coin::new(1_000, "uusdt")];
-    suite
-        .app
-        .execute(
-            suite.accounts["provider"].clone(),
-            CosmosMsg::Bank(cosmwasm_std::BankMsg::Send {
-                to_address: suite.contract.clone().into(),
-                amount: funded_amount.clone(),
-            }),
+    let funded_amount = vec![Coin::new(1_000, eth_usdc), Coin::new(1_000, cosmos_usdc)];
+    t.app
+        .execute_contract(
+            t.accounts["provider"].clone(),
+            t.contract.clone(),
+            &ExecMsg::Fund {},
+            &funded_amount,
         )
         .unwrap();
 
     // check balances
-    let contract_balances = suite
-        .app
-        .wrap()
-        .query_all_balances(&suite.contract)
-        .unwrap();
+    let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
     assert_eq!(contract_balances, funded_amount);
 
     // transmute
-    suite
-        .app
+    t.app
         .execute_contract(
-            suite.accounts["user"].clone(),
-            suite.contract.clone(),
+            t.accounts["user"].clone(),
+            t.contract.clone(),
             &ExecMsg::Transmute {},
-            &[Coin::new(1000, "uusdc")],
+            &[Coin::new(1000, eth_usdc)],
         )
         .unwrap();
 
     // query balance again
-    let contract_balances = suite
+    let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
+    let user_balances = t
         .app
         .wrap()
-        .query_all_balances(&suite.contract)
-        .unwrap();
-    let bob_balances = suite
-        .app
-        .wrap()
-        .query_all_balances(&suite.accounts["user"])
+        .query_all_balances(&t.accounts["user"])
         .unwrap();
 
-    assert_eq!(contract_balances, vec![Coin::new(2000, "uusdc")]);
+    assert_eq!(contract_balances, vec![Coin::new(2000, eth_usdc)]);
     assert_eq!(
-        bob_balances,
-        vec![Coin::new(500, "uusdc"), Coin::new(1000, "uusdt")]
+        user_balances,
+        vec![Coin::new(500, eth_usdc), Coin::new(1000, cosmos_usdc)]
     );
 
     // transmute fail due to no more funds in the contract to transmute
-    let err = suite
+    let err = t
         .app
         .execute_contract(
-            suite.accounts["user"].clone(),
-            suite.contract,
+            t.accounts["user"].clone(),
+            t.contract,
             &ExecMsg::Transmute {},
-            &[Coin::new(500, "uusdc")],
+            &[Coin::new(500, eth_usdc)],
         )
         .unwrap_err();
 
