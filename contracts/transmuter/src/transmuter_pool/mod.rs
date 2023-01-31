@@ -1,4 +1,5 @@
 mod supply;
+mod transmute;
 
 use crate::ContractError;
 use cosmwasm_schema::cw_serde;
@@ -18,10 +19,6 @@ impl TransmuterPool {
             in_coin: Coin::new(0, in_denom),
             out_coin_reserve: Coin::new(0, out_denom),
         }
-    }
-
-    pub fn transmute(&mut self, coin: &Coin) -> Result<Coin, ContractError> {
-        todo!()
     }
 
     pub fn withdraw(&mut self, coins: &[Coin]) -> Result<(), ContractError> {

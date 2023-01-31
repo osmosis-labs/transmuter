@@ -5,7 +5,7 @@ use crate::{
     transmuter_pool::TransmuterPool,
     ContractError,
 };
-use cosmwasm_std::{Coin, OverflowError, OverflowOperation, StdError};
+use cosmwasm_std::{Coin, StdError};
 use cw_multi_test::Executor;
 use test_env::*;
 
@@ -116,11 +116,12 @@ fn test_supply() {
 #[test]
 fn test_transmute() {
     let mut t = TestEnvBuilder::new()
-        .with_account("user", vec![Coin::new(1_500, ETH_USDC)])
         .with_account(
-            "provider",
-            vec![Coin::new(1_000, ETH_USDC), Coin::new(1_000, COSMOS_USDC)],
+            "alice",
+            vec![Coin::new(1_500, ETH_USDC), Coin::new(1_000, COSMOS_USDC)],
         )
+        .with_account("bob", vec![Coin::new(29_902, ETH_USDC)])
+        .with_account("provider", vec![Coin::new(200_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
             in_denom: ETH_USDC.to_string(),
             out_denom: COSMOS_USDC.to_string(),
@@ -128,7 +129,37 @@ fn test_transmute() {
         .build();
 
     // supply transmuter
-    let supply_amount = vec![Coin::new(1_000, ETH_USDC), Coin::new(1_000, COSMOS_USDC)];
+    let supply_amount = vec![Coin::new(100_000, COSMOS_USDC)];
+
+    // supplying with send tokens should not update pool balance
+    t.app
+        .send_tokens(
+            t.accounts["provider"].clone(),
+            t.contract.clone(),
+            &supply_amount,
+        )
+        .unwrap();
+
+    // transmute should fail since there has no out_coin_reserve in the pool
+    let err = t
+        .app
+        .execute_contract(
+            t.accounts["alice"].clone(),
+            t.contract.clone(),
+            &ExecMsg::Transmute {},
+            &[Coin::new(1_500, ETH_USDC)],
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        err.downcast_ref::<ContractError>().unwrap(),
+        &ContractError::InsufficientOutCoin {
+            required: Coin::new(1_500, COSMOS_USDC),
+            available: Coin::new(0, COSMOS_USDC)
+        }
+    );
+
+    // supply pool properly
     t.app
         .execute_contract(
             t.accounts["provider"].clone(),
@@ -138,49 +169,117 @@ fn test_transmute() {
         )
         .unwrap();
 
-    // check balances
-    let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
-    assert_eq!(contract_balances, supply_amount);
-
-    // transmute
-    t.app
-        .execute_contract(
-            t.accounts["user"].clone(),
-            t.contract.clone(),
-            &ExecMsg::Transmute {},
-            &[Coin::new(1000, ETH_USDC)],
-        )
-        .unwrap();
-
-    // query balance again
-    let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
-    let user_balances = t
-        .app
-        .wrap()
-        .query_all_balances(&t.accounts["user"])
-        .unwrap();
-
-    assert_eq!(contract_balances, vec![Coin::new(2000, ETH_USDC)]);
-    assert_eq!(
-        user_balances,
-        vec![Coin::new(500, ETH_USDC), Coin::new(1000, COSMOS_USDC)]
-    );
-
-    // transmute fail due to no more funds in the contract to transmute
+    // transmute with incorrect funds should still fail
     let err = t
         .app
         .execute_contract(
-            t.accounts["user"].clone(),
-            t.contract,
+            t.accounts["alice"].clone(),
+            t.contract.clone(),
             &ExecMsg::Transmute {},
-            &[Coin::new(500, ETH_USDC)],
+            &[Coin::new(1_000, COSMOS_USDC)],
         )
         .unwrap_err();
 
     assert_eq!(
-        err.downcast_ref::<StdError>().unwrap(),
-        &StdError::overflow(OverflowError::new(OverflowOperation::Sub, "0", "500"))
+        err.downcast_ref::<ContractError>().unwrap(),
+        &ContractError::InvalidTransmuteDenom {
+            denom: COSMOS_USDC.to_string(),
+            expected_denom: ETH_USDC.to_string()
+        }
     );
 
-    // bank send to contract should not change the balance
+    // transmute with funds length != 1 should fail
+    let err = t
+        .app
+        .execute_contract(
+            t.accounts["alice"].clone(),
+            t.contract.clone(),
+            &ExecMsg::Transmute {},
+            &[Coin::new(1_000, ETH_USDC), Coin::new(1_000, COSMOS_USDC)],
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        err.downcast_ref::<ContractError>().unwrap(),
+        &ContractError::SingleCoinExpected {}
+    );
+
+    // transmute with correct in_coin should succeed this time
+    t.app
+        .execute_contract(
+            t.accounts["alice"].clone(),
+            t.contract.clone(),
+            &ExecMsg::Transmute {},
+            &[Coin::new(1_500, ETH_USDC)],
+        )
+        .unwrap();
+
+    // check balances
+    let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
+    let pool: TransmuterPool = t
+        .app
+        .wrap()
+        .query_wasm_smart(&t.contract, &QueryMsg::Pool {})
+        .unwrap();
+    let alice_balances = t
+        .app
+        .wrap()
+        .query_all_balances(&t.accounts["alice"])
+        .unwrap();
+
+    assert_eq!(
+        contract_balances,
+        vec![
+            Coin::new(1_500, ETH_USDC),
+            Coin::new(100_000 + 100_000 - 1_500, COSMOS_USDC), // +100_000 due to bank send
+        ]
+    );
+
+    assert_eq!(
+        pool,
+        TransmuterPool {
+            in_coin: Coin::new(1_500, ETH_USDC),
+            out_coin_reserve: Coin::new(100_000 - 1_500, COSMOS_USDC)
+        }
+    );
+
+    // +1_000 due to existing alice balance
+    assert_eq!(alice_balances, vec![Coin::new(1_500 + 1_000, COSMOS_USDC)]);
+
+    // transmute again with another user
+    t.app
+        .execute_contract(
+            t.accounts["bob"].clone(),
+            t.contract.clone(),
+            &ExecMsg::Transmute {},
+            &[Coin::new(29_902, ETH_USDC)],
+        )
+        .unwrap();
+
+    // check balances
+    let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
+    let pool: TransmuterPool = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract, &QueryMsg::Pool {})
+        .unwrap();
+    let bob_balances = t.app.wrap().query_all_balances(&t.accounts["bob"]).unwrap();
+
+    assert_eq!(
+        contract_balances,
+        vec![
+            Coin::new(1_500 + 29_902, ETH_USDC),
+            Coin::new(100_000 + 100_000 - 1_500 - 29_902, COSMOS_USDC), // +100_000 due to bank send
+        ]
+    );
+
+    assert_eq!(
+        pool,
+        TransmuterPool {
+            in_coin: Coin::new(1_500 + 29_902, ETH_USDC),
+            out_coin_reserve: Coin::new(100_000 - 1_500 - 29_902, COSMOS_USDC)
+        }
+    );
+
+    assert_eq!(bob_balances, vec![Coin::new(29_902, COSMOS_USDC)]);
 }

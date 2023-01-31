@@ -1,4 +1,4 @@
-use cosmwasm_std::{ensure_eq, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdError};
+use cosmwasm_std::{ensure_eq, BankMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError};
 use cw_storage_plus::Item;
 use sylvia::contract;
 
@@ -10,8 +10,6 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct Transmuter<'a> {
     pub(crate) pool: Item<'a, TransmuterPool>,
-    pub(crate) in_denom: Item<'a, Coin>,
-    pub(crate) out_denom: Item<'a, Coin>,
 }
 
 #[contract]
@@ -19,8 +17,6 @@ impl Transmuter<'_> {
     /// Create a new counter with the given initial count
     pub const fn new() -> Self {
         Self {
-            in_denom: Item::new("in_denom"),
-            out_denom: Item::new("out_denom"),
             pool: Item::new("pool"),
         }
     }
@@ -76,27 +72,20 @@ impl Transmuter<'_> {
     fn transmute(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
-        // check if info.funds.length > 1
-        // if yes, return `ContractError::TooManyDenomsToTransmute`
-        if info.funds.len() > 1 {
-            return Err(ContractError::TooManyCoinsToTransmute {});
-        }
+        // ensure funds length == 1
+        ensure_eq!(info.funds.len(), 1, ContractError::SingleCoinExpected {});
 
+        // transmute
+        let mut pool = self.pool.load(deps.storage)?;
         let in_coin = info.funds[0].clone();
+        let out_coin = pool.transmute(&in_coin)?;
 
-        // check if the in_coin is of in_denom or out_denom's denom
-        // if not, return `ContractError::DenomNotAllowed`
-        let in_denom = self.in_denom.load(deps.storage)?;
-        let out_denom = self.out_denom.load(deps.storage)?;
+        // save pool
+        self.pool.save(deps.storage, &pool)?;
 
         let bank_send_msg = BankMsg::Send {
             to_address: info.sender.to_string(),
-            // in: in_denom, out: out_denom and vice versa
-            // with the same amount
-            amount: vec![Coin {
-                amount: in_coin.amount,
-                denom: transmute_denom(in_coin.denom, in_denom.denom, out_denom.denom)?,
-            }],
+            amount: vec![out_coin],
         };
 
         Ok(Response::new()
@@ -108,19 +97,5 @@ impl Transmuter<'_> {
     fn pool(&self, ctx: (Deps, Env)) -> Result<TransmuterPool, ContractError> {
         let (deps, _env) = ctx;
         Ok(self.pool.load(deps.storage)?)
-    }
-}
-
-fn transmute_denom(
-    in_denom: String,
-    a_denom: String,
-    b_denom: String,
-) -> Result<String, ContractError> {
-    if in_denom == a_denom {
-        Ok(b_denom)
-    } else if in_denom == b_denom {
-        Ok(a_denom)
-    } else {
-        Err(ContractError::DenomNotAllowed { denom: in_denom })
     }
 }
