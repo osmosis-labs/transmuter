@@ -1,16 +1,17 @@
-use cosmwasm_std::{BankMsg, Coin, DepsMut, Env, MessageInfo, Response};
+use cosmwasm_std::{ensure_eq, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdError};
 use cw_storage_plus::Item;
 use sylvia::contract;
 
-use crate::error::ContractError;
+use crate::{error::ContractError, transmuter_pool::TransmuterPool};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:transmuter";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct Transmuter<'a> {
-    pub(crate) asset_a: Item<'a, Coin>,
-    pub(crate) asset_b: Item<'a, Coin>,
+    pub(crate) pool: Item<'a, TransmuterPool>,
+    pub(crate) in_denom: Item<'a, Coin>,
+    pub(crate) out_denom: Item<'a, Coin>,
 }
 
 #[contract]
@@ -18,8 +19,9 @@ impl Transmuter<'_> {
     /// Create a new counter with the given initial count
     pub const fn new() -> Self {
         Self {
-            asset_a: Item::new("asset_a"),
-            asset_b: Item::new("asset_b"),
+            in_denom: Item::new("in_denom"),
+            out_denom: Item::new("out_denom"),
+            pool: Item::new("pool"),
         }
     }
 
@@ -28,19 +30,17 @@ impl Transmuter<'_> {
     pub fn instantiate(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
-        asset_a: String,
-        asset_b: String,
+        in_denom: String,
+        out_denom: String,
     ) -> Result<Response, ContractError> {
         let (deps, _env, _info) = ctx;
 
         // store contract version for migration info
         cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
-        // store asset_a and asset_b
-        self.asset_a
-            .save(deps.storage, &Coin::new(0u128, asset_a))?;
-        self.asset_b
-            .save(deps.storage, &Coin::new(0u128, asset_b))?;
+        // store pool
+        self.pool
+            .save(deps.storage, &TransmuterPool::new(&in_denom, &out_denom))?;
 
         Ok(Response::new()
             .add_attribute("method", "instantiate")
@@ -48,51 +48,28 @@ impl Transmuter<'_> {
             .add_attribute("contract_version", CONTRACT_VERSION))
     }
 
-    /// funds the contract with asset_a and/or asset_b
-    /// if the funds are not asset_a or asset_b, returns `ContractError::DenomNotAllowed`
+    /// supply the contract with coin that matches out_coin's denom
     #[msg(exec)]
-    fn fund(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
+    fn supply(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
-        // get funds from msg info
-        let funds = info.funds;
+        // check if funds length == 1
+        ensure_eq!(
+            info.funds.len(),
+            1,
+            ContractError::Std(StdError::generic_err(
+                "supply requires funds to have exactly one denom"
+            ))
+        );
 
-        // check if all funds are of asset_a or asset_b's denom
-        // if not, return `ContractError::DenomNotAllowed`
-        for coin in funds.iter() {
-            // if coin is has denom either asset_a or asset_b, add to asset_a or asset_b
-            // else return DenomNotAllowed
+        // update pool
+        self.pool
+            .update(deps.storage, |mut pool| -> Result<_, ContractError> {
+                pool.supply(&info.funds[0])?;
+                Ok(pool)
+            })?;
 
-            let asset_a = self.asset_a.load(deps.storage)?;
-            let asset_b = self.asset_b.load(deps.storage)?;
-
-            if coin.denom != asset_a.denom && coin.denom != asset_b.denom {
-                return Err(ContractError::DenomNotAllowed {
-                    denom: coin.denom.clone(),
-                });
-            }
-
-            // add funds to asset_a or asset_b
-            if coin.denom == asset_a.denom {
-                self.asset_a.save(
-                    deps.storage,
-                    &Coin {
-                        amount: asset_a.amount + coin.amount,
-                        denom: asset_a.denom.clone(),
-                    },
-                )?;
-            } else if coin.denom == asset_b.denom {
-                self.asset_b.save(
-                    deps.storage,
-                    &Coin {
-                        amount: asset_b.amount + coin.amount,
-                        denom: asset_b.denom.clone(),
-                    },
-                )?;
-            }
-        }
-
-        Ok(Response::new().add_attribute("method", "fund"))
+        Ok(Response::new().add_attribute("method", "supply"))
     }
 
     #[msg(exec)]
@@ -107,24 +84,30 @@ impl Transmuter<'_> {
 
         let in_coin = info.funds[0].clone();
 
-        // check if the in_coin is of asset_a or asset_b's denom
+        // check if the in_coin is of in_denom or out_denom's denom
         // if not, return `ContractError::DenomNotAllowed`
-        let asset_a = self.asset_a.load(deps.storage)?;
-        let asset_b = self.asset_b.load(deps.storage)?;
+        let in_denom = self.in_denom.load(deps.storage)?;
+        let out_denom = self.out_denom.load(deps.storage)?;
 
         let bank_send_msg = BankMsg::Send {
             to_address: info.sender.to_string(),
-            // in: asset_a, out: asset_b and vice versa
+            // in: in_denom, out: out_denom and vice versa
             // with the same amount
             amount: vec![Coin {
                 amount: in_coin.amount,
-                denom: transmute_denom(in_coin.denom, asset_a.denom, asset_b.denom)?,
+                denom: transmute_denom(in_coin.denom, in_denom.denom, out_denom.denom)?,
             }],
         };
 
         Ok(Response::new()
             .add_attribute("method", "transmute")
             .add_message(bank_send_msg))
+    }
+
+    #[msg(query)]
+    fn pool(&self, ctx: (Deps, Env)) -> Result<TransmuterPool, ContractError> {
+        let (deps, _env) = ctx;
+        Ok(self.pool.load(deps.storage)?)
     }
 }
 
