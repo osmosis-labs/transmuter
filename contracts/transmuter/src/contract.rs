@@ -1,4 +1,5 @@
 use cosmwasm_std::{ensure_eq, BankMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError};
+use cw_controllers::{Admin, AdminResponse};
 use cw_storage_plus::Item;
 use sylvia::contract;
 
@@ -10,6 +11,7 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct Transmuter<'a> {
     pub(crate) pool: Item<'a, TransmuterPool>,
+    pub(crate) admin: Admin<'a>,
 }
 
 #[contract]
@@ -18,6 +20,7 @@ impl Transmuter<'_> {
     pub const fn new() -> Self {
         Self {
             pool: Item::new("pool"),
+            admin: Admin::new("admin"),
         }
     }
 
@@ -28,6 +31,7 @@ impl Transmuter<'_> {
         ctx: (DepsMut, Env, MessageInfo),
         in_denom: String,
         out_denom: String,
+        admin: String,
     ) -> Result<Response, ContractError> {
         let (deps, _env, _info) = ctx;
 
@@ -37,6 +41,10 @@ impl Transmuter<'_> {
         // store pool
         self.pool
             .save(deps.storage, &TransmuterPool::new(&in_denom, &out_denom))?;
+
+        // store admin
+        let admin = deps.api.addr_validate(&admin)?;
+        self.admin.set(deps, Some(admin))?;
 
         Ok(Response::new()
             .add_attribute("method", "instantiate")
@@ -91,6 +99,26 @@ impl Transmuter<'_> {
         Ok(Response::new()
             .add_attribute("method", "transmute")
             .add_message(bank_send_msg))
+    }
+
+    #[msg(exec)]
+    fn update_admin(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        new_admin: String,
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+        let new_admin = deps.api.addr_validate(&new_admin)?;
+
+        self.admin
+            .execute_update_admin(deps, info, Some(new_admin))
+            .map_err(|_| ContractError::Unauthorized {})
+    }
+
+    #[msg(query)]
+    fn admin(&self, ctx: (Deps, Env)) -> Result<AdminResponse, StdError> {
+        let (deps, _env) = ctx;
+        self.admin.query_admin(deps)
     }
 
     #[msg(query)]

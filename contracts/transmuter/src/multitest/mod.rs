@@ -5,7 +5,8 @@ use crate::{
     transmuter_pool::TransmuterPool,
     ContractError,
 };
-use cosmwasm_std::{Coin, StdError};
+use cosmwasm_std::{Addr, Coin, StdError};
+use cw_controllers::AdminResponse;
 use cw_multi_test::Executor;
 use test_env::*;
 
@@ -22,6 +23,7 @@ fn test_supply() {
         .with_instantiate_msg(InstantiateMsg {
             in_denom: ETH_USDC.to_string(),
             out_denom: COSMOS_USDC.to_string(),
+            admin: "admin".to_string(),
         })
         .build();
 
@@ -125,6 +127,7 @@ fn test_transmute() {
         .with_instantiate_msg(InstantiateMsg {
             in_denom: ETH_USDC.to_string(),
             out_denom: COSMOS_USDC.to_string(),
+            admin: "admin".to_string(),
         })
         .build();
 
@@ -282,4 +285,61 @@ fn test_transmute() {
     );
 
     assert_eq!(bob_balances, vec![Coin::new(29_902, COSMOS_USDC)]);
+}
+
+#[test]
+fn test_admin() {
+    let mut t = TestEnvBuilder::new()
+        .with_instantiate_msg(InstantiateMsg {
+            in_denom: ETH_USDC.to_string(),
+            out_denom: COSMOS_USDC.to_string(),
+            admin: "old_admin".to_string(),
+        })
+        .build();
+
+    let AdminResponse { admin } = t
+        .app
+        .wrap()
+        .query_wasm_smart(&t.contract, &QueryMsg::Admin {})
+        .unwrap();
+
+    assert_eq!(admin.unwrap(), "old_admin".to_string());
+
+    // admin can update admin
+    t.app
+        .execute_contract(
+            Addr::unchecked("old_admin"),
+            t.contract.clone(),
+            &ExecMsg::UpdateAdmin {
+                new_admin: "new_admin".to_string(),
+            },
+            &[],
+        )
+        .unwrap();
+
+    let AdminResponse { admin } = t
+        .app
+        .wrap()
+        .query_wasm_smart(&t.contract, &QueryMsg::Admin {})
+        .unwrap();
+
+    assert_eq!(admin.unwrap(), "new_admin".to_string());
+
+    // non-admin cannot update admin
+    let err = t
+        .app
+        .execute_contract(
+            Addr::unchecked("old_admin"),
+            t.contract.clone(),
+            &ExecMsg::UpdateAdmin {
+                new_admin: "new_admin".to_string(),
+            },
+            &[],
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        err.downcast_ref::<ContractError>().unwrap(),
+        &ContractError::Unauthorized {}
+    );
 }
