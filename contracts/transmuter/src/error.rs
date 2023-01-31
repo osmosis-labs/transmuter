@@ -30,6 +30,6 @@ pub enum ContractError {
         expected_denom: String,
     },
 
-    #[error("Insufficient out coin reserve: required: {required}, available: {available}")]
-    InsufficientOutCoin { required: Coin, available: Coin },
+    #[error("Insufficient fund: required: {required}, available: {available}")]
+    InsufficientFund { required: Coin, available: Coin },
 }

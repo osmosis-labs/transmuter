@@ -1,7 +1,7 @@
 mod supply;
 mod transmute;
+mod withdraw;
 
-use crate::ContractError;
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::Coin;
 
@@ -19,9 +19,5 @@ impl TransmuterPool {
             in_coin: Coin::new(0, in_denom),
             out_coin_reserve: Coin::new(0, out_denom),
         }
-    }
-
-    pub fn withdraw(&mut self, coins: &[Coin]) -> Result<(), ContractError> {
-        todo!()
     }
 }

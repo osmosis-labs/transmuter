@@ -153,7 +153,7 @@ fn test_transmute() {
 
     assert_eq!(
         err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::InsufficientOutCoin {
+        &ContractError::InsufficientFund {
             required: Coin::new(1_500, COSMOS_USDC),
             available: Coin::new(0, COSMOS_USDC)
         }

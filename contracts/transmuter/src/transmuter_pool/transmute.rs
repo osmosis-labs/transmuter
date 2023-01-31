@@ -22,7 +22,7 @@ impl TransmuterPool {
         // ensure there is enough out_coin_reserve
         ensure!(
             self.out_coin_reserve.amount >= coin.amount,
-            ContractError::InsufficientOutCoin {
+            ContractError::InsufficientFund {
                 required: out_coin,
                 available: self.out_coin_reserve.clone()
             }
@@ -88,7 +88,7 @@ mod tests {
         pool.supply(&Coin::new(70_000, COSMOS_USDC)).unwrap();
         assert_eq!(
             pool.transmute(&Coin::new(70_001, ETH_USDC)).unwrap_err(),
-            ContractError::InsufficientOutCoin {
+            ContractError::InsufficientFund {
                 required: Coin::new(70_001, COSMOS_USDC),
                 available: Coin::new(70_000, COSMOS_USDC)
             }
