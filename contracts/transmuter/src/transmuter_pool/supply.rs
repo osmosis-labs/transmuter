@@ -2,32 +2,21 @@ use cosmwasm_std::{ensure_eq, Coin, StdError};
 
 use crate::ContractError;
 
-pub struct TransmuterPool {
-    /// incoming coins are stored here
-    in_coin: Coin,
-    /// reserve of coins for future transmutations
-    out_coin_reserve: Coin,
-}
+use super::TransmuterPool;
 
 impl TransmuterPool {
-    pub fn new(in_denom: &str, out_denom: &str) -> Self {
-        Self {
-            in_coin: Coin::new(0, in_denom),
-            out_coin_reserve: Coin::new(0, out_denom),
-        }
-    }
-
     pub fn supply(&mut self, coin: &Coin) -> Result<(), ContractError> {
         // ensure supply denom is out_coin_reserve's denom
         ensure_eq!(
             coin.denom,
             self.out_coin_reserve.denom,
-            ContractError::UnableToSupply {
+            ContractError::InvalidSupplyDenom {
                 denom: coin.denom.clone(),
                 expected_denom: self.out_coin_reserve.denom.clone()
             }
         );
 
+        // add coin to out_coin_reserve
         self.out_coin_reserve.amount = self
             .out_coin_reserve
             .amount
@@ -36,18 +25,10 @@ impl TransmuterPool {
 
         Ok(())
     }
-
-    pub fn transmute(&mut self, coin: &Coin) -> Result<Coin, ContractError> {
-        todo!()
-    }
-
-    pub fn withdraw(&mut self, coins: &[Coin]) -> Result<(), ContractError> {
-        todo!()
-    }
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use cosmwasm_std::{OverflowError, OverflowOperation};
 
     use super::*;
@@ -55,7 +36,7 @@ mod test {
     const COSMOS_USDC: &str = "ibc/COSMOSUSDC";
 
     #[test]
-    fn test_supply_ok() {
+    fn test_supply_increasingly() {
         let mut pool = TransmuterPool::new(ETH_USDC, COSMOS_USDC);
 
         // supply with out coin denom
@@ -68,12 +49,12 @@ mod test {
     }
 
     #[test]
-    fn test_supply_error() {
+    fn test_supply_error_with_wrong_denom() {
         let mut pool = TransmuterPool::new(ETH_USDC, COSMOS_USDC);
 
         assert_eq!(
             pool.supply(&Coin::new(1000, ETH_USDC)).unwrap_err(),
-            ContractError::UnableToSupply {
+            ContractError::InvalidSupplyDenom {
                 denom: ETH_USDC.to_string(),
                 expected_denom: COSMOS_USDC.to_string()
             },
@@ -82,12 +63,17 @@ mod test {
 
         assert_eq!(
             pool.supply(&Coin::new(1000, "urandom")).unwrap_err(),
-            ContractError::UnableToSupply {
+            ContractError::InvalidSupplyDenom {
                 denom: "urandom".to_string(),
                 expected_denom: COSMOS_USDC.to_string()
             },
             "supply with random denom"
         );
+    }
+
+    #[test]
+    fn test_supply_error_with_overflow() {
+        let mut pool = TransmuterPool::new(ETH_USDC, COSMOS_USDC);
 
         assert_eq!(
             {

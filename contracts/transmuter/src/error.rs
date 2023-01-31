@@ -19,7 +19,7 @@ pub enum ContractError {
     TooManyCoinsToTransmute {},
 
     #[error("Unable to supply coin with denom: {denom}: expected: {expected_denom}")]
-    UnableToSupply {
+    InvalidSupplyDenom {
         denom: String,
         expected_denom: String,
     },
