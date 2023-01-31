@@ -1,4 +1,4 @@
-use cosmwasm_std::{ensure_eq, BankMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError};
+use cosmwasm_std::{ensure_eq, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdError};
 use cw_controllers::{Admin, AdminResponse};
 use cw_storage_plus::Item;
 use sylvia::contract;
@@ -113,6 +113,36 @@ impl Transmuter<'_> {
         self.admin
             .execute_update_admin(deps, info, Some(new_admin))
             .map_err(|_| ContractError::Unauthorized {})
+    }
+
+    #[msg(exec)]
+    fn withdraw(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        coins: Vec<Coin>,
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+
+        // allow only admin to withdraw
+        self.admin
+            .assert_admin(deps.as_ref(), &info.sender)
+            .map_err(|_| ContractError::Unauthorized {})?;
+
+        // withdraw
+        let mut pool = self.pool.load(deps.storage)?;
+        pool.withdraw(&coins)?;
+
+        // save pool
+        self.pool.save(deps.storage, &pool)?;
+
+        let bank_send_msg = BankMsg::Send {
+            to_address: info.sender.to_string(),
+            amount: coins,
+        };
+
+        Ok(Response::new()
+            .add_attribute("method", "withdraw")
+            .add_message(bank_send_msg))
     }
 
     #[msg(query)]

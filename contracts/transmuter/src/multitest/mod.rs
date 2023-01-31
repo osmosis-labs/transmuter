@@ -343,3 +343,117 @@ fn test_admin() {
         &ContractError::Unauthorized {}
     );
 }
+
+#[test]
+fn test_withdraw() {
+    let mut t = TestEnvBuilder::new()
+        .with_account("user", vec![Coin::new(1_500, ETH_USDC)])
+        .with_account("provider", vec![Coin::new(200_000, COSMOS_USDC)])
+        .with_instantiate_msg(InstantiateMsg {
+            in_denom: ETH_USDC.to_string(),
+            out_denom: COSMOS_USDC.to_string(),
+            admin: "admin".to_string(),
+        })
+        .build();
+
+    // supply
+    t.app
+        .execute_contract(
+            t.accounts["provider"].clone(),
+            t.contract.clone(),
+            &ExecMsg::Supply {},
+            &[Coin::new(100_000, COSMOS_USDC)],
+        )
+        .unwrap();
+
+    // transmute to build up some in_coin
+    t.app
+        .execute_contract(
+            t.accounts["user"].clone(),
+            t.contract.clone(),
+            &ExecMsg::Transmute {},
+            &[Coin::new(1_500, ETH_USDC)],
+        )
+        .unwrap();
+
+    // non-admin cannot withdraw
+    let err = t
+        .app
+        .execute_contract(
+            t.accounts["user"].clone(),
+            t.contract.clone(),
+            &ExecMsg::Withdraw {
+                coins: vec![Coin::new(1_000, COSMOS_USDC)],
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert_eq!(
+        err.downcast_ref::<ContractError>().unwrap(),
+        &ContractError::Unauthorized {}
+    );
+
+    // admin can withdraw
+    t.app
+        .execute_contract(
+            Addr::unchecked("admin"),
+            t.contract.clone(),
+            &ExecMsg::Withdraw {
+                coins: vec![Coin::new(1_000, COSMOS_USDC), Coin::new(1_000, ETH_USDC)],
+            },
+            &[],
+        )
+        .unwrap();
+
+    // check balances
+    assert_eq!(
+        t.app.wrap().query_all_balances(&t.contract).unwrap(),
+        vec![
+            Coin::new(500, ETH_USDC),
+            Coin::new(100_000 - 1500 - 1000, COSMOS_USDC)
+        ]
+    );
+
+    let pool: TransmuterPool = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
+        .unwrap();
+
+    assert_eq!(
+        pool,
+        TransmuterPool {
+            in_coin: Coin::new(500, ETH_USDC),
+            out_coin_reserve: Coin::new(100_000 - 1500 - 1000, COSMOS_USDC)
+        }
+    );
+
+    // check admin balance
+    assert_eq!(
+        t.app
+            .wrap()
+            .query_all_balances(&Addr::unchecked("admin"))
+            .unwrap(),
+        vec![Coin::new(1_000, ETH_USDC), Coin::new(1_000, COSMOS_USDC)]
+    );
+
+    // withdrawing excess coins fails
+    let err = t
+        .app
+        .execute_contract(
+            Addr::unchecked("admin"),
+            t.contract.clone(),
+            &ExecMsg::Withdraw {
+                coins: vec![Coin::new(100_000, COSMOS_USDC)],
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert_eq!(
+        err.downcast_ref::<ContractError>().unwrap(),
+        &ContractError::InsufficientFund {
+            required: Coin::new(100_000, COSMOS_USDC),
+            available: Coin::new(100_000 - 1500 - 1000, COSMOS_USDC)
+        }
+    );
+}
