@@ -16,7 +16,7 @@ pub struct Transmuter<'a> {
 
 #[contract]
 impl Transmuter<'_> {
-    /// Create a new counter with the given initial count
+    /// Create a Transmuter instance.
     pub const fn new() -> Self {
         Self {
             pool: Item::new("pool"),
@@ -25,9 +25,9 @@ impl Transmuter<'_> {
     }
 
     /// Instantiate the contract with
-    /// in_denom - the denom of the coin to be transmuted
-    /// out_denom - the denom of the coin that is transmuted to, needs to be supplied to the contract
-    /// admin - the admin of the contract, can change the admin and withdraw funds
+    ///   `in_denom`  - the denom of the coin to be transmuted.
+    ///   `out_denom` - the denom of the coin that is transmuted to, needs to be supplied to the contract.
+    ///   `admin`     - the admin of the contract, can change the admin and withdraw funds.
     #[msg(instantiate)]
     pub fn instantiate(
         &self,
