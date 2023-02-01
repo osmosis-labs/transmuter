@@ -170,5 +170,5 @@ impl Transmuter<'_> {
 
 #[cw_serde]
 pub struct PoolResponse {
-    pool: TransmuterPool,
+    pub pool: TransmuterPool,
 }

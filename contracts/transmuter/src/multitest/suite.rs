@@ -1,6 +1,6 @@
 use super::test_env::*;
 use crate::{
-    contract::{ExecMsg, InstantiateMsg, QueryMsg},
+    contract::{ExecMsg, InstantiateMsg, PoolResponse, QueryMsg},
     transmuter_pool::TransmuterPool,
     ContractError,
 };
@@ -94,7 +94,7 @@ fn test_supply() {
     assert_eq!(contract_balances, supplied_amount);
 
     // check pool balance
-    let pool: TransmuterPool = t
+    let PoolResponse { pool } = t
         .app
         .wrap()
         .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
@@ -213,7 +213,7 @@ fn test_transmute() {
 
     // check balances
     let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
-    let pool: TransmuterPool = t
+    let PoolResponse { pool } = t
         .app
         .wrap()
         .query_wasm_smart(&t.contract, &QueryMsg::Pool {})
@@ -255,7 +255,7 @@ fn test_transmute() {
 
     // check balances
     let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
-    let pool: TransmuterPool = t
+    let PoolResponse { pool } = t
         .app
         .wrap()
         .query_wasm_smart(t.contract, &QueryMsg::Pool {})
@@ -408,7 +408,7 @@ fn test_withdraw() {
         ]
     );
 
-    let pool: TransmuterPool = t
+    let PoolResponse { pool } = t
         .app
         .wrap()
         .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
