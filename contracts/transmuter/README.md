@@ -54,10 +54,3 @@ Withdraw {
     coins: Vec<Coin>,
 }
 ```
-
-## Future work
-
-This contract is intended to be able to plug into Osmosis as a CosmWasm pool type and abstract parts of it's interaction through [`poolmanager` module](https://github.com/osmosis-labs/osmosis/tree/main/x/poolmanager).
-To transmute, it will go through `poolmanager`'s `MsgSwapExactAmountIn` and `MsgSwapExactAmountOut` messages and will route the calls through sudo endpoint of the contract.
-
-This is still a work in progress.
