@@ -2,7 +2,9 @@
 
 A CosmWasm contract to enable 1-direction 1:1 conversion of one asset to another.
 
-## Setup
+## Interacting with the contract
+
+### Setup
 
 To set up the contract, contract instantiation is needed with the following information:
 
@@ -17,15 +19,25 @@ pub struct InstantiateMsg {
 }
 ```
 
+### Supplying out_denom reserve
+
 The contract needs a reserve of out denom coins to be able to transmute. Coins can be added to the reserve by sending a `Supply` message to the contract.
 `Supply` messages has no field and the amount of coins to be added to the reserve is taken from the `MsgExecuteContract` funds.
 
-## Transmutation
+```rs
+Supply {}
+```
+
+### Transmutation
 
 A transmutation is done by sending a `Transmute` message to the contract. The message also has no field and the amount of coins to be transmuted is taken from the `MsgExecuteContract` funds the same way `Supply` message is.
 The contract will expect `in_denom` coins to be sent and will send `out_denom` coins to the message sender with the same amount as the `in_denom` coins sent.
 
-## Admin
+```rs
+Transmute {}
+```
+
+### Admin
 
 Admin can be changed by sending a `UpdateAdmin` message to the contract with the new admin address as the field.
 
@@ -42,3 +54,10 @@ Withdraw {
     coins: Vec<Coin>,
 }
 ```
+
+## Future work
+
+This contract is intended to be able to plug into Osmosis as a CosmWasm pool type and abstract parts of it's interaction through [`poolmanager` module](https://github.com/osmosis-labs/osmosis/tree/main/x/poolmanager).
+To transmute, it will go through `poolmanager`'s `MsgSwapExactAmountIn` and `MsgSwapExactAmountOut` messages and will route the calls through sudo endpoint of the contract.
+
+This is still a work in progress.
