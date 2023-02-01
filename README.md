@@ -6,8 +6,8 @@ A CosmWasm contract to enable 1-direction 1:1 conversion of one asset to another
 
 For more information about the contract, please refer to [this document](./contracts/transmuter/README.md).
 
-
 ## Interacting with the contract via beaker console on testnet
+
 First, make sure [beaker](https://github.com/osmosis-labs/beaker#installation) is installed.
 
 Current testnet contract is deployed via the following command:
@@ -25,7 +25,7 @@ beaker console --network testnet
 ```
 
 This will connect with the contract that is deployed on testnet. The reference to the contract address and code id can be found in [.beaker/state.json](.beaker/state.json).
-Instantiate message can be found [here](./contracts/transmuter/instantiate-msg/default.json).
+Instantiate message can be found [here](contracts/transmuter/instantiate-msgs/default.json).
 
 ### Setup
 
