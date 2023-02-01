@@ -6,9 +6,19 @@ A CosmWasm contract to enable 1-direction 1:1 conversion of one asset to another
 
 For more information about the contract, please refer to [this document](./contracts/transmuter/README.md).
 
-## Interacting with the contract via beaker console on testnet
 
-Make sure [beaker](https://github.com/osmosis-labs/beaker#installation) is installed. Then:
+## Interacting with the contract via beaker console on testnet
+First, make sure [beaker](https://github.com/osmosis-labs/beaker#installation) is installed.
+
+Current testnet contract is deployed via the following command:
+
+```sh
+# no need to run this to play along with the rest of the guide
+# since it has already been deployed
+beaker wasm deploy transmuter --signer-account test1 --network testnet
+```
+
+You can connect beaker console to testnet with the following command:
 
 ```sh
 beaker console --network testnet
