@@ -5,7 +5,7 @@ use crate::{
     transmuter_pool::TransmuterPool,
     ContractError,
 };
-use cosmwasm_std::{Addr, Coin, StdError};
+use cosmwasm_std::{Addr, Coin};
 use cw_controllers::AdminResponse;
 use cw_multi_test::Executor;
 use test_env::*;
@@ -41,9 +41,7 @@ fn test_supply() {
 
     assert_eq!(
         err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::Std(StdError::generic_err(
-            "supply requires funds to have exactly one denom"
-        ))
+        &ContractError::SingleCoinExpected {}
     );
 
     // failed to supply 0 denom
@@ -59,9 +57,7 @@ fn test_supply() {
 
     assert_eq!(
         err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::Std(StdError::generic_err(
-            "supply requires funds to have exactly one denom"
-        ))
+        &ContractError::SingleCoinExpected {}
     );
 
     // fail to supply with non out_coin's denom
