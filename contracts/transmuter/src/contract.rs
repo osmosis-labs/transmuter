@@ -24,7 +24,10 @@ impl Transmuter<'_> {
         }
     }
 
-    /// Instantiate the contract with the initial count
+    /// Instantiate the contract with
+    /// in_denom - the denom of the coin to be transmuted
+    /// out_denom - the denom of the coin that is transmuted to, needs to be supplied to the contract
+    /// admin - the admin of the contract, can change the admin and withdraw funds
     #[msg(instantiate)]
     pub fn instantiate(
         &self,
@@ -52,19 +55,15 @@ impl Transmuter<'_> {
             .add_attribute("contract_version", CONTRACT_VERSION))
     }
 
-    /// supply the contract with coin that matches out_coin's denom
+    /// Supply the contract with coin that matches `out_coin`'s denom.
+    /// Recived supply coin from funds part of `MsgExecuteContract` and
+    /// keep it as `pool.out_coin_reserve`.
     #[msg(exec)]
     fn supply(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
-        // check if funds length == 1
-        ensure_eq!(
-            info.funds.len(),
-            1,
-            ContractError::Std(StdError::generic_err(
-                "supply requires funds to have exactly one denom"
-            ))
-        );
+        // ensure funds length == 1
+        ensure_eq!(info.funds.len(), 1, ContractError::SingleCoinExpected {});
 
         // update pool
         self.pool
@@ -76,6 +75,9 @@ impl Transmuter<'_> {
         Ok(Response::new().add_attribute("method", "supply"))
     }
 
+    /// Transmute `in_coin` to `out_coin`.
+    /// Recived `in_coin` from `MsgExecuteContract`'s funds and
+    /// send `out_coin` back to the msg sender with 1:1 ratio.
     #[msg(exec)]
     fn transmute(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
@@ -101,6 +103,7 @@ impl Transmuter<'_> {
             .add_message(bank_send_msg))
     }
 
+    /// Update the admin of the contract.
     #[msg(exec)]
     fn update_admin(
         &self,
@@ -115,6 +118,8 @@ impl Transmuter<'_> {
             .map_err(|_| ContractError::Unauthorized {})
     }
 
+    /// Withdraw funds from the contract. Both `in_coin` and `out_coin` are withdrawable.
+    /// Only admin can withdraw funds.
     #[msg(exec)]
     fn withdraw(
         &self,
@@ -145,12 +150,14 @@ impl Transmuter<'_> {
             .add_message(bank_send_msg))
     }
 
+    /// Query the admin of the contract.
     #[msg(query)]
     fn admin(&self, ctx: (Deps, Env)) -> Result<AdminResponse, StdError> {
         let (deps, _env) = ctx;
         self.admin.query_admin(deps)
     }
 
+    /// Query the pool information of the contract.
     #[msg(query)]
     fn pool(&self, ctx: (Deps, Env)) -> Result<TransmuterPool, ContractError> {
         let (deps, _env) = ctx;
