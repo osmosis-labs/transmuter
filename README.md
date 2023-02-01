@@ -61,7 +61,9 @@ await transmuter_user.transmute("auto", undefined, [
 ]);
 ```
 
-## Withdraw
+### Withdraw
+
+Only admin can withdraw
 
 ```js
 await transmuter_admin.withdraw({
