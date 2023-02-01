@@ -1,5 +1,8 @@
 # Transmuter
 
+
+![CI](https://github.com/osmosis-labs/transmuter/actions/workflows/rust.yml/badge.svg)
+
 A CosmWasm contract to enable 1-direction 1:1 conversion of one asset to another.
 
 For more information about the contract, please refer to [this document](./contracts/transmuter/README.md).
