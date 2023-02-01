@@ -1,1 +1,13 @@
-{}
+{
+  "testnet": {
+    "transmuter": {
+      "code_id": 5700,
+      "addresses": {
+        "default": "osmo17s4gdnz8rkwxtcm87rmgr07yt63hnyrvu08m25r6m7jjftgyee9s7ff7l4"
+      },
+      "proposal": {
+        "store_code": null
+      }
+    }
+  }
+}

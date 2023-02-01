@@ -1,3 +1,4 @@
+use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{ensure_eq, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdError};
 use cw_controllers::{Admin, AdminResponse};
 use cw_storage_plus::Item;
@@ -159,8 +160,15 @@ impl Transmuter<'_> {
 
     /// Query the pool information of the contract.
     #[msg(query)]
-    fn pool(&self, ctx: (Deps, Env)) -> Result<TransmuterPool, ContractError> {
+    fn pool(&self, ctx: (Deps, Env)) -> Result<PoolResponse, ContractError> {
         let (deps, _env) = ctx;
-        Ok(self.pool.load(deps.storage)?)
+        Ok(PoolResponse {
+            pool: self.pool.load(deps.storage)?,
+        })
     }
+}
+
+#[cw_serde]
+pub struct PoolResponse {
+    pool: TransmuterPool,
 }
