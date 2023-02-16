@@ -1,4 +1,4 @@
-use cosmwasm_std::{Coin, StdError};
+use cosmwasm_std::{Coin, StdError, Uint128};
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq)]
@@ -32,4 +32,10 @@ pub enum ContractError {
 
     #[error("Insufficient fund: required: {required}, available: {available}")]
     InsufficientFund { required: Coin, available: Coin },
+
+    #[error("Insufficient shares: required: {required}, available: {available}")]
+    InsufficientShares {
+        required: Uint128,
+        available: Uint128,
+    },
 }
