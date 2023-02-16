@@ -1,6 +1,6 @@
 use super::test_env::*;
 use crate::{
-    contract::{ExecMsg, InstantiateMsg, PoolResponse, QueryMsg},
+    contract::{ExecMsg, InstantiateMsg, PoolResponse, QueryMsg, SharesResponse},
     transmuter_pool::TransmuterPool,
     ContractError,
 };
@@ -107,6 +107,20 @@ fn test_supply() {
             out_coin_reserve: supplied_amount[0].clone()
         }
     );
+
+    // check shares
+    let SharesResponse { shares } = t
+        .app
+        .wrap()
+        .query_wasm_smart(
+            t.contract.clone(),
+            &QueryMsg::Shares {
+                address: t.accounts["provider"].to_string(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(shares, supplied_amount[0].amount);
 }
 
 #[test]

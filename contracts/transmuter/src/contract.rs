@@ -1,7 +1,9 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{ensure_eq, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdError};
+use cosmwasm_std::{
+    ensure_eq, Addr, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdError, Uint128,
+};
 use cw_controllers::{Admin, AdminResponse};
-use cw_storage_plus::Item;
+use cw_storage_plus::{Item, Map};
 use sylvia::contract;
 
 use crate::{error::ContractError, transmuter_pool::TransmuterPool};
@@ -12,6 +14,7 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct Transmuter<'a> {
     pub(crate) pool: Item<'a, TransmuterPool>,
+    pub(crate) shares: Map<'a, &'a Addr, Uint128>,
     pub(crate) admin: Admin<'a>,
 }
 
@@ -22,6 +25,7 @@ impl Transmuter<'_> {
         Self {
             pool: Item::new("pool"),
             admin: Admin::new("admin"),
+            shares: Map::new("shares"),
         }
     }
 
@@ -66,10 +70,21 @@ impl Transmuter<'_> {
         // ensure funds length == 1
         ensure_eq!(info.funds.len(), 1, ContractError::SingleCoinExpected {});
 
+        let supplying_coin = info.funds[0].clone();
+
+        // update shares
+        self.shares.update(
+            deps.storage,
+            &info.sender,
+            |shares| -> Result<Uint128, StdError> {
+                Ok(shares.unwrap_or_default() + supplying_coin.amount)
+            },
+        )?;
+
         // update pool
         self.pool
             .update(deps.storage, |mut pool| -> Result<_, ContractError> {
-                pool.supply(&info.funds[0])?;
+                pool.supply(&supplying_coin)?;
                 Ok(pool)
             })?;
 
@@ -166,6 +181,22 @@ impl Transmuter<'_> {
             pool: self.pool.load(deps.storage)?,
         })
     }
+
+    #[msg(query)]
+    fn shares(&self, ctx: (Deps, Env), address: String) -> Result<SharesResponse, ContractError> {
+        let (deps, _env) = ctx;
+        Ok(SharesResponse {
+            shares: self
+                .shares
+                .may_load(deps.storage, &deps.api.addr_validate(&address)?)?
+                .unwrap_or_default(),
+        })
+    }
+}
+
+#[cw_serde]
+pub struct SharesResponse {
+    pub shares: Uint128,
 }
 
 #[cw_serde]
