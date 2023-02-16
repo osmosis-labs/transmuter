@@ -4,7 +4,7 @@ use crate::{
     transmuter_pool::TransmuterPool,
     ContractError,
 };
-use cosmwasm_std::{Addr, Coin};
+use cosmwasm_std::{Addr, Coin, Uint128};
 use cw_controllers::AdminResponse;
 use cw_multi_test::Executor;
 
@@ -356,7 +356,8 @@ fn test_admin() {
 fn test_withdraw() {
     let mut t = TestEnvBuilder::new()
         .with_account("user", vec![Coin::new(1_500, ETH_USDC)])
-        .with_account("provider", vec![Coin::new(200_000, COSMOS_USDC)])
+        .with_account("provider_1", vec![Coin::new(100_000, COSMOS_USDC)])
+        .with_account("provider_2", vec![Coin::new(100_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
             in_denom: ETH_USDC.to_string(),
             out_denom: COSMOS_USDC.to_string(),
@@ -367,7 +368,16 @@ fn test_withdraw() {
     // supply
     t.app
         .execute_contract(
-            t.accounts["provider"].clone(),
+            t.accounts["provider_1"].clone(),
+            t.contract.clone(),
+            &ExecMsg::Supply {},
+            &[Coin::new(100_000, COSMOS_USDC)],
+        )
+        .unwrap();
+
+    t.app
+        .execute_contract(
+            t.accounts["provider_2"].clone(),
             t.contract.clone(),
             &ExecMsg::Supply {},
             &[Coin::new(100_000, COSMOS_USDC)],
@@ -384,42 +394,57 @@ fn test_withdraw() {
         )
         .unwrap();
 
-    // non-admin cannot withdraw
+    // non-provider cannot withdraw
     let err = t
         .app
         .execute_contract(
             t.accounts["user"].clone(),
             t.contract.clone(),
             &ExecMsg::Withdraw {
-                coins: vec![Coin::new(1_000, COSMOS_USDC)],
+                shares: 100u128.into(),
             },
             &[],
         )
         .unwrap_err();
+
     assert_eq!(
         err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::Unauthorized {}
+        &ContractError::InsufficientShares {
+            required: 100u128.into(),
+            available: Uint128::zero()
+        }
     );
 
-    // admin can withdraw
+    // provider can withdraw
     t.app
         .execute_contract(
-            Addr::unchecked("admin"),
+            t.accounts["provider_1"].clone(),
             t.contract.clone(),
             &ExecMsg::Withdraw {
-                coins: vec![Coin::new(1_000, COSMOS_USDC), Coin::new(1_000, ETH_USDC)],
+                shares: 99_999u128.into(),
             },
             &[],
         )
         .unwrap();
 
+    // check shares
+    let SharesResponse { shares } = t
+        .app
+        .wrap()
+        .query_wasm_smart(
+            t.contract.clone(),
+            &QueryMsg::Shares {
+                address: t.accounts["provider_1"].to_string(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(shares, Uint128::one());
+
     // check balances
     assert_eq!(
         t.app.wrap().query_all_balances(&t.contract).unwrap(),
-        vec![
-            Coin::new(500, ETH_USDC),
-            Coin::new(100_000 - 1500 - 1000, COSMOS_USDC)
-        ]
+        vec![Coin::new(200_000 - 1500 - (99_999 - 1_500), COSMOS_USDC)]
     );
 
     let PoolResponse { pool } = t
@@ -431,37 +456,67 @@ fn test_withdraw() {
     assert_eq!(
         pool,
         TransmuterPool {
-            in_coin: Coin::new(500, ETH_USDC),
-            out_coin_reserve: Coin::new(100_000 - 1500 - 1000, COSMOS_USDC)
+            in_coin: Coin::new(0, ETH_USDC),
+            out_coin_reserve: Coin::new(200_000 - 1500 - (99_999 - 1_500), COSMOS_USDC)
         }
     );
 
-    // check admin balance
+    // check pool balances
     assert_eq!(
-        t.app
-            .wrap()
-            .query_all_balances(&Addr::unchecked("admin"))
-            .unwrap(),
-        vec![Coin::new(1_000, ETH_USDC), Coin::new(1_000, COSMOS_USDC)]
+        t.app.wrap().query_all_balances(&t.contract).unwrap(),
+        vec![Coin::new(100_001, COSMOS_USDC)]
     );
 
-    // withdrawing excess coins fails
+    // withdrawing excess shares fails
     let err = t
         .app
         .execute_contract(
-            Addr::unchecked("admin"),
+            Addr::unchecked("provider_1"),
             t.contract.clone(),
             &ExecMsg::Withdraw {
-                coins: vec![Coin::new(100_000, COSMOS_USDC)],
+                shares: 2u128.into(),
             },
             &[],
         )
         .unwrap_err();
+
     assert_eq!(
         err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::InsufficientFund {
-            required: Coin::new(100_000, COSMOS_USDC),
-            available: Coin::new(100_000 - 1500 - 1000, COSMOS_USDC)
+        &ContractError::InsufficientShares {
+            required: 2u128.into(),
+            available: Uint128::one()
         }
+    );
+
+    // provider_2 withdrawing all shares succeeds
+    t.app
+        .execute_contract(
+            Addr::unchecked("provider_2"),
+            t.contract.clone(),
+            &ExecMsg::Withdraw {
+                shares: 100_000u128.into(),
+            },
+            &[],
+        )
+        .unwrap();
+
+    // check shares
+    let SharesResponse { shares } = t
+        .app
+        .wrap()
+        .query_wasm_smart(
+            t.contract.clone(),
+            &QueryMsg::Shares {
+                address: t.accounts["provider_2"].to_string(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(shares, Uint128::zero());
+
+    // check pool balances
+    assert_eq!(
+        t.app.wrap().query_all_balances(&t.contract).unwrap(),
+        vec![Coin::new(1, COSMOS_USDC)]
     );
 }

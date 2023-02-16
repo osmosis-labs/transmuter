@@ -35,7 +35,8 @@ impl TransmuterPool {
         Ok(())
     }
 
-    fn calc_withdrawing_coins(&self, shares: Uint128) -> Result<Vec<Coin>, ContractError> {
+    /// Calculate the amount of coins to withdraw from the pool based on the number of shares.
+    pub fn calc_withdrawing_coins(&self, shares: Uint128) -> Result<Vec<Coin>, ContractError> {
         // withdraw nothing if shares is zero
         if shares.is_zero() {
             Ok(vec![])

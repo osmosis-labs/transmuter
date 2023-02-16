@@ -1,6 +1,6 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure_eq, Addr, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdError, Uint128,
+    ensure, ensure_eq, Addr, BankMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, Uint128,
 };
 use cw_controllers::{Admin, AdminResponse};
 use cw_storage_plus::{Item, Map};
@@ -140,17 +140,38 @@ impl Transmuter<'_> {
     fn withdraw(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
-        coins: Vec<Coin>,
+        shares: Uint128,
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
-        // allow only admin to withdraw
-        self.admin
-            .assert_admin(deps.as_ref(), &info.sender)
-            .map_err(|_| ContractError::Unauthorized {})?;
-
         // withdraw
         let mut pool = self.pool.load(deps.storage)?;
+
+        // check if sender's shares is enough
+        let sender_shares = self
+            .shares
+            .may_load(deps.storage, &info.sender)?
+            .unwrap_or_default();
+
+        ensure!(
+            sender_shares >= shares,
+            ContractError::InsufficientShares {
+                required: shares,
+                available: sender_shares
+            }
+        );
+
+        // update shares
+        self.shares.update(
+            deps.storage,
+            &info.sender,
+            |sender_shares| -> Result<Uint128, StdError> {
+                Ok(sender_shares.unwrap_or_default() - shares)
+            },
+        )?;
+
+        // withdraw
+        let coins = pool.calc_withdrawing_coins(shares)?;
         pool.withdraw(&coins)?;
 
         // save pool
