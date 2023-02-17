@@ -1,6 +1,7 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_eq, Addr, BankMsg, Deps, DepsMut, Env, MessageInfo, Response, StdError, Uint128,
+    ensure, ensure_eq, Addr, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdError,
+    Uint128,
 };
 use cw_controllers::{Admin, AdminResponse};
 use cw_storage_plus::{Item, Map};
@@ -140,12 +141,9 @@ impl Transmuter<'_> {
     fn withdraw(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
-        shares: Uint128,
+        coins: Vec<Coin>,
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
-
-        // withdraw
-        let mut pool = self.pool.load(deps.storage)?;
 
         // check if sender's shares is enough
         let sender_shares = self
@@ -153,10 +151,14 @@ impl Transmuter<'_> {
             .may_load(deps.storage, &info.sender)?
             .unwrap_or_default();
 
+        let required_shares = coins
+            .iter()
+            .fold(Uint128::zero(), |acc, curr| acc + curr.amount);
+
         ensure!(
-            sender_shares >= shares,
+            sender_shares >= required_shares,
             ContractError::InsufficientShares {
-                required: shares,
+                required: required_shares,
                 available: sender_shares
             }
         );
@@ -166,16 +168,16 @@ impl Transmuter<'_> {
             deps.storage,
             &info.sender,
             |sender_shares| -> Result<Uint128, StdError> {
-                Ok(sender_shares.unwrap_or_default() - shares)
+                Ok(sender_shares.unwrap_or_default() - required_shares)
             },
         )?;
 
         // withdraw
-        let coins = pool.calc_withdrawing_coins(shares)?;
-        pool.withdraw(&coins)?;
-
-        // save pool
-        self.pool.save(deps.storage, &pool)?;
+        self.pool
+            .update(deps.storage, |mut pool| -> Result<_, ContractError> {
+                pool.withdraw(&coins)?;
+                Ok(pool)
+            })?;
 
         let bank_send_msg = BankMsg::Send {
             to_address: info.sender.to_string(),

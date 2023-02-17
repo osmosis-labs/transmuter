@@ -401,7 +401,7 @@ fn test_withdraw() {
             t.accounts["user"].clone(),
             t.contract.clone(),
             &ExecMsg::Withdraw {
-                shares: 100u128.into(),
+                coins: vec![Coin::new(1_500, ETH_USDC)],
             },
             &[],
         )
@@ -410,7 +410,7 @@ fn test_withdraw() {
     assert_eq!(
         err.downcast_ref::<ContractError>().unwrap(),
         &ContractError::InsufficientShares {
-            required: 100u128.into(),
+            required: 1500u128.into(),
             available: Uint128::zero()
         }
     );
@@ -421,7 +421,7 @@ fn test_withdraw() {
             t.accounts["provider_1"].clone(),
             t.contract.clone(),
             &ExecMsg::Withdraw {
-                shares: 99_999u128.into(),
+                coins: vec![Coin::new(500, ETH_USDC)],
             },
             &[],
         )
@@ -439,12 +439,15 @@ fn test_withdraw() {
         )
         .unwrap();
 
-    assert_eq!(shares, Uint128::one());
+    assert_eq!(shares, Uint128::new(100_000 - 500));
 
     // check balances
     assert_eq!(
         t.app.wrap().query_all_balances(&t.contract).unwrap(),
-        vec![Coin::new(200_000 - 1500 - (99_999 - 1_500), COSMOS_USDC)]
+        vec![
+            Coin::new(1500 - 500, ETH_USDC),
+            Coin::new(200_000 - 1500, COSMOS_USDC)
+        ]
     );
 
     let PoolResponse { pool } = t
@@ -456,45 +459,18 @@ fn test_withdraw() {
     assert_eq!(
         pool,
         TransmuterPool {
-            in_coin: Coin::new(0, ETH_USDC),
-            out_coin_reserve: Coin::new(200_000 - 1500 - (99_999 - 1_500), COSMOS_USDC)
+            in_coin: Coin::new(1500 - 500, ETH_USDC),
+            out_coin_reserve: Coin::new(200_000 - 1500, COSMOS_USDC)
         }
     );
 
-    // check pool balances
-    assert_eq!(
-        t.app.wrap().query_all_balances(&t.contract).unwrap(),
-        vec![Coin::new(100_001, COSMOS_USDC)]
-    );
-
-    // withdrawing excess shares fails
-    let err = t
-        .app
-        .execute_contract(
-            Addr::unchecked("provider_1"),
-            t.contract.clone(),
-            &ExecMsg::Withdraw {
-                shares: 2u128.into(),
-            },
-            &[],
-        )
-        .unwrap_err();
-
-    assert_eq!(
-        err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::InsufficientShares {
-            required: 2u128.into(),
-            available: Uint128::one()
-        }
-    );
-
-    // provider_2 withdrawing all shares succeeds
+    // provider can withdraw both sides
     t.app
         .execute_contract(
-            Addr::unchecked("provider_2"),
+            t.accounts["provider_2"].clone(),
             t.contract.clone(),
             &ExecMsg::Withdraw {
-                shares: 100_000u128.into(),
+                coins: vec![Coin::new(1_000, ETH_USDC), Coin::new(99_000, COSMOS_USDC)],
             },
             &[],
         )
@@ -512,11 +488,67 @@ fn test_withdraw() {
         )
         .unwrap();
 
-    assert_eq!(shares, Uint128::zero());
+    assert_eq!(shares, Uint128::new(0));
 
-    // check pool balances
+    // check balances
     assert_eq!(
         t.app.wrap().query_all_balances(&t.contract).unwrap(),
-        vec![Coin::new(1, COSMOS_USDC)]
+        vec![Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)]
+    );
+
+    let PoolResponse { pool } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
+        .unwrap();
+
+    assert_eq!(
+        pool,
+        TransmuterPool {
+            in_coin: Coin::new(0, ETH_USDC),
+            out_coin_reserve: Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)
+        }
+    );
+
+    // withdrawing excess shares fails
+    let err = t
+        .app
+        .execute_contract(
+            Addr::unchecked("provider_2"),
+            t.contract.clone(),
+            &ExecMsg::Withdraw {
+                coins: vec![Coin::new(1, ETH_USDC)],
+            },
+            &[],
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        err.downcast_ref::<ContractError>().unwrap(),
+        &ContractError::InsufficientShares {
+            required: Uint128::one(),
+            available: Uint128::zero()
+        }
+    );
+
+    // has remaining shares but no coins on the requested side
+    let err = t
+        .app
+        .execute_contract(
+            Addr::unchecked("provider_1"),
+            t.contract.clone(),
+            &ExecMsg::Withdraw {
+                coins: vec![Coin::new(1, ETH_USDC), Coin::new(1, COSMOS_USDC)],
+            },
+            &[],
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        err.downcast_ref::<ContractError>().unwrap(),
+        &ContractError::InsufficientFund {
+            required: Coin::new(1, ETH_USDC),
+            available: Coin::new(0, ETH_USDC)
+        }
     );
 }

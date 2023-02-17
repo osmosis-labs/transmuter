@@ -1,4 +1,4 @@
-use cosmwasm_std::{Coin, Uint128};
+use cosmwasm_std::Coin;
 
 use crate::ContractError;
 
@@ -33,34 +33,6 @@ impl TransmuterPool {
         }
 
         Ok(())
-    }
-
-    /// Calculate the amount of coins to withdraw from the pool based on the number of shares.
-    pub fn calc_withdrawing_coins(&self, shares: Uint128) -> Result<Vec<Coin>, ContractError> {
-        // withdraw nothing if shares is zero
-        if shares.is_zero() {
-            Ok(vec![])
-
-        // withdraw from in_coin first
-        } else if shares <= self.in_coin.amount {
-            Ok(vec![Coin::new(shares.u128(), self.in_coin.denom.clone())])
-
-        // withdraw from out_coin_reserve when in_coin is drained
-        } else if self.in_coin.amount.is_zero() {
-            Ok(vec![Coin::new(
-                shares.u128(),
-                self.out_coin_reserve.denom.clone(),
-            )])
-
-        // withdraw from both in_coin and out_coin_reserve if shares is larger than in_coin
-        } else {
-            let in_coin = Coin::new(self.in_coin.amount.u128(), self.in_coin.denom.clone());
-            let out_coin_reserve = Coin::new(
-                (shares - self.in_coin.amount).u128(),
-                self.out_coin_reserve.denom.clone(),
-            );
-            Ok(vec![in_coin, out_coin_reserve])
-        }
     }
 }
 
@@ -183,58 +155,6 @@ mod tests {
                 required: Coin::new(110_000, ETH_USDC),
                 available: Coin::new(100_000, ETH_USDC)
             }
-        );
-    }
-
-    #[test]
-    fn test_calc_withdrawing_coins() {
-        // withdraw 0
-        let pool = TransmuterPool {
-            in_coin: Coin::new(100_000, ETH_USDC),
-            out_coin_reserve: Coin::new(100_000, COSMOS_USDC),
-        };
-        let coins = pool.calc_withdrawing_coins(Uint128::zero()).unwrap();
-        assert_eq!(coins, vec![]);
-
-        // withdraw in_coin
-        let pool = TransmuterPool {
-            in_coin: Coin::new(100_000, ETH_USDC),
-            out_coin_reserve: Coin::new(100_000, COSMOS_USDC),
-        };
-        let coins = pool.calc_withdrawing_coins(Uint128::new(10_000)).unwrap();
-        assert_eq!(coins, vec![Coin::new(10_000, ETH_USDC)]);
-
-        // withdraw out_coin
-        let pool = TransmuterPool {
-            in_coin: Coin::new(0, ETH_USDC),
-            out_coin_reserve: Coin::new(100_000, COSMOS_USDC),
-        };
-        let coins = pool.calc_withdrawing_coins(Uint128::new(10_000)).unwrap();
-        assert_eq!(coins, vec![Coin::new(10_000, COSMOS_USDC)]);
-
-        // withdraw both
-        let pool = TransmuterPool {
-            in_coin: Coin::new(100_000, ETH_USDC),
-            out_coin_reserve: Coin::new(100_000, COSMOS_USDC),
-        };
-        let coins = pool.calc_withdrawing_coins(Uint128::new(100_001)).unwrap();
-        assert_eq!(
-            coins,
-            vec![Coin::new(100_000, ETH_USDC), Coin::new(1, COSMOS_USDC)]
-        );
-
-        // withdraw all
-        let pool = TransmuterPool {
-            in_coin: Coin::new(100_000, ETH_USDC),
-            out_coin_reserve: Coin::new(100_000, COSMOS_USDC),
-        };
-        let coins = pool.calc_withdrawing_coins(Uint128::new(200_000)).unwrap();
-        assert_eq!(
-            coins,
-            vec![
-                Coin::new(100_000, ETH_USDC),
-                Coin::new(100_000, COSMOS_USDC)
-            ]
         );
     }
 }
