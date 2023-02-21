@@ -5,29 +5,32 @@
 */
 import { CosmWasmClient, SigningCosmWasmClient, ExecuteResult } from "@cosmjs/cosmwasm-stargate";
 import { StdFee } from "@cosmjs/amino";
-import { Coin, AdminResponse, PoolResponse } from "./Transmuter.types";
+import { Coin, PoolResponse, SharesResponse } from "./Transmuter.types";
 export interface TransmuterReadOnlyInterface {
     contractAddress: string;
-    admin: () => Promise<AdminResponse>;
     pool: () => Promise<PoolResponse>;
+    shares: ({ address }: {
+        address: string;
+    }) => Promise<SharesResponse>;
 }
 export declare class TransmuterQueryClient implements TransmuterReadOnlyInterface {
     client: CosmWasmClient;
     contractAddress: string;
     constructor(client: CosmWasmClient, contractAddress: string);
-    admin: () => Promise<AdminResponse>;
     pool: () => Promise<PoolResponse>;
+    shares: ({ address }: {
+        address: string;
+    }) => Promise<SharesResponse>;
 }
 export interface TransmuterInterface extends TransmuterReadOnlyInterface {
     contractAddress: string;
     sender: string;
-    supply: (fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
-    transmute: (fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
-    updateAdmin: ({ newAdmin }: {
-        newAdmin: string;
+    joinPool: (fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
+    transmute: ({ tokenOutDenom }: {
+        tokenOutDenom: string;
     }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
-    withdraw: ({ coins }: {
-        coins: Coin[];
+    exitPool: ({ tokensOut }: {
+        tokensOut: Coin[];
     }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
 }
 export declare class TransmuterClient extends TransmuterQueryClient implements TransmuterInterface {
@@ -35,13 +38,12 @@ export declare class TransmuterClient extends TransmuterQueryClient implements T
     sender: string;
     contractAddress: string;
     constructor(client: SigningCosmWasmClient, sender: string, contractAddress: string);
-    supply: (fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
-    transmute: (fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
-    updateAdmin: ({ newAdmin }: {
-        newAdmin: string;
+    joinPool: (fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
+    transmute: ({ tokenOutDenom }: {
+        tokenOutDenom: string;
     }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
-    withdraw: ({ coins }: {
-        coins: Coin[];
+    exitPool: ({ tokensOut }: {
+        tokensOut: Coin[];
     }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
 }
 //# sourceMappingURL=Transmuter.client.d.ts.map

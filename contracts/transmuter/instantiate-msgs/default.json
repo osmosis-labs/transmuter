@@ -1,5 +1,6 @@
 {
-  "in_denom": "uosmo",
-  "out_denom": "factory/osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks/uxosmo",
-  "admin": "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks"
+  "pool_asset_denoms": [
+    "uosmo",
+    "factory/osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks/uxosmo"
+  ]
 }

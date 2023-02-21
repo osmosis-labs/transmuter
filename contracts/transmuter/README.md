@@ -10,47 +10,36 @@ To set up the contract, contract instantiation is needed with the following info
 
 ```rs
 pub struct InstantiateMsg {
-    /// the denom of the coin to be transmuted.
-    pub in_denom: String,
-    /// the denom of the coin that is transmuted to, needs to be supplied to the contract.
-    pub out_denom: String,
-    /// the admin of the contract, can change the admin and withdraw funds.
-    pub admin: String,
+    /// denoms of the tokens that can be reserved in the pool and can be transmuted.
+    /// must contain at least 2 denoms.
+    pool_asset_denoms: Vec<String>,
 }
 ```
 
-### Supplying out_denom reserve
+### Join/Exit Pool
 
-The contract needs a reserve of out denom coins to be able to transmute. Coins can be added to the reserve by sending a `Supply` message to the contract.
-`Supply` messages has no field and the amount of coins to be added to the reserve is taken from the `MsgExecuteContract` funds.
+A user can join the pool by sending a `JoinPool` message to the contract. The message also has no field and the amount of tokens to be added to the reserve is taken from the `MsgExecuteContract` funds.
+Token denoms in the funds must be one of the denoms in the `pool_asset_denoms` field of the `InstantiateMsg`.
 
 ```rs
-Supply {}
+pub struct JoinPool {}
+```
+
+A user can exit the pool by sending a `ExitPool` message to the contract. As long as the sender has enough shares, the contract will send `tokens_out` amount of tokens to the sender.
+The amount of shares will be deducted from the sender's shares equals to sum of the amount of tokens_out.
+
+```rs
+pub struct ExitPool {
+  pub tokens_out: Vec<Coin>
+}
 ```
 
 ### Transmutation
 
-A transmutation is done by sending a `Transmute` message to the contract. The message also has no field and the amount of coins to be transmuted is taken from the `MsgExecuteContract` funds the same way `Supply` message is.
-The contract will expect `in_denom` coins to be sent and will send `out_denom` coins to the message sender with the same amount as the `in_denom` coins sent.
+A transmutation is done by sending a `Transmute` message to the contract. The amount of tokens to be transmuted is taken from the `MsgExecuteContract` funds the same way `JoinPool` message is except that it requires `token_out_denom` to be one of the denoms in the `pool_asset_denoms` field of the `InstantiateMsg`.
 
 ```rs
-Transmute {}
-```
-
-### Admin
-
-Admin can be changed by sending a `UpdateAdmin` message to the contract with the new admin address as the field.
-
-```rs
-UpdateAdmin {
-    new_admin: String,
-}
-```
-
-Only admin can withdraw both `in_denom` and `out_denom` coins from the contract by sending a `Withdraw` message to the contract.
-
-```rs
-Withdraw {
-    coins: Vec<Coin>,
+pub struct Transmute {
+  pub token_out_denom: String,
 }
 ```
