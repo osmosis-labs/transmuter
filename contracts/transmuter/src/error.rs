@@ -15,19 +15,22 @@ pub enum ContractError {
     #[error("Denom not allowed: {denom}")]
     DenomNotAllowed { denom: String },
 
-    #[error("Funds must contain exactly one coin")]
-    SingleCoinExpected {},
+    #[error("Funds must contain exactly one token")]
+    SingleTokenExpected {},
 
-    #[error("Unable to supply coin with denom: {denom}: expected: {expected_denom}")]
-    InvalidSupplyDenom {
+    #[error("Funds must contain at least one token")]
+    AtLeastSingleTokenExpected {},
+
+    #[error("Unable to join pool with denom: {denom}: expected one of: {expected_denom:?}")]
+    InvalidJoinPoolDenom {
         denom: String,
-        expected_denom: String,
+        expected_denom: Vec<String>,
     },
 
-    #[error("Unable to transmute coin with denom: {denom}: expected: {expected_denom}")]
+    #[error("Unable to transmute token with denom: {denom}: expected one of: {expected_denom:?}")]
     InvalidTransmuteDenom {
         denom: String,
-        expected_denom: String,
+        expected_denom: Vec<String>,
     },
 
     #[error("Insufficient fund: required: {required}, available: {available}")]

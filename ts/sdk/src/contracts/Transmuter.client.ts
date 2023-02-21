@@ -6,11 +6,15 @@
 
 import { CosmWasmClient, SigningCosmWasmClient, ExecuteResult } from "@cosmjs/cosmwasm-stargate";
 import { StdFee } from "@cosmjs/amino";
-import { ExecuteMsg, Uint128, Coin, InstantiateMsg, QueryMsg, AdminResponse, PoolResponse, TransmuterPool } from "./Transmuter.types";
+import { ExecuteMsg, Uint128, Coin, InstantiateMsg, QueryMsg, AdminResponse, PoolResponse, TransmuterPool, SharesResponse } from "./Transmuter.types";
 export interface TransmuterReadOnlyInterface {
   contractAddress: string;
-  admin: () => Promise<AdminResponse>;
   pool: () => Promise<PoolResponse>;
+  shares: ({
+    address
+  }: {
+    address: string;
+  }) => Promise<SharesResponse>;
 }
 export class TransmuterQueryClient implements TransmuterReadOnlyInterface {
   client: CosmWasmClient;
@@ -19,35 +23,40 @@ export class TransmuterQueryClient implements TransmuterReadOnlyInterface {
   constructor(client: CosmWasmClient, contractAddress: string) {
     this.client = client;
     this.contractAddress = contractAddress;
-    this.admin = this.admin.bind(this);
     this.pool = this.pool.bind(this);
+    this.shares = this.shares.bind(this);
   }
 
-  admin = async (): Promise<AdminResponse> => {
-    return this.client.queryContractSmart(this.contractAddress, {
-      admin: {}
-    });
-  };
   pool = async (): Promise<PoolResponse> => {
     return this.client.queryContractSmart(this.contractAddress, {
       pool: {}
+    });
+  };
+  shares = async ({
+    address
+  }: {
+    address: string;
+  }): Promise<SharesResponse> => {
+    return this.client.queryContractSmart(this.contractAddress, {
+      shares: {
+        address
+      }
     });
   };
 }
 export interface TransmuterInterface extends TransmuterReadOnlyInterface {
   contractAddress: string;
   sender: string;
-  supply: (fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
-  transmute: (fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
-  updateAdmin: ({
-    newAdmin
+  joinPool: (fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
+  transmute: ({
+    tokenOutDenom
   }: {
-    newAdmin: string;
+    tokenOutDenom: string;
   }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
-  withdraw: ({
-    coins
+  exitPool: ({
+    tokensOut
   }: {
-    coins: Coin[];
+    tokensOut: Coin[];
   }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
 }
 export class TransmuterClient extends TransmuterQueryClient implements TransmuterInterface {
@@ -60,41 +69,35 @@ export class TransmuterClient extends TransmuterQueryClient implements Transmute
     this.client = client;
     this.sender = sender;
     this.contractAddress = contractAddress;
-    this.supply = this.supply.bind(this);
+    this.joinPool = this.joinPool.bind(this);
     this.transmute = this.transmute.bind(this);
-    this.updateAdmin = this.updateAdmin.bind(this);
-    this.withdraw = this.withdraw.bind(this);
+    this.exitPool = this.exitPool.bind(this);
   }
 
-  supply = async (fee: number | StdFee | "auto" = "auto", memo?: string, funds?: Coin[]): Promise<ExecuteResult> => {
+  joinPool = async (fee: number | StdFee | "auto" = "auto", memo?: string, funds?: Coin[]): Promise<ExecuteResult> => {
     return await this.client.execute(this.sender, this.contractAddress, {
-      supply: {}
+      join_pool: {}
     }, fee, memo, funds);
   };
-  transmute = async (fee: number | StdFee | "auto" = "auto", memo?: string, funds?: Coin[]): Promise<ExecuteResult> => {
-    return await this.client.execute(this.sender, this.contractAddress, {
-      transmute: {}
-    }, fee, memo, funds);
-  };
-  updateAdmin = async ({
-    newAdmin
+  transmute = async ({
+    tokenOutDenom
   }: {
-    newAdmin: string;
+    tokenOutDenom: string;
   }, fee: number | StdFee | "auto" = "auto", memo?: string, funds?: Coin[]): Promise<ExecuteResult> => {
     return await this.client.execute(this.sender, this.contractAddress, {
-      update_admin: {
-        new_admin: newAdmin
+      transmute: {
+        token_out_denom: tokenOutDenom
       }
     }, fee, memo, funds);
   };
-  withdraw = async ({
-    coins
+  exitPool = async ({
+    tokensOut
   }: {
-    coins: Coin[];
+    tokensOut: Coin[];
   }, fee: number | StdFee | "auto" = "auto", memo?: string, funds?: Coin[]): Promise<ExecuteResult> => {
     return await this.client.execute(this.sender, this.contractAddress, {
-      withdraw: {
-        coins
+      exit_pool: {
+        tokens_out: tokensOut
       }
     }, fee, memo, funds);
   };

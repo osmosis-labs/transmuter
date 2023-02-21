@@ -1,6 +1,6 @@
-mod supply;
+mod exit_pool;
+mod join_pool;
 mod transmute;
-mod withdraw;
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::Coin;
@@ -8,16 +8,18 @@ use cosmwasm_std::Coin;
 #[cw_serde]
 pub struct TransmuterPool {
     /// incoming coins are stored here
-    pub in_coin: Coin,
-    /// reserve of coins for future transmutations
-    pub out_coin_reserve: Coin,
+    pub pool_assets: Vec<Coin>,
 }
 
 impl TransmuterPool {
-    pub fn new(in_denom: &str, out_denom: &str) -> Self {
+    pub fn new(pool_asset_denoms: &[String]) -> Self {
+        assert!(pool_asset_denoms.len() >= 2);
+
         Self {
-            in_coin: Coin::new(0, in_denom),
-            out_coin_reserve: Coin::new(0, out_denom),
+            pool_assets: pool_asset_denoms
+                .iter()
+                .map(|denom| Coin::new(0, denom))
+                .collect(),
         }
     }
 }

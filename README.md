@@ -30,12 +30,12 @@ Instantiate message can be found [here](contracts/transmuter/instantiate-msgs/de
 ### Setup
 
 ```js
-in_denom = "uosmo";
-out_denom = "factory/osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks/uxosmo";
-admin = test1;
+osmo_denom = "uosmo";
+xosmo_denom = "factory/osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks/uxosmo";
+provider = test1;
 user = test2;
 
-transmuter_admin = transmuter.signer(admin);
+transmuter_provider = transmuter.signer(provider);
 transmuter_user = transmuter.signer(user);
 ```
 
@@ -45,41 +45,50 @@ checking pool
 
 ```js
 await transmuter.pool();
+
+// or make `[Object]` visible
+console.dir(await transmuter.pool(), { depth: null });
 ```
 
-checking admin
+checking shares
 
 ```js
-await transmuter.admin();
+await transmuter.shares({ address: provider.address }); // => { shares: '1000000' }
+await transmuter.shares({ address: user.address }); // => { shares: '0' }
 ```
 
-### Supplying out_denom reserve
+### Join pool
 
 ```js
-// supply(gas, memo, funds)
-await transmuter_admin.supply("auto", undefined, [
-  { amount: "1000000", denom: out_denom },
-]);
+await transmuter_provider.joinPool(
+  "auto", // gas
+  undefined, // memo
+  [{ amount: "1000000", denom: xosmo_denom }] // funds
+);
 ```
 
 ### Transmute
 
 ```js
-// transmute(gas, memo, funds)
-await transmuter_user.transmute("auto", undefined, [
-  { amount: "200000", denom: in_denom },
-]);
+await transmuter_user.transmute(
+  {
+    tokenOutDenom: xosmo_denom,
+  }, // argument
+  "auto", // gas
+  undefined, // memo
+  [{ amount: "200000", denom: osmo_denom }] // funds
+);
 ```
 
-### Withdraw
+### Exit pool
 
-Only admin can withdraw
+Exit pool
 
 ```js
-await transmuter_admin.withdraw({
-  coins: [
-    { amount: "100000", denom: out_denom },
-    { amount: "100000", denom: in_denom },
+await transmuter_provider.exitPool({
+  tokensOut: [
+    { amount: "100000", denom: xosmo_denom },
+    { amount: "100000", denom: osmo_denom },
   ],
 });
 ```

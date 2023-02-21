@@ -4,21 +4,17 @@
 * and run the @cosmwasm/ts-codegen generate command to regenerate this file.
 */
 export type ExecuteMsg = {
-    supply: {
+    join_pool: {
         [k: string]: unknown;
     };
 } | {
     transmute: {
+        token_out_denom: string;
         [k: string]: unknown;
     };
 } | {
-    update_admin: {
-        new_admin: string;
-        [k: string]: unknown;
-    };
-} | {
-    withdraw: {
-        coins: Coin[];
+    exit_pool: {
+        tokens_out: Coin[];
         [k: string]: unknown;
     };
 };
@@ -29,17 +25,16 @@ export interface Coin {
     [k: string]: unknown;
 }
 export interface InstantiateMsg {
-    admin: string;
-    in_denom: string;
-    out_denom: string;
+    pool_asset_denoms: string[];
     [k: string]: unknown;
 }
 export type QueryMsg = {
-    admin: {
+    pool: {
         [k: string]: unknown;
     };
 } | {
-    pool: {
+    shares: {
+        address: string;
         [k: string]: unknown;
     };
 };
@@ -50,7 +45,9 @@ export interface PoolResponse {
     pool: TransmuterPool;
 }
 export interface TransmuterPool {
-    in_coin: Coin;
-    out_coin_reserve: Coin;
+    pool_assets: Coin[];
+}
+export interface SharesResponse {
+    shares: Uint128;
 }
 //# sourceMappingURL=Transmuter.types.d.ts.map
