@@ -1,7 +1,10 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{ensure_eq, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdError};
+use cosmwasm_std::{
+    ensure, ensure_eq, Addr, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdError,
+    Uint128,
+};
 use cw_controllers::{Admin, AdminResponse};
-use cw_storage_plus::Item;
+use cw_storage_plus::{Item, Map};
 use sylvia::contract;
 
 use crate::{error::ContractError, transmuter_pool::TransmuterPool};
@@ -12,6 +15,7 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct Transmuter<'a> {
     pub(crate) pool: Item<'a, TransmuterPool>,
+    pub(crate) shares: Map<'a, &'a Addr, Uint128>,
     pub(crate) admin: Admin<'a>,
 }
 
@@ -22,6 +26,7 @@ impl Transmuter<'_> {
         Self {
             pool: Item::new("pool"),
             admin: Admin::new("admin"),
+            shares: Map::new("shares"),
         }
     }
 
@@ -66,10 +71,21 @@ impl Transmuter<'_> {
         // ensure funds length == 1
         ensure_eq!(info.funds.len(), 1, ContractError::SingleCoinExpected {});
 
+        let supplying_coin = info.funds[0].clone();
+
+        // update shares
+        self.shares.update(
+            deps.storage,
+            &info.sender,
+            |shares| -> Result<Uint128, StdError> {
+                Ok(shares.unwrap_or_default() + supplying_coin.amount)
+            },
+        )?;
+
         // update pool
         self.pool
             .update(deps.storage, |mut pool| -> Result<_, ContractError> {
-                pool.supply(&info.funds[0])?;
+                pool.supply(&supplying_coin)?;
                 Ok(pool)
             })?;
 
@@ -129,17 +145,39 @@ impl Transmuter<'_> {
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
-        // allow only admin to withdraw
-        self.admin
-            .assert_admin(deps.as_ref(), &info.sender)
-            .map_err(|_| ContractError::Unauthorized {})?;
+        // check if sender's shares is enough
+        let sender_shares = self
+            .shares
+            .may_load(deps.storage, &info.sender)?
+            .unwrap_or_default();
+
+        let required_shares = coins
+            .iter()
+            .fold(Uint128::zero(), |acc, curr| acc + curr.amount);
+
+        ensure!(
+            sender_shares >= required_shares,
+            ContractError::InsufficientShares {
+                required: required_shares,
+                available: sender_shares
+            }
+        );
+
+        // update shares
+        self.shares.update(
+            deps.storage,
+            &info.sender,
+            |sender_shares| -> Result<Uint128, StdError> {
+                Ok(sender_shares.unwrap_or_default() - required_shares)
+            },
+        )?;
 
         // withdraw
-        let mut pool = self.pool.load(deps.storage)?;
-        pool.withdraw(&coins)?;
-
-        // save pool
-        self.pool.save(deps.storage, &pool)?;
+        self.pool
+            .update(deps.storage, |mut pool| -> Result<_, ContractError> {
+                pool.withdraw(&coins)?;
+                Ok(pool)
+            })?;
 
         let bank_send_msg = BankMsg::Send {
             to_address: info.sender.to_string(),
@@ -166,6 +204,22 @@ impl Transmuter<'_> {
             pool: self.pool.load(deps.storage)?,
         })
     }
+
+    #[msg(query)]
+    fn shares(&self, ctx: (Deps, Env), address: String) -> Result<SharesResponse, ContractError> {
+        let (deps, _env) = ctx;
+        Ok(SharesResponse {
+            shares: self
+                .shares
+                .may_load(deps.storage, &deps.api.addr_validate(&address)?)?
+                .unwrap_or_default(),
+        })
+    }
+}
+
+#[cw_serde]
+pub struct SharesResponse {
+    pub shares: Uint128,
 }
 
 #[cw_serde]
