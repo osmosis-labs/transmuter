@@ -391,7 +391,7 @@ fn test_admin() {
 }
 
 #[test]
-fn test_withdraw() {
+fn test_exit_pool() {
     let mut t = TestEnvBuilder::new()
         .with_account("user", vec![Coin::new(1_500, ETH_USDC)])
         .with_account("provider_1", vec![Coin::new(100_000, COSMOS_USDC)])
@@ -432,14 +432,14 @@ fn test_withdraw() {
         )
         .unwrap();
 
-    // non-provider cannot withdraw
+    // non-provider cannot exit_pool
     let err = t
         .app
         .execute_contract(
             t.accounts["user"].clone(),
             t.contract.clone(),
-            &ExecMsg::Withdraw {
-                coins: vec![Coin::new(1_500, ETH_USDC)],
+            &ExecMsg::ExitPool {
+                tokens_out: vec![Coin::new(1_500, ETH_USDC)],
             },
             &[],
         )
@@ -453,13 +453,13 @@ fn test_withdraw() {
         }
     );
 
-    // provider can withdraw
+    // provider can exit pool
     t.app
         .execute_contract(
             t.accounts["provider_1"].clone(),
             t.contract.clone(),
-            &ExecMsg::Withdraw {
-                coins: vec![Coin::new(500, ETH_USDC)],
+            &ExecMsg::ExitPool {
+                tokens_out: vec![Coin::new(500, ETH_USDC)],
             },
             &[],
         )
@@ -504,13 +504,13 @@ fn test_withdraw() {
         }
     );
 
-    // provider can withdraw both sides
+    // provider can exit pool with any token
     t.app
         .execute_contract(
             t.accounts["provider_2"].clone(),
             t.contract.clone(),
-            &ExecMsg::Withdraw {
-                coins: vec![Coin::new(1_000, ETH_USDC), Coin::new(99_000, COSMOS_USDC)],
+            &ExecMsg::ExitPool {
+                tokens_out: vec![Coin::new(1_000, ETH_USDC), Coin::new(99_000, COSMOS_USDC)],
             },
             &[],
         )
@@ -552,14 +552,14 @@ fn test_withdraw() {
         }
     );
 
-    // withdrawing excess shares fails
+    // exit pool with excess shares fails
     let err = t
         .app
         .execute_contract(
             Addr::unchecked("provider_2"),
             t.contract.clone(),
-            &ExecMsg::Withdraw {
-                coins: vec![Coin::new(1, ETH_USDC)],
+            &ExecMsg::ExitPool {
+                tokens_out: vec![Coin::new(1, ETH_USDC)],
             },
             &[],
         )
@@ -579,8 +579,8 @@ fn test_withdraw() {
         .execute_contract(
             Addr::unchecked("provider_1"),
             t.contract.clone(),
-            &ExecMsg::Withdraw {
-                coins: vec![Coin::new(1, ETH_USDC), Coin::new(1, COSMOS_USDC)],
+            &ExecMsg::ExitPool {
+                tokens_out: vec![Coin::new(1, ETH_USDC), Coin::new(1, COSMOS_USDC)],
             },
             &[],
         )

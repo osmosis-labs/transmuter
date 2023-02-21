@@ -5,32 +5,30 @@ use crate::ContractError;
 use super::TransmuterPool;
 
 impl TransmuterPool {
-    pub fn withdraw(&mut self, coins: &[Coin]) -> Result<(), ContractError> {
-        let pool_assets = &mut self.pool_assets;
+    pub fn exit_pool(&mut self, tokens_out: &[Coin]) -> Result<(), ContractError> {
+        for token in tokens_out {
+            let token_is_in_pool_assets = self
+                .pool_assets
+                .iter()
+                .any(|pool_asset| pool_asset.denom == token.denom);
 
-        for coin in coins {
-            if coin.denom == pool_assets[0].denom {
-                pool_assets[0].amount =
-                    pool_assets[0]
-                        .amount
-                        .checked_sub(coin.amount)
-                        .map_err(|_| ContractError::InsufficientFund {
-                            required: coin.clone(),
-                            available: pool_assets[0].clone(),
-                        })?;
-            } else if coin.denom == pool_assets[1].denom {
-                pool_assets[1].amount =
-                    pool_assets[1]
-                        .amount
-                        .checked_sub(coin.amount)
-                        .map_err(|_| ContractError::InsufficientFund {
-                            required: coin.clone(),
-                            available: pool_assets[1].clone(),
-                        })?;
+            if token_is_in_pool_assets {
+                for pool_asset in &mut self.pool_assets {
+                    // deduct token from pool assets
+                    if token.denom == pool_asset.denom {
+                        pool_asset.amount =
+                            pool_asset.amount.checked_sub(token.amount).map_err(|_| {
+                                ContractError::InsufficientFund {
+                                    required: token.clone(),
+                                    available: pool_asset.clone(),
+                                }
+                            })?;
+                    }
+                }
             } else {
                 return Err(ContractError::InsufficientFund {
-                    required: coin.clone(),
-                    available: Coin::new(0, coin.denom.clone()),
+                    required: token.clone(),
+                    available: Coin::new(0, token.denom.clone()),
                 });
             }
         }
@@ -46,7 +44,7 @@ mod tests {
     const COSMOS_USDC: &str = "ibc/COSMOSUSDC";
 
     #[test]
-    fn test_withdraw_succeed_when_has_enough_coins_in_pool() {
+    fn test_exit_pool_succeed_when_has_enough_coins_in_pool() {
         let mut pool = TransmuterPool {
             pool_assets: vec![
                 Coin::new(100_000, ETH_USDC),
@@ -54,8 +52,8 @@ mod tests {
             ],
         };
 
-        // withdraw in_coin
-        pool.withdraw(&[Coin::new(10_000, ETH_USDC)]).unwrap();
+        // exit pool with first token
+        pool.exit_pool(&[Coin::new(10_000, ETH_USDC)]).unwrap();
         assert_eq!(
             pool,
             TransmuterPool {
@@ -63,8 +61,8 @@ mod tests {
             }
         );
 
-        // withdraw out_coin
-        pool.withdraw(&[Coin::new(10_000, COSMOS_USDC)]).unwrap();
+        // exit pool with second token
+        pool.exit_pool(&[Coin::new(10_000, COSMOS_USDC)]).unwrap();
         assert_eq!(
             pool,
             TransmuterPool {
@@ -72,8 +70,8 @@ mod tests {
             }
         );
 
-        // withdraw both
-        pool.withdraw(&[Coin::new(90_000, ETH_USDC), Coin::new(90_000, COSMOS_USDC)])
+        // exit pool with both tokens
+        pool.exit_pool(&[Coin::new(90_000, ETH_USDC), Coin::new(90_000, COSMOS_USDC)])
             .unwrap();
         assert_eq!(
             pool,
@@ -84,7 +82,7 @@ mod tests {
     }
 
     #[test]
-    fn test_withdraw_fail_when_coin_denom_is_invalid() {
+    fn test_exit_pool_fail_when_token_denom_is_invalid() {
         let mut pool = TransmuterPool {
             pool_assets: vec![
                 Coin::new(100_000, ETH_USDC),
@@ -92,8 +90,8 @@ mod tests {
             ],
         };
 
-        // withdraw invalid coin
-        let err = pool.withdraw(&[Coin::new(10_000, "invalid")]).unwrap_err();
+        // exit pool with invalid token
+        let err = pool.exit_pool(&[Coin::new(10_000, "invalid")]).unwrap_err();
         assert_eq!(
             err,
             ContractError::InsufficientFund {
@@ -102,9 +100,9 @@ mod tests {
             }
         );
 
-        // withdraw both valid and invalid coin
+        // exit pool with both valid and invalid token
         let err = pool
-            .withdraw(&[Coin::new(10_000, ETH_USDC), Coin::new(10_000, "invalid")])
+            .exit_pool(&[Coin::new(10_000, ETH_USDC), Coin::new(10_000, "invalid")])
             .unwrap_err();
         assert_eq!(
             err,
@@ -116,7 +114,7 @@ mod tests {
     }
 
     #[test]
-    fn test_withdraw_fail_when_not_enough_coin() {
+    fn test_exit_pool_fail_when_not_enough_token() {
         let mut pool = TransmuterPool {
             pool_assets: vec![
                 Coin::new(100_000, ETH_USDC),
@@ -124,8 +122,7 @@ mod tests {
             ],
         };
 
-        // withdraw in_coin
-        let err = pool.withdraw(&[Coin::new(100_001, ETH_USDC)]).unwrap_err();
+        let err = pool.exit_pool(&[Coin::new(100_001, ETH_USDC)]).unwrap_err();
         assert_eq!(
             err,
             ContractError::InsufficientFund {
@@ -134,9 +131,8 @@ mod tests {
             }
         );
 
-        // withdraw out_coin
         let err = pool
-            .withdraw(&[Coin::new(110_000, COSMOS_USDC)])
+            .exit_pool(&[Coin::new(110_000, COSMOS_USDC)])
             .unwrap_err();
 
         assert_eq!(
@@ -147,9 +143,8 @@ mod tests {
             }
         );
 
-        // withdraw both
         let err = pool
-            .withdraw(&[
+            .exit_pool(&[
                 Coin::new(110_000, ETH_USDC),
                 Coin::new(110_000, COSMOS_USDC),
             ])

@@ -33,7 +33,7 @@ impl Transmuter<'_> {
     /// Instantiate the contract with
     ///   `in_denom`  - the denom of the coin to be transmuted.
     ///   `out_denom` - the denom of the coin that is transmuted to, needs to be supplied to the contract.
-    ///   `admin`     - the admin of the contract, can change the admin and withdraw funds.
+    ///   `admin`     - the admin of the contract
     #[msg(instantiate)]
     pub fn instantiate(
         &self,
@@ -139,13 +139,14 @@ impl Transmuter<'_> {
             .map_err(|_| ContractError::Unauthorized {})
     }
 
-    /// Withdraw funds from the contract. Both `in_coin` and `out_coin` are withdrawable.
-    /// Only admin can withdraw funds.
+    /// Exit pool with `tokens_out` amount of tokens.
+    /// As long as the sender has enough shares, the contract will send `tokens_out` amount of tokens to the sender.
+    /// The amount of shares will be deducted from the sender's shares.
     #[msg(exec)]
-    fn withdraw(
+    fn exit_pool(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
-        coins: Vec<Coin>,
+        tokens_out: Vec<Coin>,
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
@@ -155,7 +156,7 @@ impl Transmuter<'_> {
             .may_load(deps.storage, &info.sender)?
             .unwrap_or_default();
 
-        let required_shares = coins
+        let required_shares = tokens_out
             .iter()
             .fold(Uint128::zero(), |acc, curr| acc + curr.amount);
 
@@ -176,20 +177,20 @@ impl Transmuter<'_> {
             },
         )?;
 
-        // withdraw
+        // exit pool
         self.pool
             .update(deps.storage, |mut pool| -> Result<_, ContractError> {
-                pool.withdraw(&coins)?;
+                pool.exit_pool(&tokens_out)?;
                 Ok(pool)
             })?;
 
         let bank_send_msg = BankMsg::Send {
             to_address: info.sender.to_string(),
-            amount: coins,
+            amount: tokens_out,
         };
 
         Ok(Response::new()
-            .add_attribute("method", "withdraw")
+            .add_attribute("method", "exit_pool")
             .add_message(bank_send_msg))
     }
 
