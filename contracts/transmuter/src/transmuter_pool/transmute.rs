@@ -6,38 +6,38 @@ use super::TransmuterPool;
 
 impl TransmuterPool {
     pub fn transmute(&mut self, coin: &Coin) -> Result<Coin, ContractError> {
+        let pool_assets = &mut self.pool_assets;
+
         // out coin has 1:1 amount ratio with in coin
-        let out_coin = Coin::new(coin.amount.into(), self.out_coin_reserve.denom.clone());
+        let out_coin = Coin::new(coin.amount.into(), pool_assets[1].denom.clone());
 
         // ensure transmute denom is in_coin's denom
         ensure_eq!(
             coin.denom,
-            self.in_coin.denom,
+            pool_assets[0].denom,
             ContractError::InvalidTransmuteDenom {
                 denom: coin.denom.clone(),
-                expected_denom: self.in_coin.denom.clone()
+                expected_denom: pool_assets[0].denom.clone()
             }
         );
 
         // ensure there is enough out_coin_reserve
         ensure!(
-            self.out_coin_reserve.amount >= coin.amount,
+            pool_assets[1].amount >= coin.amount,
             ContractError::InsufficientFund {
                 required: out_coin,
-                available: self.out_coin_reserve.clone()
+                available: pool_assets[1].clone()
             }
         );
 
         // increase in_coin
-        self.in_coin.amount = self
-            .in_coin
+        pool_assets[0].amount = pool_assets[0]
             .amount
             .checked_add(coin.amount)
             .map_err(StdError::overflow)?;
 
         // deduct out_coin_reserve
-        self.out_coin_reserve.amount = self
-            .out_coin_reserve
+        pool_assets[1].amount = pool_assets[1]
             .amount
             .checked_sub(coin.amount)
             .map_err(StdError::overflow)?;

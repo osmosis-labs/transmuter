@@ -6,19 +6,19 @@ use super::TransmuterPool;
 
 impl TransmuterPool {
     pub fn supply(&mut self, coin: &Coin) -> Result<(), ContractError> {
+        let out_coin_reserve = &mut self.pool_assets[1];
         // ensure supply denom is out_coin_reserve's denom
         ensure_eq!(
             coin.denom,
-            self.out_coin_reserve.denom,
+            out_coin_reserve.denom,
             ContractError::InvalidSupplyDenom {
                 denom: coin.denom.clone(),
-                expected_denom: self.out_coin_reserve.denom.clone()
+                expected_denom: out_coin_reserve.denom.clone()
             }
         );
 
         // add coin to out_coin_reserve
-        self.out_coin_reserve.amount = self
-            .out_coin_reserve
+        out_coin_reserve.amount = out_coin_reserve
             .amount
             .checked_add(coin.amount)
             .map_err(StdError::overflow)?;
@@ -41,11 +41,11 @@ mod tests {
 
         // supply with out coin denom
         pool.supply(&Coin::new(1000, COSMOS_USDC)).unwrap();
-        assert_eq!(pool.out_coin_reserve, Coin::new(1000, COSMOS_USDC));
+        assert_eq!(pool.pool_assets[1], Coin::new(1000, COSMOS_USDC));
 
         // supply with out coin denom when not empty
         pool.supply(&Coin::new(20000, COSMOS_USDC)).unwrap();
-        assert_eq!(pool.out_coin_reserve, Coin::new(21000, COSMOS_USDC));
+        assert_eq!(pool.pool_assets[1], Coin::new(21000, COSMOS_USDC));
     }
 
     #[test]

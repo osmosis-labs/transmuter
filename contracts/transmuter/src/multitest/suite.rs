@@ -1,3 +1,5 @@
+use std::vec;
+
 use super::test_env::*;
 use crate::{
     contract::{ExecMsg, InstantiateMsg, PoolResponse, QueryMsg, SharesResponse},
@@ -103,8 +105,7 @@ fn test_supply() {
     assert_eq!(
         pool,
         TransmuterPool {
-            in_coin: Coin::new(0, ETH_USDC),
-            out_coin_reserve: supplied_amount[0].clone()
+            pool_assets: vec![Coin::new(0, ETH_USDC), supplied_amount[0].clone()]
         }
     );
 
@@ -249,8 +250,10 @@ fn test_transmute() {
     assert_eq!(
         pool,
         TransmuterPool {
-            in_coin: Coin::new(1_500, ETH_USDC),
-            out_coin_reserve: Coin::new(100_000 - 1_500, COSMOS_USDC)
+            pool_assets: vec![
+                Coin::new(1_500, ETH_USDC),
+                Coin::new(100_000 - 1_500, COSMOS_USDC)
+            ]
         }
     );
 
@@ -287,8 +290,10 @@ fn test_transmute() {
     assert_eq!(
         pool,
         TransmuterPool {
-            in_coin: Coin::new(1_500 + 29_902, ETH_USDC),
-            out_coin_reserve: Coin::new(100_000 - 1_500 - 29_902, COSMOS_USDC)
+            pool_assets: vec![
+                Coin::new(1_500 + 29_902, ETH_USDC),
+                Coin::new(100_000 - 1_500 - 29_902, COSMOS_USDC)
+            ]
         }
     );
 
@@ -459,8 +464,10 @@ fn test_withdraw() {
     assert_eq!(
         pool,
         TransmuterPool {
-            in_coin: Coin::new(1500 - 500, ETH_USDC),
-            out_coin_reserve: Coin::new(200_000 - 1500, COSMOS_USDC)
+            pool_assets: vec![
+                Coin::new(1500 - 500, ETH_USDC),
+                Coin::new(200_000 - 1500, COSMOS_USDC)
+            ]
         }
     );
 
@@ -505,8 +512,10 @@ fn test_withdraw() {
     assert_eq!(
         pool,
         TransmuterPool {
-            in_coin: Coin::new(0, ETH_USDC),
-            out_coin_reserve: Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)
+            pool_assets: vec![
+                Coin::new(0, ETH_USDC),
+                Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)
+            ]
         }
     );
 

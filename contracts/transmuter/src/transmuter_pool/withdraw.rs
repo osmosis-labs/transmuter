@@ -6,24 +6,27 @@ use super::TransmuterPool;
 
 impl TransmuterPool {
     pub fn withdraw(&mut self, coins: &[Coin]) -> Result<(), ContractError> {
+        let pool_assets = &mut self.pool_assets;
+
         for coin in coins {
-            if coin.denom == self.in_coin.denom {
-                self.in_coin.amount =
-                    self.in_coin.amount.checked_sub(coin.amount).map_err(|_| {
-                        ContractError::InsufficientFund {
+            if coin.denom == pool_assets[0].denom {
+                pool_assets[0].amount =
+                    pool_assets[0]
+                        .amount
+                        .checked_sub(coin.amount)
+                        .map_err(|_| ContractError::InsufficientFund {
                             required: coin.clone(),
-                            available: self.in_coin.clone(),
-                        }
-                    })?;
-            } else if coin.denom == self.out_coin_reserve.denom {
-                self.out_coin_reserve.amount = self
-                    .out_coin_reserve
-                    .amount
-                    .checked_sub(coin.amount)
-                    .map_err(|_| ContractError::InsufficientFund {
-                        required: coin.clone(),
-                        available: self.out_coin_reserve.clone(),
-                    })?;
+                            available: pool_assets[0].clone(),
+                        })?;
+            } else if coin.denom == pool_assets[1].denom {
+                pool_assets[1].amount =
+                    pool_assets[1]
+                        .amount
+                        .checked_sub(coin.amount)
+                        .map_err(|_| ContractError::InsufficientFund {
+                            required: coin.clone(),
+                            available: pool_assets[1].clone(),
+                        })?;
             } else {
                 return Err(ContractError::InsufficientFund {
                     required: coin.clone(),
@@ -45,8 +48,10 @@ mod tests {
     #[test]
     fn test_withdraw_succeed_when_has_enough_coins_in_pool() {
         let mut pool = TransmuterPool {
-            in_coin: Coin::new(100_000, ETH_USDC),
-            out_coin_reserve: Coin::new(100_000, COSMOS_USDC),
+            pool_assets: vec![
+                Coin::new(100_000, ETH_USDC),
+                Coin::new(100_000, COSMOS_USDC),
+            ],
         };
 
         // withdraw in_coin
@@ -54,8 +59,7 @@ mod tests {
         assert_eq!(
             pool,
             TransmuterPool {
-                in_coin: Coin::new(90_000, ETH_USDC),
-                out_coin_reserve: Coin::new(100_000, COSMOS_USDC),
+                pool_assets: vec![Coin::new(90_000, ETH_USDC), Coin::new(100_000, COSMOS_USDC),],
             }
         );
 
@@ -64,8 +68,7 @@ mod tests {
         assert_eq!(
             pool,
             TransmuterPool {
-                in_coin: Coin::new(90_000, ETH_USDC),
-                out_coin_reserve: Coin::new(90_000, COSMOS_USDC),
+                pool_assets: vec![Coin::new(90_000, ETH_USDC), Coin::new(90_000, COSMOS_USDC),],
             }
         );
 
@@ -75,8 +78,7 @@ mod tests {
         assert_eq!(
             pool,
             TransmuterPool {
-                in_coin: Coin::new(0, ETH_USDC),
-                out_coin_reserve: Coin::new(0, COSMOS_USDC),
+                pool_assets: vec![Coin::new(0, ETH_USDC), Coin::new(0, COSMOS_USDC),],
             }
         );
     }
@@ -84,8 +86,10 @@ mod tests {
     #[test]
     fn test_withdraw_fail_when_coin_denom_is_invalid() {
         let mut pool = TransmuterPool {
-            in_coin: Coin::new(100_000, ETH_USDC),
-            out_coin_reserve: Coin::new(100_000, COSMOS_USDC),
+            pool_assets: vec![
+                Coin::new(100_000, ETH_USDC),
+                Coin::new(100_000, COSMOS_USDC),
+            ],
         };
 
         // withdraw invalid coin
@@ -114,8 +118,10 @@ mod tests {
     #[test]
     fn test_withdraw_fail_when_not_enough_coin() {
         let mut pool = TransmuterPool {
-            in_coin: Coin::new(100_000, ETH_USDC),
-            out_coin_reserve: Coin::new(100_000, COSMOS_USDC),
+            pool_assets: vec![
+                Coin::new(100_000, ETH_USDC),
+                Coin::new(100_000, COSMOS_USDC),
+            ],
         };
 
         // withdraw in_coin
