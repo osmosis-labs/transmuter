@@ -27,10 +27,10 @@ pub enum ContractError {
         expected_denom: Vec<String>,
     },
 
-    #[error("Unable to transmute coin with denom: {denom}: expected: {expected_denom}")]
+    #[error("Unable to transmute token with denom: {denom}: expected one of: {expected_denom:?}")]
     InvalidTransmuteDenom {
         denom: String,
-        expected_denom: String,
+        expected_denom: Vec<String>,
     },
 
     #[error("Insufficient fund: required: {required}, available: {available}")]

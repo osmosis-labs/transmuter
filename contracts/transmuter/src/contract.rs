@@ -87,11 +87,14 @@ impl Transmuter<'_> {
         Ok(Response::new().add_attribute("method", "join_pool"))
     }
 
-    /// Transmute `in_coin` to `out_coin`.
-    /// Recived `in_coin` from `MsgExecuteContract`'s funds and
-    /// send `out_coin` back to the msg sender with 1:1 ratio.
+    /// Transmute recived token_in from `MsgExecuteContract`'s funds to `token_out_denom`.
+    /// Send `token_out` back to the msg sender with 1:1 ratio.
     #[msg(exec)]
-    fn transmute(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
+    fn transmute(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        token_out_denom: String,
+    ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
         // ensure funds length == 1
@@ -99,15 +102,15 @@ impl Transmuter<'_> {
 
         // transmute
         let mut pool = self.pool.load(deps.storage)?;
-        let in_coin = info.funds[0].clone();
-        let out_coin = pool.transmute(&in_coin)?;
+        let token_in = info.funds[0].clone();
+        let token_out = pool.transmute(&token_in, &token_out_denom)?;
 
         // save pool
         self.pool.save(deps.storage, &pool)?;
 
         let bank_send_msg = BankMsg::Send {
             to_address: info.sender.to_string(),
-            amount: vec![out_coin],
+            amount: vec![token_out],
         };
 
         Ok(Response::new()

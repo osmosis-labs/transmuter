@@ -182,13 +182,15 @@ fn test_transmute() {
         )
         .unwrap();
 
-    // transmute should fail since there has no out_coin_reserve in the pool
+    // transmute should fail since there has no token_out_denom remaining in the pool
     let err = t
         .app
         .execute_contract(
             t.accounts["alice"].clone(),
             t.contract.clone(),
-            &ExecMsg::Transmute {},
+            &ExecMsg::Transmute {
+                token_out_denom: COSMOS_USDC.to_string(),
+            },
             &[Coin::new(1_500, ETH_USDC)],
         )
         .unwrap_err();
@@ -217,7 +219,9 @@ fn test_transmute() {
         .execute_contract(
             t.accounts["alice"].clone(),
             t.contract.clone(),
-            &ExecMsg::Transmute {},
+            &ExecMsg::Transmute {
+                token_out_denom: "urandom".to_string(),
+            },
             &[Coin::new(1_000, COSMOS_USDC)],
         )
         .unwrap_err();
@@ -225,8 +229,28 @@ fn test_transmute() {
     assert_eq!(
         err.downcast_ref::<ContractError>().unwrap(),
         &ContractError::InvalidTransmuteDenom {
-            denom: COSMOS_USDC.to_string(),
-            expected_denom: ETH_USDC.to_string()
+            denom: "urandom".to_string(),
+            expected_denom: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()]
+        }
+    );
+
+    let err = t
+        .app
+        .execute_contract(
+            t.accounts["alice"].clone(),
+            t.contract.clone(),
+            &ExecMsg::Transmute {
+                token_out_denom: COSMOS_USDC.to_string(),
+            },
+            &[Coin::new(1_000, "urandom2")],
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        err.downcast_ref::<ContractError>().unwrap(),
+        &ContractError::InvalidTransmuteDenom {
+            denom: "urandom2".to_string(),
+            expected_denom: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()]
         }
     );
 
@@ -236,7 +260,9 @@ fn test_transmute() {
         .execute_contract(
             t.accounts["alice"].clone(),
             t.contract.clone(),
-            &ExecMsg::Transmute {},
+            &ExecMsg::Transmute {
+                token_out_denom: COSMOS_USDC.to_string(),
+            },
             &[Coin::new(1_000, ETH_USDC), Coin::new(1_000, COSMOS_USDC)],
         )
         .unwrap_err();
@@ -251,7 +277,9 @@ fn test_transmute() {
         .execute_contract(
             t.accounts["alice"].clone(),
             t.contract.clone(),
-            &ExecMsg::Transmute {},
+            &ExecMsg::Transmute {
+                token_out_denom: COSMOS_USDC.to_string(),
+            },
             &[Coin::new(1_500, ETH_USDC)],
         )
         .unwrap();
@@ -295,7 +323,9 @@ fn test_transmute() {
         .execute_contract(
             t.accounts["bob"].clone(),
             t.contract.clone(),
-            &ExecMsg::Transmute {},
+            &ExecMsg::Transmute {
+                token_out_denom: COSMOS_USDC.to_string(),
+            },
             &[Coin::new(29_902, ETH_USDC)],
         )
         .unwrap();
@@ -361,12 +391,14 @@ fn test_exit_pool() {
         )
         .unwrap();
 
-    // transmute to build up some in_coin
+    // transmute to build up token_in
     t.app
         .execute_contract(
             t.accounts["user"].clone(),
             t.contract.clone(),
-            &ExecMsg::Transmute {},
+            &ExecMsg::Transmute {
+                token_out_denom: COSMOS_USDC.to_string(),
+            },
             &[Coin::new(1_500, ETH_USDC)],
         )
         .unwrap();
