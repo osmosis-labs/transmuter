@@ -3,7 +3,6 @@ use cosmwasm_std::{
     ensure, ensure_eq, Addr, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdError,
     Uint128,
 };
-use cw_controllers::{Admin, AdminResponse};
 use cw_storage_plus::{Item, Map};
 use sylvia::contract;
 
@@ -16,7 +15,6 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub struct Transmuter<'a> {
     pub(crate) pool: Item<'a, TransmuterPool>,
     pub(crate) shares: Map<'a, &'a Addr, Uint128>,
-    pub(crate) admin: Admin<'a>,
 }
 
 #[contract]
@@ -25,7 +23,6 @@ impl Transmuter<'_> {
     pub const fn new() -> Self {
         Self {
             pool: Item::new("pool"),
-            admin: Admin::new("admin"),
             shares: Map::new("shares"),
         }
     }
@@ -33,14 +30,12 @@ impl Transmuter<'_> {
     /// Instantiate the contract with
     ///   `in_denom`  - the denom of the coin to be transmuted.
     ///   `out_denom` - the denom of the coin that is transmuted to, needs to be supplied to the contract.
-    ///   `admin`     - the admin of the contract
     #[msg(instantiate)]
     pub fn instantiate(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
         in_denom: String,
         out_denom: String,
-        admin: String,
     ) -> Result<Response, ContractError> {
         let (deps, _env, _info) = ctx;
 
@@ -50,10 +45,6 @@ impl Transmuter<'_> {
         // store pool
         self.pool
             .save(deps.storage, &TransmuterPool::new(&in_denom, &out_denom))?;
-
-        // store admin
-        let admin = deps.api.addr_validate(&admin)?;
-        self.admin.set(deps, Some(admin))?;
 
         Ok(Response::new()
             .add_attribute("method", "instantiate")
@@ -124,21 +115,6 @@ impl Transmuter<'_> {
             .add_message(bank_send_msg))
     }
 
-    /// Update the admin of the contract.
-    #[msg(exec)]
-    fn update_admin(
-        &self,
-        ctx: (DepsMut, Env, MessageInfo),
-        new_admin: String,
-    ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
-        let new_admin = deps.api.addr_validate(&new_admin)?;
-
-        self.admin
-            .execute_update_admin(deps, info, Some(new_admin))
-            .map_err(|_| ContractError::Unauthorized {})
-    }
-
     /// Exit pool with `tokens_out` amount of tokens.
     /// As long as the sender has enough shares, the contract will send `tokens_out` amount of tokens to the sender.
     /// The amount of shares will be deducted from the sender's shares.
@@ -192,13 +168,6 @@ impl Transmuter<'_> {
         Ok(Response::new()
             .add_attribute("method", "exit_pool")
             .add_message(bank_send_msg))
-    }
-
-    /// Query the admin of the contract.
-    #[msg(query)]
-    fn admin(&self, ctx: (Deps, Env)) -> Result<AdminResponse, StdError> {
-        let (deps, _env) = ctx;
-        self.admin.query_admin(deps)
     }
 
     /// Query the pool information of the contract.

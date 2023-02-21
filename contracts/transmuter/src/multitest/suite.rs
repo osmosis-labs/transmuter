@@ -7,7 +7,6 @@ use crate::{
     ContractError,
 };
 use cosmwasm_std::{Addr, Coin, Uint128};
-use cw_controllers::AdminResponse;
 use cw_multi_test::Executor;
 
 const ETH_USDC: &str = "ibc/AXLETHUSDC";
@@ -27,7 +26,6 @@ fn test_join_pool() {
         .with_instantiate_msg(InstantiateMsg {
             in_denom: ETH_USDC.to_string(),
             out_denom: COSMOS_USDC.to_string(),
-            admin: "admin".to_string(),
         })
         .build();
 
@@ -169,7 +167,6 @@ fn test_transmute() {
         .with_instantiate_msg(InstantiateMsg {
             in_denom: ETH_USDC.to_string(),
             out_denom: COSMOS_USDC.to_string(),
-            admin: "admin".to_string(),
         })
         .build();
 
@@ -334,63 +331,6 @@ fn test_transmute() {
 }
 
 #[test]
-fn test_admin() {
-    let mut t = TestEnvBuilder::new()
-        .with_instantiate_msg(InstantiateMsg {
-            in_denom: ETH_USDC.to_string(),
-            out_denom: COSMOS_USDC.to_string(),
-            admin: "old_admin".to_string(),
-        })
-        .build();
-
-    let AdminResponse { admin } = t
-        .app
-        .wrap()
-        .query_wasm_smart(&t.contract, &QueryMsg::Admin {})
-        .unwrap();
-
-    assert_eq!(admin.unwrap(), "old_admin".to_string());
-
-    // admin can update admin
-    t.app
-        .execute_contract(
-            Addr::unchecked("old_admin"),
-            t.contract.clone(),
-            &ExecMsg::UpdateAdmin {
-                new_admin: "new_admin".to_string(),
-            },
-            &[],
-        )
-        .unwrap();
-
-    let AdminResponse { admin } = t
-        .app
-        .wrap()
-        .query_wasm_smart(&t.contract, &QueryMsg::Admin {})
-        .unwrap();
-
-    assert_eq!(admin.unwrap(), "new_admin".to_string());
-
-    // non-admin cannot update admin
-    let err = t
-        .app
-        .execute_contract(
-            Addr::unchecked("old_admin"),
-            t.contract.clone(),
-            &ExecMsg::UpdateAdmin {
-                new_admin: "new_admin".to_string(),
-            },
-            &[],
-        )
-        .unwrap_err();
-
-    assert_eq!(
-        err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::Unauthorized {}
-    );
-}
-
-#[test]
 fn test_exit_pool() {
     let mut t = TestEnvBuilder::new()
         .with_account("user", vec![Coin::new(1_500, ETH_USDC)])
@@ -399,7 +339,6 @@ fn test_exit_pool() {
         .with_instantiate_msg(InstantiateMsg {
             in_denom: ETH_USDC.to_string(),
             out_denom: COSMOS_USDC.to_string(),
-            admin: "admin".to_string(),
         })
         .build();
 
