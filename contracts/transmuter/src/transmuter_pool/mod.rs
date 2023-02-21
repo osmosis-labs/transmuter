@@ -12,9 +12,12 @@ pub struct TransmuterPool {
 }
 
 impl TransmuterPool {
-    pub fn new(in_denom: &str, out_denom: &str) -> Self {
+    pub fn new(pool_asset_denoms: &[String]) -> Self {
         Self {
-            pool_assets: vec![Coin::new(0, in_denom), Coin::new(0, out_denom)],
+            pool_assets: pool_asset_denoms
+                .into_iter()
+                .map(|denom| Coin::new(0, denom))
+                .collect(),
         }
     }
 }

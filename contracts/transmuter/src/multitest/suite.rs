@@ -160,7 +160,11 @@ fn test_transmute() {
     let mut t = TestEnvBuilder::new()
         .with_account(
             "alice",
-            vec![Coin::new(1_500, ETH_USDC), Coin::new(1_000, COSMOS_USDC)],
+            vec![
+                Coin::new(1_500, ETH_USDC),
+                Coin::new(1_000, COSMOS_USDC),
+                Coin::new(1_000, "urandom2"),
+            ],
         )
         .with_account("bob", vec![Coin::new(29_902, ETH_USDC)])
         .with_account("provider", vec![Coin::new(200_000, COSMOS_USDC)])
@@ -272,7 +276,7 @@ fn test_transmute() {
         &ContractError::SingleTokenExpected {}
     );
 
-    // transmute with correct in_coin should succeed this time
+    // transmute with correct token_in should succeed this time
     t.app
         .execute_contract(
             t.accounts["alice"].clone(),
@@ -316,7 +320,13 @@ fn test_transmute() {
     );
 
     // +1_000 due to existing alice balance
-    assert_eq!(alice_balances, vec![Coin::new(1_500 + 1_000, COSMOS_USDC)]);
+    assert_eq!(
+        alice_balances,
+        vec![
+            Coin::new(1_500 + 1_000, COSMOS_USDC),
+            Coin::new(1_000, "urandom2")
+        ]
+    );
 
     // transmute again with another user
     t.app

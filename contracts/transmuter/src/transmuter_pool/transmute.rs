@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn test_transmute_succeed() {
-        let mut pool = TransmuterPool::new(ETH_USDC, COSMOS_USDC);
+        let mut pool = TransmuterPool::new(&[ETH_USDC.to_string(), COSMOS_USDC.to_string()]);
 
         pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
         assert_eq!(
@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn test_transmute_token_out_denom_eq_token_in_denom() {
-        let mut pool = TransmuterPool::new(ETH_USDC, COSMOS_USDC);
+        let mut pool = TransmuterPool::new(&[ETH_USDC.to_string(), COSMOS_USDC.to_string()]);
         pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
 
         let token_in = Coin::new(70_000, COSMOS_USDC);
@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn test_transmute_fail_token_out_not_enough() {
-        let mut pool = TransmuterPool::new(ETH_USDC, COSMOS_USDC);
+        let mut pool = TransmuterPool::new(&[ETH_USDC.to_string(), COSMOS_USDC.to_string()]);
 
         pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
         assert_eq!(
@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_transmute_fail_token_in_not_allowed() {
-        let mut pool = TransmuterPool::new(ETH_USDC, COSMOS_USDC);
+        let mut pool = TransmuterPool::new(&[ETH_USDC.to_string(), COSMOS_USDC.to_string()]);
 
         pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
         assert_eq!(
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn test_transmute_fail_token_out_denom_not_allowed() {
-        let mut pool = TransmuterPool::new(ETH_USDC, COSMOS_USDC);
+        let mut pool = TransmuterPool::new(&[ETH_USDC.to_string(), COSMOS_USDC.to_string()]);
 
         pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
         assert_eq!(

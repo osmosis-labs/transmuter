@@ -44,7 +44,7 @@ impl Transmuter<'_> {
 
         // store pool
         self.pool
-            .save(deps.storage, &TransmuterPool::new(&in_denom, &out_denom))?;
+            .save(deps.storage, &TransmuterPool::new(&[in_denom, out_denom]))?;
 
         Ok(Response::new()
             .add_attribute("method", "instantiate")
