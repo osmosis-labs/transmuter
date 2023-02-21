@@ -13,9 +13,11 @@ pub struct TransmuterPool {
 
 impl TransmuterPool {
     pub fn new(pool_asset_denoms: &[String]) -> Self {
+        assert!(pool_asset_denoms.len() >= 2);
+
         Self {
             pool_assets: pool_asset_denoms
-                .into_iter()
+                .iter()
                 .map(|denom| Coin::new(0, denom))
                 .collect(),
         }
