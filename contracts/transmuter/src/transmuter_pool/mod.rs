@@ -1,4 +1,4 @@
-mod supply;
+mod join_pool;
 mod transmute;
 mod withdraw;
 

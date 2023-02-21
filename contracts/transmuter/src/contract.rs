@@ -61,35 +61,39 @@ impl Transmuter<'_> {
             .add_attribute("contract_version", CONTRACT_VERSION))
     }
 
-    /// Supply the contract with coin that matches `out_coin`'s denom.
-    /// Recived supply coin from funds part of `MsgExecuteContract` and
-    /// keep it as `pool.out_coin_reserve`.
+    /// Join pool with tokens that exist in the pool.
+    /// Token used to join pool is sent to the contract via `funds` in `MsgExecuteContract`.
     #[msg(exec)]
-    fn supply(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
+    fn join_pool(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
-        // ensure funds length == 1
-        ensure_eq!(info.funds.len(), 1, ContractError::SingleCoinExpected {});
-
-        let supplying_coin = info.funds[0].clone();
+        // ensure funds not empty
+        ensure!(
+            !info.funds.is_empty(),
+            ContractError::AtLeastSingleTokenExpected {}
+        );
 
         // update shares
         self.shares.update(
             deps.storage,
             &info.sender,
             |shares| -> Result<Uint128, StdError> {
-                Ok(shares.unwrap_or_default() + supplying_coin.amount)
+                Ok(shares.unwrap_or_default()
+                    + info
+                        .funds
+                        .iter()
+                        .fold(Uint128::zero(), |acc, c| acc + c.amount))
             },
         )?;
 
         // update pool
         self.pool
             .update(deps.storage, |mut pool| -> Result<_, ContractError> {
-                pool.supply(&supplying_coin)?;
+                pool.join_pool(&info.funds)?;
                 Ok(pool)
             })?;
 
-        Ok(Response::new().add_attribute("method", "supply"))
+        Ok(Response::new().add_attribute("method", "join_pool"))
     }
 
     /// Transmute `in_coin` to `out_coin`.
@@ -100,7 +104,7 @@ impl Transmuter<'_> {
         let (deps, _env, info) = ctx;
 
         // ensure funds length == 1
-        ensure_eq!(info.funds.len(), 1, ContractError::SingleCoinExpected {});
+        ensure_eq!(info.funds.len(), 1, ContractError::SingleTokenExpected {});
 
         // transmute
         let mut pool = self.pool.load(deps.storage)?;

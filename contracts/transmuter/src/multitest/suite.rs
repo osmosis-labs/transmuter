@@ -14,11 +14,15 @@ const ETH_USDC: &str = "ibc/AXLETHUSDC";
 const COSMOS_USDC: &str = "ibc/COSMOSUSDC";
 
 #[test]
-fn test_supply() {
+fn test_join_pool() {
     let mut t = TestEnvBuilder::new()
         .with_account(
             "provider",
-            vec![Coin::new(1_000, COSMOS_USDC), Coin::new(1_000, ETH_USDC)],
+            vec![
+                Coin::new(2_000, COSMOS_USDC),
+                Coin::new(2_000, ETH_USDC),
+                Coin::new(2_000, "urandom"),
+            ],
         )
         .with_instantiate_msg(InstantiateMsg {
             in_denom: ETH_USDC.to_string(),
@@ -27,73 +31,56 @@ fn test_supply() {
         })
         .build();
 
-    // failed when supply more than 1 denom
-    let supplied_amount = vec![Coin::new(1_000, COSMOS_USDC), Coin::new(1_000, ETH_USDC)];
+    // failed to join pool with 0 denom
     let err = t
         .app
         .execute_contract(
             t.accounts["provider"].clone(),
             t.contract.clone(),
-            &ExecMsg::Supply {},
-            &supplied_amount,
-        )
-        .unwrap_err();
-
-    assert_eq!(
-        err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::SingleCoinExpected {}
-    );
-
-    // failed to supply 0 denom
-    let err = t
-        .app
-        .execute_contract(
-            t.accounts["provider"].clone(),
-            t.contract.clone(),
-            &ExecMsg::Supply {},
+            &ExecMsg::JoinPool {},
             &[],
         )
         .unwrap_err();
 
     assert_eq!(
         err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::SingleCoinExpected {}
+        &ContractError::AtLeastSingleTokenExpected {}
     );
 
-    // fail to supply with non out_coin's denom
-    let supplied_amount = vec![Coin::new(1_000, ETH_USDC)];
+    // fail to join pool with denom that is not in the pool
+    let tokens_in = vec![Coin::new(1_000, "urandom")];
     let err = t
         .app
         .execute_contract(
             t.accounts["provider"].clone(),
             t.contract.clone(),
-            &ExecMsg::Supply {},
-            &supplied_amount,
+            &ExecMsg::JoinPool {},
+            &tokens_in,
         )
         .unwrap_err();
 
     assert_eq!(
         err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::InvalidSupplyDenom {
-            denom: ETH_USDC.to_string(),
-            expected_denom: COSMOS_USDC.to_string()
+        &ContractError::InvalidJoinPoolDenom {
+            denom: "urandom".to_string(),
+            expected_denom: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()]
         }
     );
 
-    // supply with out_coin should added to the contract's balance and update state
-    let supplied_amount = vec![Coin::new(1_000, COSMOS_USDC)];
+    // join pool with correct pool's denom should added to the contract's balance and update state
+    let tokens_in = vec![Coin::new(1_000, COSMOS_USDC)];
     t.app
         .execute_contract(
             t.accounts["provider"].clone(),
             t.contract.clone(),
-            &ExecMsg::Supply {},
-            &supplied_amount,
+            &ExecMsg::JoinPool {},
+            &tokens_in,
         )
         .unwrap();
 
     // check contract balances
     let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
-    assert_eq!(contract_balances, supplied_amount);
+    assert_eq!(contract_balances, tokens_in);
 
     // check pool balance
     let PoolResponse { pool } = t
@@ -105,7 +92,7 @@ fn test_supply() {
     assert_eq!(
         pool,
         TransmuterPool {
-            pool_assets: vec![Coin::new(0, ETH_USDC), supplied_amount[0].clone()]
+            pool_assets: vec![Coin::new(0, ETH_USDC), tokens_in[0].clone()]
         }
     );
 
@@ -121,7 +108,53 @@ fn test_supply() {
         )
         .unwrap();
 
-    assert_eq!(shares, supplied_amount[0].amount);
+    assert_eq!(shares, tokens_in[0].amount);
+
+    // join pool with multiple correct pool's denom should added to the contract's balance and update state
+    let tokens_in = vec![Coin::new(1_000, ETH_USDC), Coin::new(1_000, COSMOS_USDC)];
+    t.app
+        .execute_contract(
+            t.accounts["provider"].clone(),
+            t.contract.clone(),
+            &ExecMsg::JoinPool {},
+            &tokens_in,
+        )
+        .unwrap();
+
+    // check contract balances
+    let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
+    assert_eq!(
+        contract_balances,
+        vec![Coin::new(1_000, ETH_USDC), Coin::new(2_000, COSMOS_USDC)]
+    );
+
+    // check pool balance
+    let PoolResponse { pool } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
+        .unwrap();
+
+    assert_eq!(
+        pool,
+        TransmuterPool {
+            pool_assets: vec![Coin::new(1_000, ETH_USDC), Coin::new(2_000, COSMOS_USDC)]
+        }
+    );
+
+    // check shares
+    let SharesResponse { shares } = t
+        .app
+        .wrap()
+        .query_wasm_smart(
+            t.contract.clone(),
+            &QueryMsg::Shares {
+                address: t.accounts["provider"].to_string(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(shares, Uint128::new(3000));
 }
 
 #[test]
@@ -140,15 +173,15 @@ fn test_transmute() {
         })
         .build();
 
-    // supply transmuter
-    let supply_amount = vec![Coin::new(100_000, COSMOS_USDC)];
+    // join pool
+    let tokens_in = vec![Coin::new(100_000, COSMOS_USDC)];
 
-    // supplying with send tokens should not update pool balance
+    // join pool with send tokens should not update pool balance
     t.app
         .send_tokens(
             t.accounts["provider"].clone(),
             t.contract.clone(),
-            &supply_amount,
+            &tokens_in,
         )
         .unwrap();
 
@@ -171,13 +204,13 @@ fn test_transmute() {
         }
     );
 
-    // supply pool properly
+    // join pool properly
     t.app
         .execute_contract(
             t.accounts["provider"].clone(),
             t.contract.clone(),
-            &ExecMsg::Supply {},
-            &supply_amount,
+            &ExecMsg::JoinPool {},
+            &tokens_in,
         )
         .unwrap();
 
@@ -213,7 +246,7 @@ fn test_transmute() {
 
     assert_eq!(
         err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::SingleCoinExpected {}
+        &ContractError::SingleTokenExpected {}
     );
 
     // transmute with correct in_coin should succeed this time
@@ -370,12 +403,12 @@ fn test_withdraw() {
         })
         .build();
 
-    // supply
+    // join pool
     t.app
         .execute_contract(
             t.accounts["provider_1"].clone(),
             t.contract.clone(),
-            &ExecMsg::Supply {},
+            &ExecMsg::JoinPool {},
             &[Coin::new(100_000, COSMOS_USDC)],
         )
         .unwrap();
@@ -384,7 +417,7 @@ fn test_withdraw() {
         .execute_contract(
             t.accounts["provider_2"].clone(),
             t.contract.clone(),
-            &ExecMsg::Supply {},
+            &ExecMsg::JoinPool {},
             &[Coin::new(100_000, COSMOS_USDC)],
         )
         .unwrap();

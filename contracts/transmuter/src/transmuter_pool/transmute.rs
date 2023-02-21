@@ -56,13 +56,13 @@ mod tests {
     fn test_transmute_succeed() {
         let mut pool = TransmuterPool::new(ETH_USDC, COSMOS_USDC);
 
-        pool.supply(&Coin::new(70_000, COSMOS_USDC)).unwrap();
+        pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
         assert_eq!(
             pool.transmute(&Coin::new(70_000, ETH_USDC)).unwrap(),
             Coin::new(70_000, COSMOS_USDC)
         );
 
-        pool.supply(&Coin::new(100_000, COSMOS_USDC)).unwrap();
+        pool.join_pool(&[Coin::new(100_000, COSMOS_USDC)]).unwrap();
         assert_eq!(
             pool.transmute(&Coin::new(60_000, ETH_USDC)).unwrap(),
             Coin::new(60_000, COSMOS_USDC)
@@ -85,7 +85,7 @@ mod tests {
     fn test_transmute_fail_out_coin_not_enough() {
         let mut pool = TransmuterPool::new(ETH_USDC, COSMOS_USDC);
 
-        pool.supply(&Coin::new(70_000, COSMOS_USDC)).unwrap();
+        pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
         assert_eq!(
             pool.transmute(&Coin::new(70_001, ETH_USDC)).unwrap_err(),
             ContractError::InsufficientFund {
@@ -99,7 +99,7 @@ mod tests {
     fn test_transmute_fail_in_coin_not_allowed() {
         let mut pool = TransmuterPool::new(ETH_USDC, COSMOS_USDC);
 
-        pool.supply(&Coin::new(70_000, COSMOS_USDC)).unwrap();
+        pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
         assert_eq!(
             pool.transmute(&Coin::new(70_000, "ibc/AXLETHUSDT"))
                 .unwrap_err(),
