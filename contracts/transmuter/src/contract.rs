@@ -27,15 +27,12 @@ impl Transmuter<'_> {
         }
     }
 
-    /// Instantiate the contract with
-    ///   `in_denom`  - the denom of the coin to be transmuted.
-    ///   `out_denom` - the denom of the coin that is transmuted to, needs to be supplied to the contract.
+    /// Instantiate the contract.
     #[msg(instantiate)]
     pub fn instantiate(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
-        in_denom: String,
-        out_denom: String,
+        pool_asset_denoms: Vec<String>,
     ) -> Result<Response, ContractError> {
         let (deps, _env, _info) = ctx;
 
@@ -44,7 +41,7 @@ impl Transmuter<'_> {
 
         // store pool
         self.pool
-            .save(deps.storage, &TransmuterPool::new(&[in_denom, out_denom]))?;
+            .save(deps.storage, &TransmuterPool::new(&pool_asset_denoms))?;
 
         Ok(Response::new()
             .add_attribute("method", "instantiate")

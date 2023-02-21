@@ -10,6 +10,7 @@ use cosmwasm_std::{Addr, Coin, Uint128};
 use cw_multi_test::Executor;
 
 const ETH_USDC: &str = "ibc/AXLETHUSDC";
+const ETH_DAI: &str = "ibc/AXLETHDAI";
 const COSMOS_USDC: &str = "ibc/COSMOSUSDC";
 
 #[test]
@@ -24,8 +25,7 @@ fn test_join_pool() {
             ],
         )
         .with_instantiate_msg(InstantiateMsg {
-            in_denom: ETH_USDC.to_string(),
-            out_denom: COSMOS_USDC.to_string(),
+            pool_asset_denoms: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
         })
         .build();
 
@@ -169,8 +169,7 @@ fn test_transmute() {
         .with_account("bob", vec![Coin::new(29_902, ETH_USDC)])
         .with_account("provider", vec![Coin::new(200_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
-            in_denom: ETH_USDC.to_string(),
-            out_denom: COSMOS_USDC.to_string(),
+            pool_asset_denoms: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
         })
         .build();
 
@@ -377,8 +376,7 @@ fn test_exit_pool() {
         .with_account("provider_1", vec![Coin::new(100_000, COSMOS_USDC)])
         .with_account("provider_2", vec![Coin::new(100_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
-            in_denom: ETH_USDC.to_string(),
-            out_denom: COSMOS_USDC.to_string(),
+            pool_asset_denoms: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
         })
         .build();
 
@@ -573,5 +571,237 @@ fn test_exit_pool() {
             required: Coin::new(1, ETH_USDC),
             available: Coin::new(0, ETH_USDC)
         }
+    );
+}
+
+#[test]
+fn test_3_pool_transmuter() {
+    let mut t = TestEnvBuilder::new()
+        .with_account("alice", vec![Coin::new(1_500, ETH_USDC)])
+        .with_account("bob", vec![Coin::new(1_500, ETH_DAI)])
+        .with_account("provider", vec![Coin::new(100_000, COSMOS_USDC)])
+        .with_instantiate_msg(InstantiateMsg {
+            pool_asset_denoms: vec![
+                ETH_USDC.to_string(),
+                ETH_DAI.to_string(),
+                COSMOS_USDC.to_string(),
+            ],
+        })
+        .build();
+
+    // join pool
+    t.app
+        .execute_contract(
+            t.accounts["provider"].clone(),
+            t.contract.clone(),
+            &ExecMsg::JoinPool {},
+            &[Coin::new(100_000, COSMOS_USDC)],
+        )
+        .unwrap();
+
+    // check shares
+    let SharesResponse { shares } = t
+        .app
+        .wrap()
+        .query_wasm_smart(
+            t.contract.clone(),
+            &QueryMsg::Shares {
+                address: t.accounts["provider"].to_string(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(shares, Uint128::new(100_000));
+
+    // check contract balances
+    assert_eq!(
+        t.app.wrap().query_all_balances(&t.contract).unwrap(),
+        vec![Coin::new(100_000, COSMOS_USDC)]
+    );
+
+    // check provider balances
+    assert_eq!(
+        t.app
+            .wrap()
+            .query_all_balances(&t.accounts["provider"])
+            .unwrap(),
+        vec![]
+    );
+
+    // check pool
+    let PoolResponse { pool } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
+        .unwrap();
+
+    assert_eq!(
+        pool,
+        TransmuterPool {
+            pool_assets: vec![
+                Coin::new(0, ETH_USDC),
+                Coin::new(0, ETH_DAI),
+                Coin::new(100_000, COSMOS_USDC)
+            ]
+        }
+    );
+
+    // transmute ETH_USDC to ETH_DAI should fail
+    let err = t
+        .app
+        .execute_contract(
+            t.accounts["alice"].clone(),
+            t.contract.clone(),
+            &ExecMsg::Transmute {
+                token_out_denom: ETH_DAI.to_string(),
+            },
+            &[Coin::new(1_000, ETH_USDC)],
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        err.downcast_ref::<ContractError>().unwrap(),
+        &ContractError::InsufficientFund {
+            required: Coin::new(1_000, ETH_DAI),
+            available: Coin::new(0, ETH_DAI),
+        }
+    );
+
+    // transmute ETH_USDC to COSMOS_USDC
+    t.app
+        .execute_contract(
+            t.accounts["alice"].clone(),
+            t.contract.clone(),
+            &ExecMsg::Transmute {
+                token_out_denom: COSMOS_USDC.to_string(),
+            },
+            &[Coin::new(1_000, ETH_USDC)],
+        )
+        .unwrap();
+
+    // check contract balances
+    assert_eq!(
+        t.app.wrap().query_all_balances(&t.contract).unwrap(),
+        vec![Coin::new(1_000, ETH_USDC), Coin::new(99_000, COSMOS_USDC)]
+    );
+
+    // check alice balance
+    assert_eq!(
+        t.app
+            .wrap()
+            .query_all_balances(&t.accounts["alice"])
+            .unwrap(),
+        vec![Coin::new(500, ETH_USDC), Coin::new(1_000, COSMOS_USDC)]
+    );
+
+    // check pool
+    let PoolResponse { pool } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
+        .unwrap();
+
+    assert_eq!(
+        pool,
+        TransmuterPool {
+            pool_assets: vec![
+                Coin::new(1_000, ETH_USDC),
+                Coin::new(0, ETH_DAI),
+                Coin::new(99_000, COSMOS_USDC)
+            ]
+        }
+    );
+
+    // transmute ETH_DAI to ETH_USDC
+    t.app
+        .execute_contract(
+            t.accounts["bob"].clone(),
+            t.contract.clone(),
+            &ExecMsg::Transmute {
+                token_out_denom: ETH_USDC.to_string(),
+            },
+            &[Coin::new(1_000, ETH_DAI)],
+        )
+        .unwrap();
+
+    // check contract balances
+    assert_eq!(
+        t.app.wrap().query_all_balances(&t.contract).unwrap(),
+        vec![Coin::new(1_000, ETH_DAI), Coin::new(99_000, COSMOS_USDC),]
+    );
+
+    // check bob balances
+    assert_eq!(
+        t.app.wrap().query_all_balances(&t.accounts["bob"]).unwrap(),
+        vec![Coin::new(500, ETH_DAI), Coin::new(1_000, ETH_USDC)]
+    );
+
+    // check pool
+    let PoolResponse { pool } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
+        .unwrap();
+
+    assert_eq!(
+        pool,
+        TransmuterPool {
+            pool_assets: vec![
+                Coin::new(0, ETH_USDC),
+                Coin::new(1_000, ETH_DAI),
+                Coin::new(99_000, COSMOS_USDC)
+            ]
+        }
+    );
+
+    // provider exit pool
+    t.app
+        .execute_contract(
+            t.accounts["provider"].clone(),
+            t.contract.clone(),
+            &ExecMsg::ExitPool {
+                tokens_out: vec![Coin::new(1_000, ETH_DAI), Coin::new(99_000, COSMOS_USDC)],
+            },
+            &[],
+        )
+        .unwrap();
+
+    // check balances
+    assert_eq!(
+        t.app.wrap().query_all_balances(&t.contract).unwrap(),
+        vec![]
+    );
+
+    // check pool
+    let PoolResponse { pool } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
+        .unwrap();
+
+    assert_eq!(
+        pool,
+        TransmuterPool {
+            pool_assets: vec![
+                Coin::new(0, ETH_USDC),
+                Coin::new(0, ETH_DAI),
+                Coin::new(0, COSMOS_USDC)
+            ]
+        }
+    );
+
+    // check contract balances
+    assert_eq!(
+        t.app.wrap().query_all_balances(&t.contract).unwrap(),
+        vec![]
+    );
+
+    // check provider balances
+    assert_eq!(
+        t.app
+            .wrap()
+            .query_all_balances(&t.accounts["provider"])
+            .unwrap(),
+        vec![Coin::new(1_000, ETH_DAI), Coin::new(99_000, COSMOS_USDC)]
     );
 }
