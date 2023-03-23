@@ -134,8 +134,12 @@ impl SudoMsg {
 }
 
 #[cw_serde]
+/// Result of a swap operation.
+/// This will dictate how cosmwasm pool module route bank send msgs.
 struct SwapResult {
+    /// The amount of tokens that swap-er will actaully send to the pool.
     pub token_in: Coin,
+    /// The amount of tokens that swap-er will actaully received from the pool.
     pub token_out: Coin,
 }
 
