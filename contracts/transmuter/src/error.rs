@@ -58,4 +58,7 @@ pub enum ContractError {
 
     #[error("Spot price query failed: reason {reason}")]
     SpotPriceQueryFailed { reason: String },
+
+    #[error("Exceeding token in required: max acceptable token in: {limit}, required: {required}")]
+    ExceedingTokenIn { limit: Uint128, required: Uint128 },
 }

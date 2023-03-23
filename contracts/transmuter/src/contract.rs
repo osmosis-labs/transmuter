@@ -306,6 +306,160 @@ impl Transmuter<'_> {
             spot_price: Decimal::one(),
         })
     }
+
+    // // query msg:
+    // // {
+    // //   "calc_out_given_in": {
+    // //     "token_in": { "denom": <denom:string>, "amount": <amount:string> },
+    // //     "token_out_denom": <token_out_denom:string>,
+    // //     "swap_fee": <swap_fee:string>,
+    // //   }
+    // // }
+    // // response data:
+    // // { "token_out": { "denom": <denom:string>, "amount": <amount:string> } }
+    // CalcOutAmtGivenIn(
+    //     ctx sdk.Context,
+    //     poolI PoolI,
+    //     tokenIn sdk.Coin,
+    //     tokenOutDenom string,
+    //     swapFee sdk.Dec,
+    //   ) (tokenOut sdk.Coin, err error)
+    #[msg(query)]
+    pub(crate) fn calc_out_amt_given_in(
+        &self,
+        ctx: (Deps, Env),
+        token_in: Coin,
+        token_out_denom: String,
+        swap_fee: Decimal,
+    ) -> Result<CalcOutAmtGivenInResponse, ContractError> {
+        let (_pool, token_out) =
+            self._calc_out_amt_given_in(ctx, token_in, token_out_denom, swap_fee)?;
+
+        Ok(CalcOutAmtGivenInResponse { token_out })
+    }
+
+    pub(crate) fn _calc_out_amt_given_in(
+        &self,
+        ctx: (Deps, Env),
+        token_in: Coin,
+        token_out_denom: String,
+        swap_fee: Decimal,
+    ) -> Result<(TransmuterPool, Coin), ContractError> {
+        let (deps, env) = ctx;
+
+        // ensure swap fee is the same as one from get_swap_fee which essentially is always 0
+        // in case where the swap fee mismatch, it can cause the pool to be imbalanced
+        let contract_swap_fee = self.get_swap_fee((deps, env))?.swap_fee;
+        ensure_eq!(
+            swap_fee,
+            contract_swap_fee,
+            ContractError::InvalidSwapFee {
+                expected: contract_swap_fee,
+                actual: swap_fee
+            }
+        );
+
+        let mut pool = self.pool.load(deps.storage)?;
+        let token_out = pool.transmute(&token_in, &token_out_denom)?;
+
+        Ok((pool, token_out))
+    }
+
+    // // query msg:
+    // // {
+    // //   "calc_in_given_out": {
+    // //     "token_in_denom": <token_in_denom:string>,
+    // //     "token_out": { "denom": <denom:string>, "amount": <amount:string> },
+    // //     "swap_fee": <swap_fee:string>,
+    // //   }
+    // // }
+    // // response data:
+    // // { "token_in": { "denom": <denom:string>, "amount": <amount:string> } }
+    // CalcInAmtGivenOut(
+    //     ctx sdk.Context,
+    //     poolI PoolI,
+    //     tokenOut sdk.Coin,
+    //     tokenInDenom string,
+    //     swapFee sdk.Dec,
+    //   ) (tokenIn sdk.Coin, err error)
+    #[msg(query)]
+    pub(crate) fn calc_in_amt_given_out(
+        &self,
+        ctx: (Deps, Env),
+        token_out: Coin,
+        token_in_denom: String,
+        swap_fee: Decimal,
+    ) -> Result<CalcInAmtGivenOutResponse, ContractError> {
+        let (deps, env) = ctx;
+
+        // ensure swap fee is the same as one from get_swap_fee which essentially is always 0
+        // in case where the swap fee mismatch, it can cause the pool to be imbalanced
+        let contract_swap_fee = self.get_swap_fee((deps, env))?.swap_fee;
+        ensure_eq!(
+            swap_fee,
+            contract_swap_fee,
+            ContractError::InvalidSwapFee {
+                expected: contract_swap_fee,
+                actual: swap_fee
+            }
+        );
+
+        let token_in = Coin::new(token_out.amount.into(), token_in_denom);
+
+        let mut pool = self.pool.load(deps.storage)?;
+        let actual_token_out = pool.transmute(&token_in, &token_out.denom)?;
+
+        // ensure that actual_token_out is equal to token_out
+        ensure_eq!(
+            token_out,
+            actual_token_out,
+            ContractError::InvalidTokenOutAmount {
+                expected: token_out.amount,
+                actual: actual_token_out.amount
+            }
+        );
+
+        Ok(CalcInAmtGivenOutResponse { token_in })
+    }
+
+    pub(crate) fn _calc_in_amt_given_out(
+        &self,
+        ctx: (Deps, Env),
+        token_out: Coin,
+        token_in_denom: String,
+        swap_fee: Decimal,
+    ) -> Result<(TransmuterPool, Coin), ContractError> {
+        let (deps, env) = ctx;
+
+        // ensure swap fee is the same as one from get_swap_fee which essentially is always 0
+        // in case where the swap fee mismatch, it can cause the pool to be imbalanced
+        let contract_swap_fee = self.get_swap_fee((deps, env))?.swap_fee;
+        ensure_eq!(
+            swap_fee,
+            contract_swap_fee,
+            ContractError::InvalidSwapFee {
+                expected: contract_swap_fee,
+                actual: swap_fee
+            }
+        );
+
+        let token_in = Coin::new(token_out.amount.into(), token_in_denom);
+
+        let mut pool = self.pool.load(deps.storage)?;
+        let actual_token_out = pool.transmute(&token_in, &token_out.denom)?;
+
+        // ensure that actual_token_out is equal to token_out
+        ensure_eq!(
+            token_out,
+            actual_token_out,
+            ContractError::InvalidTokenOutAmount {
+                expected: token_out.amount,
+                actual: actual_token_out.amount
+            }
+        );
+
+        Ok((pool, token_in))
+    }
 }
 
 #[cw_serde]
@@ -346,4 +500,14 @@ pub struct TotalPoolLiquidityResponse {
 #[cw_serde]
 pub struct SpotPriceResponse {
     pub spot_price: Decimal,
+}
+
+#[cw_serde]
+pub struct CalcOutAmtGivenInResponse {
+    pub token_out: Coin,
+}
+
+#[cw_serde]
+pub struct CalcInAmtGivenOutResponse {
+    pub token_in: Coin,
 }
