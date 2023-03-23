@@ -18,6 +18,7 @@ const EXIT_FEE: Decimal = Decimal::zero();
 pub struct Transmuter<'a> {
     pub(crate) pool: Item<'a, TransmuterPool>,
     pub(crate) shares: Map<'a, &'a Addr, Uint128>,
+    pub(crate) total_shares: Item<'a, Uint128>,
 }
 
 #[contract]
@@ -27,6 +28,7 @@ impl Transmuter<'_> {
         Self {
             pool: Item::new("pool"),
             shares: Map::new("shares"),
+            total_shares: Item::new("total_shares"),
         }
     }
 
@@ -46,6 +48,9 @@ impl Transmuter<'_> {
         self.pool
             .save(deps.storage, &TransmuterPool::new(&pool_asset_denoms))?;
 
+        // init total_shares
+        self.total_shares.save(deps.storage, &Uint128::zero())?;
+
         Ok(Response::new()
             .add_attribute("method", "instantiate")
             .add_attribute("contract_name", CONTRACT_NAME)
@@ -64,18 +69,27 @@ impl Transmuter<'_> {
             ContractError::AtLeastSingleTokenExpected {}
         );
 
+        let new_shares = info
+            .funds
+            .iter()
+            .fold(Uint128::zero(), |acc, c| acc + c.amount);
+
         // update shares
         self.shares.update(
             deps.storage,
             &info.sender,
             |shares| -> Result<Uint128, StdError> {
-                Ok(shares.unwrap_or_default()
-                    + info
-                        .funds
-                        .iter()
-                        .fold(Uint128::zero(), |acc, c| acc + c.amount))
+                shares
+                    .unwrap_or_default()
+                    .checked_add(new_shares)
+                    .map_err(StdError::overflow)
             },
         )?;
+
+        // update total shares
+        self.total_shares.update(deps.storage, |shares| {
+            shares.checked_add(new_shares).map_err(StdError::overflow)
+        })?;
 
         // update pool
         self.pool
@@ -85,6 +99,7 @@ impl Transmuter<'_> {
             })?;
 
         Ok(Response::new().add_attribute("method", "join_pool"))
+        // TODO: Band::Send to module account
     }
 
     /// Transmute recived token_in from `MsgExecuteContract`'s funds to `token_out_denom`.
@@ -152,9 +167,19 @@ impl Transmuter<'_> {
             deps.storage,
             &info.sender,
             |sender_shares| -> Result<Uint128, StdError> {
-                Ok(sender_shares.unwrap_or_default() - required_shares)
+                sender_shares
+                    .unwrap_or_default()
+                    .checked_sub(required_shares)
+                    .map_err(StdError::overflow)
             },
         )?;
+
+        // update total shares
+        self.total_shares.update(deps.storage, |shares| {
+            shares
+                .checked_sub(required_shares)
+                .map_err(StdError::overflow)
+        })?;
 
         // exit pool
         self.pool
@@ -163,6 +188,7 @@ impl Transmuter<'_> {
                 Ok(pool)
             })?;
 
+        // TODO: authz::MsgExec this with grant for module account
         let bank_send_msg = BankMsg::Send {
             to_address: info.sender.to_string(),
             amount: tokens_out,
@@ -231,9 +257,11 @@ impl Transmuter<'_> {
     #[msg(query)]
     pub(crate) fn get_total_shares(
         &self,
-        _ctx: (Deps, Env),
+        ctx: (Deps, Env),
     ) -> Result<TotalSharesResponse, ContractError> {
-        todo!("must track every join/exit pool to accum shares");
+        let (deps, _env) = ctx;
+        let total_shares = self.total_shares.load(deps.storage)?;
+        Ok(TotalSharesResponse { total_shares })
     }
 
     // // query msg:

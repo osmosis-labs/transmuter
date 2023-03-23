@@ -1,5 +1,5 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{ensure, ensure_eq, to_binary, Coin, Decimal, DepsMut, Env, Response, Uint128};
+use cosmwasm_std::{ensure, to_binary, Coin, Decimal, DepsMut, Env, Response, Uint128};
 
 use crate::{contract::Transmuter, ContractError};
 
