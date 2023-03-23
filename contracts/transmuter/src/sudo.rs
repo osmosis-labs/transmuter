@@ -72,9 +72,8 @@ impl SudoMsg {
                 // save pool
                 transmuter.pool.save(deps.storage, &pool)?;
 
-                let swap_result = SwapResult {
-                    token_in,
-                    token_out,
+                let swap_result = SwapExactAmountInResponseData {
+                    token_out_amount: token_out.amount,
                 };
 
                 Ok(Response::new()
@@ -120,9 +119,8 @@ impl SudoMsg {
                 // save pool
                 transmuter.pool.save(deps.storage, &pool)?;
 
-                let swap_result = SwapResult {
-                    token_in,
-                    token_out: actual_token_out,
+                let swap_result = SwapExactAmountOutResponseData {
+                    token_in_amount: token_in.amount,
                 };
 
                 Ok(Response::new()
@@ -134,14 +132,13 @@ impl SudoMsg {
 }
 
 #[cw_serde]
-/// Result of a swap operation.
-/// This will dictate how cosmwasm pool module route bank send msgs.
-struct SwapResult {
-    /// The amount of tokens that swap-er will actaully send to the pool.
-    pub token_in: Coin,
-    /// The amount of tokens that swap-er will actaully received from the pool.
-    pub token_out: Coin,
+/// Fixing token in amount makes token amount out varies
+pub struct SwapExactAmountInResponseData {
+    pub token_out_amount: Uint128,
 }
 
-#[cfg(test)]
-mod tests {}
+#[cw_serde]
+/// Fixing token out amount makes token amount in varies
+pub struct SwapExactAmountOutResponseData {
+    pub token_in_amount: Uint128,
+}
