@@ -55,4 +55,7 @@ pub enum ContractError {
     /// Error when == requirement is not met
     #[error("Invalid token out amount: expected: {expected}, actual: {actual}")]
     InvalidTokenOutAmount { expected: Uint128, actual: Uint128 },
+
+    #[error("Spot price query failed: reason {reason}")]
+    SpotPriceQueryFailed { reason: String },
 }

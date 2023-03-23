@@ -13,6 +13,7 @@ const CONTRACT_NAME: &str = "crates.io:transmuter";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const SWAP_FEE: Decimal = Decimal::zero();
+const EXIT_FEE: Decimal = Decimal::zero();
 
 pub struct Transmuter<'a> {
     pub(crate) pool: Item<'a, TransmuterPool>,
@@ -192,9 +193,118 @@ impl Transmuter<'_> {
         })
     }
 
+    // // query msg:
+    // // { "get_swap_fee": {} }
+    // // response:
+    // // { "swap_fee": <swap_fee:string> }
+    // GetSwapFee(ctx sdk.Context) sdk.Dec
     #[msg(query)]
     pub(crate) fn get_swap_fee(&self, _ctx: (Deps, Env)) -> Result<SwapFeeResponse, ContractError> {
         Ok(SwapFeeResponse { swap_fee: SWAP_FEE })
+    }
+
+    // // query msg:
+    // // { "get_exit_fee": {} }
+    // // response:
+    // // { "exit_fee": <exit_fee:string> }
+    // GetExitFee(ctx sdk.Context) sdk.Dec
+    #[msg(query)]
+    pub(crate) fn get_exit_fee(&self, _ctx: (Deps, Env)) -> Result<ExitFeeResponse, ContractError> {
+        Ok(ExitFeeResponse { exit_fee: EXIT_FEE })
+    }
+
+    // // query msg:
+    // // { "is_active": {} }
+    // // response:
+    // // { "is_active": <is_active:boolean> }
+    // IsActive(ctx sdk.Context) bool
+    #[msg(query)]
+    pub(crate) fn is_active(&self, _ctx: (Deps, Env)) -> Result<IsActiveResponse, ContractError> {
+        Ok(IsActiveResponse { is_active: true })
+    }
+
+    // // query msg:
+    // // { "get_total_shares": {} }
+    // // response:
+    // // { "total_shares": <total_shares:number> }
+    // GetTotalShares() sdk.Int
+    #[msg(query)]
+    pub(crate) fn get_total_shares(
+        &self,
+        _ctx: (Deps, Env),
+    ) -> Result<TotalSharesResponse, ContractError> {
+        todo!("must track every join/exit pool to accum shares");
+    }
+
+    // // query msg:
+    // // { "get_total_pool_liquidity": {} }
+    // // response:
+    // // { "total_pool_liquidity": [{ "denom": <denom:string>, "amount": <amount:string> }>,..] }
+    // GetTotalPoolLiquidity(ctx sdk.Context) sdk.Coins
+    #[msg(query)]
+    pub(crate) fn get_total_pool_liquidity(
+        &self,
+        ctx: (Deps, Env),
+    ) -> Result<TotalPoolLiquidityResponse, ContractError> {
+        let (deps, _env) = ctx;
+        let pool = self.pool.load(deps.storage)?;
+
+        Ok(TotalPoolLiquidityResponse {
+            total_pool_liquidity: pool.pool_assets,
+        })
+    }
+
+    // // query msg:
+    // // { "spot_price": { quote_asset_denom: <quote_asset_denom>, base_asset_denom: <base_asset_denom> } }
+    // // response:
+    // // { "spot_price": <spot_price:string> }
+    // SpotPrice(ctx sdk.Context, quoteAssetDenom string, baseAssetDenom string) (sdk.Dec, error)
+    #[msg(query)]
+    pub(crate) fn spot_price(
+        &self,
+        ctx: (Deps, Env),
+        quote_asset_denom: String,
+        base_asset_denom: String,
+    ) -> Result<SpotPriceResponse, ContractError> {
+        let (deps, _env) = ctx;
+
+        // ensure that it's not the same denom
+        ensure!(
+            quote_asset_denom != base_asset_denom,
+            ContractError::SpotPriceQueryFailed {
+                reason: "quote_asset_denom and base_asset_denom cannot be the same".to_string()
+            }
+        );
+
+        // ensure that qoute asset denom are in pool asset
+        let pool = self.pool.load(deps.storage)?;
+        ensure!(
+            pool.pool_assets
+                .iter()
+                .any(|c| c.denom == quote_asset_denom),
+            ContractError::SpotPriceQueryFailed {
+                reason: format!(
+                    "quote_asset_denom is not in pool assets: must be one of {:?} but got {}",
+                    pool.pool_assets, quote_asset_denom
+                )
+            }
+        );
+
+        // ensure that base asset denom are in pool asset
+        ensure!(
+            pool.pool_assets.iter().any(|c| c.denom == base_asset_denom),
+            ContractError::SpotPriceQueryFailed {
+                reason: format!(
+                    "base_asset_denom is not in pool assets: must be one of {:?} but got {}",
+                    pool.pool_assets, base_asset_denom
+                )
+            }
+        );
+
+        // spot price is always one for both side
+        Ok(SpotPriceResponse {
+            spot_price: Decimal::one(),
+        })
     }
 }
 
@@ -211,4 +321,29 @@ pub struct PoolResponse {
 #[cw_serde]
 pub struct SwapFeeResponse {
     pub swap_fee: Decimal,
+}
+
+#[cw_serde]
+pub struct ExitFeeResponse {
+    pub exit_fee: Decimal,
+}
+
+#[cw_serde]
+pub struct IsActiveResponse {
+    pub is_active: bool,
+}
+
+#[cw_serde]
+pub struct TotalSharesResponse {
+    pub total_shares: Uint128,
+}
+
+#[cw_serde]
+pub struct TotalPoolLiquidityResponse {
+    pub total_pool_liquidity: Vec<Coin>,
+}
+
+#[cw_serde]
+pub struct SpotPriceResponse {
+    pub spot_price: Decimal,
 }
