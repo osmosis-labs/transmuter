@@ -1,7 +1,7 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_eq, Addr, BankMsg, Coin, Deps, DepsMut, Env, MessageInfo, Response, StdError,
-    Uint128,
+    ensure, ensure_eq, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Response,
+    StdError, Uint128,
 };
 use cw_storage_plus::{Item, Map};
 use sylvia::contract;
@@ -11,6 +11,8 @@ use crate::{error::ContractError, transmuter_pool::TransmuterPool};
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:transmuter";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+const SWAP_FEE: Decimal = Decimal::zero();
 
 pub struct Transmuter<'a> {
     pub(crate) pool: Item<'a, TransmuterPool>,
@@ -189,6 +191,11 @@ impl Transmuter<'_> {
                 .unwrap_or_default(),
         })
     }
+
+    #[msg(query)]
+    pub(crate) fn get_swap_fee(&self, _ctx: (Deps, Env)) -> Result<SwapFeeResponse, ContractError> {
+        Ok(SwapFeeResponse { swap_fee: SWAP_FEE })
+    }
 }
 
 #[cw_serde]
@@ -199,4 +206,9 @@ pub struct SharesResponse {
 #[cw_serde]
 pub struct PoolResponse {
     pub pool: TransmuterPool,
+}
+
+#[cw_serde]
+pub struct SwapFeeResponse {
+    pub swap_fee: Decimal,
 }

@@ -1,4 +1,4 @@
-use cosmwasm_std::{Coin, StdError, Uint128};
+use cosmwasm_std::{Coin, Decimal, StdError, Uint128};
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq)]
@@ -41,4 +41,18 @@ pub enum ContractError {
         required: Uint128,
         available: Uint128,
     },
+
+    #[error("Invalid swap fee: expected: {expected}, actual: {actual}")]
+    InvalidSwapFee { expected: Decimal, actual: Decimal },
+
+    /// Error when >= requirement is not met
+    #[error("Insufficient token out: required: {required}, available: {available}")]
+    InsufficientTokenOut {
+        required: Uint128,
+        available: Uint128,
+    },
+
+    /// Error when == requirement is not met
+    #[error("Invalid token out amount: expected: {expected}, actual: {actual}")]
+    InvalidTokenOutAmount { expected: Uint128, actual: Uint128 },
 }

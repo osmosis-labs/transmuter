@@ -1,7 +1,7 @@
 pub mod contract;
 mod error;
+mod sudo;
 mod transmuter_pool;
-
 pub use crate::error::ContractError;
 
 #[cfg(test)]
@@ -13,6 +13,7 @@ mod entry_points {
 
     use crate::contract::{ContractExecMsg, ContractQueryMsg, InstantiateMsg, Transmuter};
     use crate::error::ContractError;
+    use crate::sudo::SudoMsg;
 
     const CONTRACT: Transmuter = Transmuter::new();
 
@@ -38,6 +39,11 @@ mod entry_points {
 
     #[entry_point]
     pub fn query(deps: Deps, env: Env, msg: ContractQueryMsg) -> Result<Binary, ContractError> {
+        msg.dispatch(&CONTRACT, (deps, env))
+    }
+
+    #[entry_point]
+    pub fn sudo(deps: DepsMut, env: Env, msg: SudoMsg) -> Result<Response, ContractError> {
         msg.dispatch(&CONTRACT, (deps, env))
     }
 }
