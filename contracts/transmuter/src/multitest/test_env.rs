@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use crate::contract::{ContractExecMsg, ContractQueryMsg, InstantiateMsg};
+use crate::{
+    contract::{ContractExecMsg, ContractQueryMsg, InstantiateMsg},
+    sudo::SudoMsg,
+};
 use anyhow::{bail, Result as AnyResult};
 use cosmwasm_std::{from_slice, Addr, Coin, Empty};
 
@@ -46,11 +49,13 @@ impl Contract<Empty> for Transmuter<'_> {
 
     fn sudo(
         &self,
-        _deps: cosmwasm_std::DepsMut<Empty>,
-        _env: cosmwasm_std::Env,
-        _msg: Vec<u8>,
+        deps: cosmwasm_std::DepsMut<Empty>,
+        env: cosmwasm_std::Env,
+        msg: Vec<u8>,
     ) -> AnyResult<cosmwasm_std::Response<Empty>> {
-        bail!("sudo not implemented for contract")
+        from_slice::<SudoMsg>(&msg)?
+            .dispatch(self, (deps, env))
+            .map_err(Into::into)
     }
 
     fn reply(

@@ -79,37 +79,6 @@ impl Transmuter<'_> {
         Ok(Response::new().add_attribute("method", "join_pool"))
     }
 
-    /// Transmute recived token_in from `MsgExecuteContract`'s funds to `token_out_denom`.
-    /// Send `token_out` back to the msg sender with 1:1 ratio.
-    #[msg(exec)]
-    fn transmute(
-        &self,
-        ctx: (DepsMut, Env, MessageInfo),
-        token_out_denom: String,
-    ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
-
-        // ensure funds length == 1
-        ensure_eq!(info.funds.len(), 1, ContractError::SingleTokenExpected {});
-
-        // transmute
-        let mut pool = self.pool.load(deps.storage)?;
-        let token_in = info.funds[0].clone();
-        let token_out = pool.transmute(&token_in, &token_out_denom)?;
-
-        // save pool
-        self.pool.save(deps.storage, &pool)?;
-
-        let bank_send_msg = BankMsg::Send {
-            to_address: info.sender.to_string(),
-            amount: vec![token_out],
-        };
-
-        Ok(Response::new()
-            .add_attribute("method", "transmute")
-            .add_message(bank_send_msg))
-    }
-
     /// Exit pool with `tokens_out` amount of tokens.
     /// As long as the sender has enough shares, the contract will send `tokens_out` amount of tokens to the sender.
     /// The amount of shares will be deducted from the sender's shares.

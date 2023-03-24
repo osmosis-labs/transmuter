@@ -1,5 +1,5 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{ensure, to_binary, Coin, Decimal, DepsMut, Env, Response, Uint128};
+use cosmwasm_std::{ensure, to_binary, BankMsg, Coin, Decimal, DepsMut, Env, Response, Uint128};
 
 use crate::{contract::Transmuter, ContractError};
 
@@ -37,7 +37,7 @@ impl SudoMsg {
     ) -> Result<Response, ContractError> {
         match self {
             SudoMsg::SwapExactAmountIn {
-                sender: _,
+                sender,
                 token_in,
                 token_out_denom,
                 token_out_min_amount,
@@ -63,16 +63,22 @@ impl SudoMsg {
                 // save pool
                 transmuter.pool.save(deps.storage, &pool)?;
 
+                let send_token_out_to_sender_msg = BankMsg::Send {
+                    to_address: sender,
+                    amount: vec![token_out.clone()],
+                };
+
                 let swap_result = SwapExactAmountInResponseData {
                     token_out_amount: token_out.amount,
                 };
 
                 Ok(Response::new()
                     .add_attribute("method", "swap_exact_amount_in")
+                    .add_message(send_token_out_to_sender_msg)
                     .set_data(to_binary(&swap_result)?))
             }
             SudoMsg::SwapExactAmountOut {
-                sender: _,
+                sender,
                 token_in_denom,
                 token_in_max_amount,
                 token_out,
@@ -82,7 +88,7 @@ impl SudoMsg {
 
                 let (pool, token_in) = transmuter._calc_in_amt_given_out(
                     (deps.as_ref(), env),
-                    token_out,
+                    token_out.clone(),
                     token_in_denom,
                     swap_fee,
                 )?;
@@ -98,12 +104,18 @@ impl SudoMsg {
                 // save pool
                 transmuter.pool.save(deps.storage, &pool)?;
 
+                let send_token_out_to_sender_msg = BankMsg::Send {
+                    to_address: sender,
+                    amount: vec![token_out],
+                };
+
                 let swap_result = SwapExactAmountOutResponseData {
                     token_in_amount: token_in.amount,
                 };
 
                 Ok(Response::new()
                     .add_attribute("method", "swap_exact_amount_out")
+                    .add_message(send_token_out_to_sender_msg)
                     .set_data(to_binary(&swap_result)?))
             }
         }

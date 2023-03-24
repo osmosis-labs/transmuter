@@ -5,10 +5,11 @@ use crate::{
     contract::{
         ExecMsg, InstantiateMsg, PoolResponse, QueryMsg, SharesResponse, TotalSharesResponse,
     },
+    sudo::SudoMsg,
     transmuter_pool::TransmuterPool,
     ContractError,
 };
-use cosmwasm_std::{Addr, Coin, Uint128};
+use cosmwasm_std::{Addr, BankMsg, Coin, Decimal, Uint128};
 use cw_multi_test::Executor;
 
 const ETH_USDC: &str = "ibc/AXLETHUSDC";
@@ -235,7 +236,7 @@ fn test_join_pool() {
 }
 
 #[test]
-fn test_transmute() {
+fn test_swap() {
     let mut t = TestEnvBuilder::new()
         .with_account(
             "alice",
@@ -267,13 +268,15 @@ fn test_transmute() {
     // transmute should fail since there has no token_out_denom remaining in the pool
     let err = t
         .app
-        .execute_contract(
-            t.accounts["alice"].clone(),
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["alice"].clone().into(),
+                token_in: Coin::new(1_500, ETH_USDC),
                 token_out_denom: COSMOS_USDC.to_string(),
+                token_out_min_amount: Uint128::from(1500u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(1_500, ETH_USDC)],
         )
         .unwrap_err();
 
@@ -298,13 +301,15 @@ fn test_transmute() {
     // transmute with incorrect funds should still fail
     let err = t
         .app
-        .execute_contract(
-            t.accounts["alice"].clone(),
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["alice"].clone().into(),
+                token_in: Coin::new(1_000, COSMOS_USDC),
                 token_out_denom: "urandom".to_string(),
+                token_out_min_amount: Uint128::from(1_000u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(1_000, COSMOS_USDC)],
         )
         .unwrap_err();
 
@@ -318,13 +323,15 @@ fn test_transmute() {
 
     let err = t
         .app
-        .execute_contract(
-            t.accounts["alice"].clone(),
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
-                token_out_denom: COSMOS_USDC.to_string(),
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["alice"].clone().into(),
+                token_in: Coin::new(1_000, COSMOS_USDC),
+                token_out_denom: "urandom2".to_string(),
+                token_out_min_amount: Uint128::from(1_000u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(1_000, "urandom2")],
         )
         .unwrap_err();
 
@@ -336,33 +343,32 @@ fn test_transmute() {
         }
     );
 
-    // transmute with funds length != 1 should fail
-    let err = t
-        .app
-        .execute_contract(
-            t.accounts["alice"].clone(),
-            t.contract.clone(),
-            &ExecMsg::Transmute {
-                token_out_denom: COSMOS_USDC.to_string(),
-            },
-            &[Coin::new(1_000, ETH_USDC), Coin::new(1_000, COSMOS_USDC)],
-        )
-        .unwrap_err();
+    // bank send before sudo
 
-    assert_eq!(
-        err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::SingleTokenExpected {}
-    );
+    let token_in = Coin::new(1_500, ETH_USDC);
 
-    // transmute with correct token_in should succeed this time
     t.app
-        .execute_contract(
+        .execute(
             t.accounts["alice"].clone(),
+            BankMsg::Send {
+                to_address: t.contract.to_string(),
+                amount: vec![token_in.clone()],
+            }
+            .into(),
+        )
+        .unwrap();
+
+    // swap with correct token_in should succeed this time
+    t.app
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["alice"].to_string(),
+                token_in,
                 token_out_denom: COSMOS_USDC.to_string(),
+                token_out_min_amount: Uint128::from(1_500u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(1_500, ETH_USDC)],
         )
         .unwrap();
 
@@ -406,15 +412,32 @@ fn test_transmute() {
         ]
     );
 
-    // transmute again with another user
+    // // swap again with another user
+
+    let token_in = Coin::new(29_902, ETH_USDC);
+
     t.app
-        .execute_contract(
+        .execute(
             t.accounts["bob"].clone(),
+            BankMsg::Send {
+                to_address: t.contract.to_string(),
+                amount: vec![token_in.clone()],
+            }
+            .into(),
+        )
+        .unwrap();
+
+    // swap with correct token_in should succeed this time
+    t.app
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["bob"].to_string(),
+                token_in,
                 token_out_denom: COSMOS_USDC.to_string(),
+                token_out_min_amount: Uint128::from(29_902u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(29_902, ETH_USDC)],
         )
         .unwrap();
 
@@ -478,15 +501,30 @@ fn test_exit_pool() {
         )
         .unwrap();
 
-    // transmute to build up token_in
+    // swap to build up token_in
+    let token_in = Coin::new(1_500, ETH_USDC);
+
     t.app
-        .execute_contract(
+        .execute(
             t.accounts["user"].clone(),
+            BankMsg::Send {
+                to_address: t.contract.to_string(),
+                amount: vec![token_in.clone()],
+            }
+            .into(),
+        )
+        .unwrap();
+
+    t.app
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["user"].to_string(),
+                token_in,
                 token_out_denom: COSMOS_USDC.to_string(),
+                token_out_min_amount: Uint128::from(1_500u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(1_500, ETH_USDC)],
         )
         .unwrap();
 
@@ -672,7 +710,7 @@ fn test_exit_pool() {
 }
 
 #[test]
-fn test_3_pool_transmuter() {
+fn test_3_pool_swap() {
     let mut t = TestEnvBuilder::new()
         .with_account("alice", vec![Coin::new(1_500, ETH_USDC)])
         .with_account("bob", vec![Coin::new(1_500, ETH_DAI)])
@@ -743,16 +781,18 @@ fn test_3_pool_transmuter() {
         }
     );
 
-    // transmute ETH_USDC to ETH_DAI should fail
+    // swap ETH_USDC to ETH_DAI should fail
     let err = t
         .app
-        .execute_contract(
-            t.accounts["alice"].clone(),
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["alice"].to_string(),
+                token_in: Coin::new(1_000, ETH_USDC),
                 token_out_denom: ETH_DAI.to_string(),
+                token_out_min_amount: Uint128::from(1_000u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(1_000, ETH_USDC)],
         )
         .unwrap_err();
 
@@ -764,15 +804,29 @@ fn test_3_pool_transmuter() {
         }
     );
 
-    // transmute ETH_USDC to COSMOS_USDC
+    // swap ETH_USDC to COSMOS_USDC
+
     t.app
-        .execute_contract(
+        .execute(
             t.accounts["alice"].clone(),
+            BankMsg::Send {
+                to_address: t.contract.to_string(),
+                amount: vec![Coin::new(1_000, ETH_USDC)],
+            }
+            .into(),
+        )
+        .unwrap();
+
+    t.app
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["alice"].to_string(),
+                token_in: Coin::new(1_000, ETH_USDC),
                 token_out_denom: COSMOS_USDC.to_string(),
+                token_out_min_amount: Uint128::from(1_000u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(1_000, ETH_USDC)],
         )
         .unwrap();
 
@@ -809,15 +863,30 @@ fn test_3_pool_transmuter() {
         }
     );
 
-    // transmute ETH_DAI to ETH_USDC
+    // swap ETH_DAI to ETH_USDC
+
+    // bank send
     t.app
-        .execute_contract(
+        .execute(
             t.accounts["bob"].clone(),
+            BankMsg::Send {
+                to_address: t.contract.to_string(),
+                amount: vec![Coin::new(1_000, ETH_DAI)],
+            }
+            .into(),
+        )
+        .unwrap();
+
+    t.app
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["bob"].to_string(),
+                token_in: Coin::new(1_000, ETH_DAI),
                 token_out_denom: ETH_USDC.to_string(),
+                token_out_min_amount: Uint128::from(1_000u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(1_000, ETH_DAI)],
         )
         .unwrap();
 
