@@ -1,5 +1,6 @@
 pub mod contract;
 mod error;
+mod shares;
 mod sudo;
 mod transmuter_pool;
 pub use crate::error::ContractError;
