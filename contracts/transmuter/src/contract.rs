@@ -99,7 +99,6 @@ impl Transmuter<'_> {
             })?;
 
         Ok(Response::new().add_attribute("method", "join_pool"))
-        // TODO: Band::Send to module account
     }
 
     /// Transmute recived token_in from `MsgExecuteContract`'s funds to `token_out_denom`.
