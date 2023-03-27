@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     contract::{ContractExecMsg, ContractQueryMsg, InstantiateMsg},
+    entry_points,
     sudo::SudoMsg,
 };
 use anyhow::{bail, Result as AnyResult};
@@ -19,9 +20,8 @@ impl Contract<Empty> for Transmuter<'_> {
         info: cosmwasm_std::MessageInfo,
         msg: Vec<u8>,
     ) -> AnyResult<cosmwasm_std::Response<Empty>> {
-        from_slice::<ContractExecMsg>(&msg)?
-            .dispatch(self, (deps, env, info))
-            .map_err(Into::into)
+        let msg = from_slice::<ContractExecMsg>(&msg)?;
+        entry_points::execute(deps, env, info, msg).map_err(Into::into)
     }
 
     fn instantiate(
@@ -31,9 +31,8 @@ impl Contract<Empty> for Transmuter<'_> {
         info: cosmwasm_std::MessageInfo,
         msg: Vec<u8>,
     ) -> AnyResult<cosmwasm_std::Response<Empty>> {
-        from_slice::<InstantiateMsg>(&msg)?
-            .dispatch(self, (deps, env, info))
-            .map_err(Into::into)
+        let msg = from_slice::<InstantiateMsg>(&msg)?;
+        entry_points::instantiate(deps, env, info, msg).map_err(Into::into)
     }
 
     fn query(
@@ -42,9 +41,8 @@ impl Contract<Empty> for Transmuter<'_> {
         env: cosmwasm_std::Env,
         msg: Vec<u8>,
     ) -> AnyResult<cosmwasm_std::Binary> {
-        from_slice::<ContractQueryMsg>(&msg)?
-            .dispatch(self, (deps, env))
-            .map_err(Into::into)
+        let msg = from_slice::<ContractQueryMsg>(&msg)?;
+        entry_points::query(deps, env, msg).map_err(Into::into)
     }
 
     fn sudo(
@@ -53,9 +51,8 @@ impl Contract<Empty> for Transmuter<'_> {
         env: cosmwasm_std::Env,
         msg: Vec<u8>,
     ) -> AnyResult<cosmwasm_std::Response<Empty>> {
-        from_slice::<SudoMsg>(&msg)?
-            .dispatch(self, (deps, env))
-            .map_err(Into::into)
+        let msg = from_slice::<SudoMsg>(&msg)?;
+        entry_points::sudo(deps, env, msg).map_err(Into::into)
     }
 
     fn reply(

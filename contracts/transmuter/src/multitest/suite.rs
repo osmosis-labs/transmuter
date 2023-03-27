@@ -3,7 +3,8 @@ use std::vec;
 use super::test_env::*;
 use crate::{
     contract::{
-        ExecMsg, InstantiateMsg, PoolResponse, QueryMsg, SharesResponse, TotalSharesResponse,
+        ExecMsg, InstantiateMsg, IsActiveResponse, PoolResponse, QueryMsg, SharesResponse,
+        TotalSharesResponse,
     },
     sudo::SudoMsg,
     transmuter_pool::TransmuterPool,
@@ -970,4 +971,112 @@ fn test_3_pool_swap() {
             .unwrap(),
         vec![Coin::new(1_000, ETH_DAI), Coin::new(99_000, COSMOS_USDC)]
     );
+}
+
+#[test]
+fn test_active_status() {
+    let mut t = TestEnvBuilder::new()
+        .with_account("user", vec![Coin::new(1_000, ETH_USDC)])
+        .with_account("provider", vec![Coin::new(100_000, COSMOS_USDC)])
+        .with_instantiate_msg(InstantiateMsg {
+            pool_asset_denoms: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
+        })
+        .build();
+
+    // check status
+    let IsActiveResponse { is_active } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::IsActive {})
+        .unwrap();
+
+    assert!(is_active); // active
+
+    // execute should work
+    t.app
+        .execute_contract(
+            t.accounts["provider"].clone(),
+            t.contract.clone(),
+            &ExecMsg::JoinPool {},
+            &[Coin::new(50_000, COSMOS_USDC)],
+        )
+        .unwrap();
+
+    // sudo should work
+    t.app
+        .wasm_sudo(
+            t.contract.clone(),
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["user"].to_string(),
+                token_in: Coin::new(500, ETH_USDC),
+                token_out_denom: COSMOS_USDC.to_string(),
+                token_out_min_amount: Uint128::from(500u128),
+                swap_fee: Decimal::zero(),
+            },
+        )
+        .unwrap();
+
+    // deactivate
+    t.app
+        .wasm_sudo(t.contract.clone(), &SudoMsg::SetActive { is_active: false })
+        .unwrap();
+
+    // check status
+    let IsActiveResponse { is_active } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::IsActive {})
+        .unwrap();
+
+    assert!(!is_active); // inactive
+
+    // execute shoud not work
+    let err = t
+        .app
+        .execute_contract(
+            t.accounts["provider"].clone(),
+            t.contract.clone(),
+            &ExecMsg::JoinPool {},
+            &[Coin::new(50_000, COSMOS_USDC)],
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        err.downcast_ref::<ContractError>().unwrap(),
+        &ContractError::InactivePool {}
+    );
+
+    // sudo should not work
+    let err = t
+        .app
+        .wasm_sudo(
+            t.contract.clone(),
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["user"].to_string(),
+                token_in: Coin::new(500, ETH_USDC),
+                token_out_denom: COSMOS_USDC.to_string(),
+                token_out_min_amount: Uint128::from(500u128),
+                swap_fee: Decimal::zero(),
+            },
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        err.downcast_ref::<ContractError>().unwrap(),
+        &ContractError::InactivePool {}
+    );
+
+    // reactivate
+    t.app
+        .wasm_sudo(t.contract.clone(), &SudoMsg::SetActive { is_active: true })
+        .unwrap();
+
+    // check status
+    let IsActiveResponse { is_active } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::IsActive {})
+        .unwrap();
+
+    assert!(is_active); // active
 }

@@ -61,4 +61,7 @@ pub enum ContractError {
 
     #[error("Exceeding token in required: max acceptable token in: {limit}, required: {required}")]
     ExceedingTokenIn { limit: Uint128, required: Uint128 },
+
+    #[error("The pool is currently inactive")]
+    InactivePool {},
 }

@@ -5,6 +5,9 @@ use crate::{contract::Transmuter, ContractError};
 
 #[cw_serde]
 pub enum SudoMsg {
+    SetActive {
+        is_active: bool,
+    },
     /// SwapExactAmountIn swaps an exact amount of tokens in for as many tokens out as possible.
     /// The amount of tokens out is determined by the current exchange rate and the swap fee.
     /// The user specifies a minimum amount of tokens out, and the transaction will revert if that amount of tokens
@@ -36,6 +39,12 @@ impl SudoMsg {
         ctx: (DepsMut, Env),
     ) -> Result<Response, ContractError> {
         match self {
+            SudoMsg::SetActive { is_active } => {
+                let (deps, _env) = ctx;
+                transmuter.active_status.save(deps.storage, &is_active)?;
+
+                Ok(Response::new().add_attribute("method", "set_active"))
+            }
             SudoMsg::SwapExactAmountIn {
                 sender,
                 token_in,

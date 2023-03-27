@@ -10,7 +10,7 @@ mod multitest;
 
 #[cfg(not(feature = "library"))]
 mod entry_points {
-    use cosmwasm_std::{entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response};
+    use cosmwasm_std::{ensure, entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response};
 
     use crate::contract::{ContractExecMsg, ContractQueryMsg, InstantiateMsg, Transmuter};
     use crate::error::ContractError;
@@ -35,6 +35,11 @@ mod entry_points {
         info: MessageInfo,
         msg: ContractExecMsg,
     ) -> Result<Response, ContractError> {
+        ensure!(
+            CONTRACT.is_active((deps.as_ref(), env.clone()))?.is_active,
+            ContractError::InactivePool {}
+        );
+
         msg.dispatch(&CONTRACT, (deps, env, info))
     }
 
@@ -45,7 +50,20 @@ mod entry_points {
 
     #[entry_point]
     pub fn sudo(deps: DepsMut, env: Env, msg: SudoMsg) -> Result<Response, ContractError> {
-        msg.dispatch(&CONTRACT, (deps, env))
+        match msg {
+            // allow setting active/inactive state without being active
+            SudoMsg::SetActive { .. } => msg.dispatch(&CONTRACT, (deps, env)),
+
+            // the rest of the sudo messages require the contract to be active
+            _ => {
+                ensure!(
+                    CONTRACT.is_active((deps.as_ref(), env.clone()))?.is_active,
+                    ContractError::InactivePool {}
+                );
+
+                msg.dispatch(&CONTRACT, (deps, env))
+            }
+        }
     }
 }
 

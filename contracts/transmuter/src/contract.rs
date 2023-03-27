@@ -14,6 +14,7 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const SWAP_FEE: Decimal = Decimal::zero();
 
 pub struct Transmuter<'a> {
+    pub(crate) active_status: Item<'a, bool>,
     pub(crate) pool: Item<'a, TransmuterPool>,
     pub(crate) shares: Shares<'a>,
 }
@@ -23,6 +24,7 @@ impl Transmuter<'_> {
     /// Create a Transmuter instance.
     pub const fn new() -> Self {
         Self {
+            active_status: Item::new("active_status"),
             pool: Item::new("pool"),
             shares: Shares::new(),
         }
@@ -43,6 +45,9 @@ impl Transmuter<'_> {
         // store pool
         self.pool
             .save(deps.storage, &TransmuterPool::new(&pool_asset_denoms))?;
+
+        // set active status to true
+        self.active_status.save(deps.storage, &true)?;
 
         Ok(Response::new()
             .add_attribute("method", "instantiate")
@@ -158,8 +163,11 @@ impl Transmuter<'_> {
     // // { "is_active": <is_active:boolean> }
     // IsActive(ctx sdk.Context) bool
     #[msg(query)]
-    pub(crate) fn is_active(&self, _ctx: (Deps, Env)) -> Result<IsActiveResponse, ContractError> {
-        Ok(IsActiveResponse { is_active: true })
+    pub(crate) fn is_active(&self, ctx: (Deps, Env)) -> Result<IsActiveResponse, ContractError> {
+        let (deps, _env) = ctx;
+        Ok(IsActiveResponse {
+            is_active: self.active_status.load(deps.storage)?,
+        })
     }
 
     // // query msg:
