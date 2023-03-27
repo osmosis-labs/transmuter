@@ -12,7 +12,6 @@ const CONTRACT_NAME: &str = "crates.io:transmuter";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const SWAP_FEE: Decimal = Decimal::zero();
-const EXIT_FEE: Decimal = Decimal::zero();
 
 pub struct Transmuter<'a> {
     pub(crate) pool: Item<'a, TransmuterPool>,
@@ -151,16 +150,6 @@ impl Transmuter<'_> {
     #[msg(query)]
     pub(crate) fn get_swap_fee(&self, _ctx: (Deps, Env)) -> Result<SwapFeeResponse, ContractError> {
         Ok(SwapFeeResponse { swap_fee: SWAP_FEE })
-    }
-
-    // // query msg:
-    // // { "get_exit_fee": {} }
-    // // response:
-    // // { "exit_fee": <exit_fee:string> }
-    // GetExitFee(ctx sdk.Context) sdk.Dec
-    #[msg(query)]
-    pub(crate) fn get_exit_fee(&self, _ctx: (Deps, Env)) -> Result<ExitFeeResponse, ContractError> {
-        Ok(ExitFeeResponse { exit_fee: EXIT_FEE })
     }
 
     // // query msg:
@@ -427,11 +416,6 @@ pub struct PoolResponse {
 #[cw_serde]
 pub struct SwapFeeResponse {
     pub swap_fee: Decimal,
-}
-
-#[cw_serde]
-pub struct ExitFeeResponse {
-    pub exit_fee: Decimal,
 }
 
 #[cw_serde]
