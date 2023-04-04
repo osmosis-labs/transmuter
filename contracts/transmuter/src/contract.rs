@@ -153,8 +153,11 @@ impl Transmuter<'_> {
     // // { "swap_fee": <swap_fee:string> }
     // GetSwapFee(ctx sdk.Context) sdk.Dec
     #[msg(query)]
-    pub(crate) fn get_swap_fee(&self, _ctx: (Deps, Env)) -> Result<SwapFeeResponse, ContractError> {
-        Ok(SwapFeeResponse { swap_fee: SWAP_FEE })
+    pub(crate) fn get_swap_fee(
+        &self,
+        _ctx: (Deps, Env),
+    ) -> Result<GetSwapFeeResponse, ContractError> {
+        Ok(GetSwapFeeResponse { swap_fee: SWAP_FEE })
     }
 
     // // query msg:
@@ -422,7 +425,7 @@ pub struct PoolResponse {
 }
 
 #[cw_serde]
-pub struct SwapFeeResponse {
+pub struct GetSwapFeeResponse {
     pub swap_fee: Decimal,
 }
 
