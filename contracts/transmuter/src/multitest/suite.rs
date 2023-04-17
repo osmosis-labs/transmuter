@@ -2,11 +2,15 @@ use std::vec;
 
 use super::test_env::*;
 use crate::{
-    contract::{ExecMsg, InstantiateMsg, PoolResponse, QueryMsg, SharesResponse},
+    contract::{
+        ExecMsg, InstantiateMsg, IsActiveResponse, PoolResponse, QueryMsg, SharesResponse,
+        TotalSharesResponse,
+    },
+    sudo::SudoMsg,
     transmuter_pool::TransmuterPool,
     ContractError,
 };
-use cosmwasm_std::{Addr, Coin, Uint128};
+use cosmwasm_std::{Addr, BankMsg, Coin, Decimal, Uint128};
 use cw_multi_test::Executor;
 
 const ETH_USDC: &str = "ibc/AXLETHUSDC";
@@ -17,12 +21,16 @@ const COSMOS_USDC: &str = "ibc/COSMOSUSDC";
 fn test_join_pool() {
     let mut t = TestEnvBuilder::new()
         .with_account(
-            "provider",
+            "provider_1",
             vec![
                 Coin::new(2_000, COSMOS_USDC),
                 Coin::new(2_000, ETH_USDC),
                 Coin::new(2_000, "urandom"),
             ],
+        )
+        .with_account(
+            "provider_2",
+            vec![Coin::new(2_000, COSMOS_USDC), Coin::new(2_000, ETH_USDC)],
         )
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
@@ -33,7 +41,7 @@ fn test_join_pool() {
     let err = t
         .app
         .execute_contract(
-            t.accounts["provider"].clone(),
+            t.accounts["provider_1"].clone(),
             t.contract.clone(),
             &ExecMsg::JoinPool {},
             &[],
@@ -50,7 +58,7 @@ fn test_join_pool() {
     let err = t
         .app
         .execute_contract(
-            t.accounts["provider"].clone(),
+            t.accounts["provider_1"].clone(),
             t.contract.clone(),
             &ExecMsg::JoinPool {},
             &tokens_in,
@@ -69,7 +77,7 @@ fn test_join_pool() {
     let tokens_in = vec![Coin::new(1_000, COSMOS_USDC)];
     t.app
         .execute_contract(
-            t.accounts["provider"].clone(),
+            t.accounts["provider_1"].clone(),
             t.contract.clone(),
             &ExecMsg::JoinPool {},
             &tokens_in,
@@ -101,18 +109,27 @@ fn test_join_pool() {
         .query_wasm_smart(
             t.contract.clone(),
             &QueryMsg::Shares {
-                address: t.accounts["provider"].to_string(),
+                address: t.accounts["provider_1"].to_string(),
             },
         )
         .unwrap();
 
     assert_eq!(shares, tokens_in[0].amount);
 
+    // check total shares
+    let TotalSharesResponse { total_shares } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
+        .unwrap();
+
+    assert_eq!(total_shares, tokens_in[0].amount);
+
     // join pool with multiple correct pool's denom should added to the contract's balance and update state
     let tokens_in = vec![Coin::new(1_000, ETH_USDC), Coin::new(1_000, COSMOS_USDC)];
     t.app
         .execute_contract(
-            t.accounts["provider"].clone(),
+            t.accounts["provider_1"].clone(),
             t.contract.clone(),
             &ExecMsg::JoinPool {},
             &tokens_in,
@@ -147,16 +164,80 @@ fn test_join_pool() {
         .query_wasm_smart(
             t.contract.clone(),
             &QueryMsg::Shares {
-                address: t.accounts["provider"].to_string(),
+                address: t.accounts["provider_1"].to_string(),
             },
         )
         .unwrap();
 
     assert_eq!(shares, Uint128::new(3000));
+
+    // check total shares
+    let TotalSharesResponse { total_shares } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
+        .unwrap();
+
+    assert_eq!(total_shares, Uint128::new(3000));
+
+    // join pool with another provider with multiple correct pool's denom should added to the contract's balance and update state
+    let tokens_in = vec![Coin::new(2_000, ETH_USDC), Coin::new(2_000, COSMOS_USDC)];
+    t.app
+        .execute_contract(
+            t.accounts["provider_2"].clone(),
+            t.contract.clone(),
+            &ExecMsg::JoinPool {},
+            &tokens_in,
+        )
+        .unwrap();
+
+    // check contract balances
+    let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
+    assert_eq!(
+        contract_balances,
+        vec![Coin::new(3_000, ETH_USDC), Coin::new(4_000, COSMOS_USDC)]
+    );
+
+    // check pool balance
+    let PoolResponse { pool } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
+        .unwrap();
+
+    assert_eq!(
+        pool,
+        TransmuterPool {
+            pool_assets: vec![Coin::new(3_000, ETH_USDC), Coin::new(4_000, COSMOS_USDC)]
+        }
+    );
+
+    // check shares
+    let SharesResponse { shares } = t
+        .app
+        .wrap()
+        .query_wasm_smart(
+            t.contract.clone(),
+            &QueryMsg::Shares {
+                address: t.accounts["provider_2"].to_string(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(shares, Uint128::new(4000));
+
+    // check total shares
+    let TotalSharesResponse { total_shares } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
+        .unwrap();
+
+    assert_eq!(total_shares, Uint128::new(7000));
 }
 
 #[test]
-fn test_transmute() {
+fn test_swap() {
     let mut t = TestEnvBuilder::new()
         .with_account(
             "alice",
@@ -188,13 +269,15 @@ fn test_transmute() {
     // transmute should fail since there has no token_out_denom remaining in the pool
     let err = t
         .app
-        .execute_contract(
-            t.accounts["alice"].clone(),
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["alice"].clone().into(),
+                token_in: Coin::new(1_500, ETH_USDC),
                 token_out_denom: COSMOS_USDC.to_string(),
+                token_out_min_amount: Uint128::from(1500u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(1_500, ETH_USDC)],
         )
         .unwrap_err();
 
@@ -219,13 +302,15 @@ fn test_transmute() {
     // transmute with incorrect funds should still fail
     let err = t
         .app
-        .execute_contract(
-            t.accounts["alice"].clone(),
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["alice"].clone().into(),
+                token_in: Coin::new(1_000, COSMOS_USDC),
                 token_out_denom: "urandom".to_string(),
+                token_out_min_amount: Uint128::from(1_000u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(1_000, COSMOS_USDC)],
         )
         .unwrap_err();
 
@@ -239,13 +324,15 @@ fn test_transmute() {
 
     let err = t
         .app
-        .execute_contract(
-            t.accounts["alice"].clone(),
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
-                token_out_denom: COSMOS_USDC.to_string(),
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["alice"].clone().into(),
+                token_in: Coin::new(1_000, COSMOS_USDC),
+                token_out_denom: "urandom2".to_string(),
+                token_out_min_amount: Uint128::from(1_000u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(1_000, "urandom2")],
         )
         .unwrap_err();
 
@@ -257,33 +344,32 @@ fn test_transmute() {
         }
     );
 
-    // transmute with funds length != 1 should fail
-    let err = t
-        .app
-        .execute_contract(
-            t.accounts["alice"].clone(),
-            t.contract.clone(),
-            &ExecMsg::Transmute {
-                token_out_denom: COSMOS_USDC.to_string(),
-            },
-            &[Coin::new(1_000, ETH_USDC), Coin::new(1_000, COSMOS_USDC)],
-        )
-        .unwrap_err();
+    // bank send before sudo
 
-    assert_eq!(
-        err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::SingleTokenExpected {}
-    );
+    let token_in = Coin::new(1_500, ETH_USDC);
 
-    // transmute with correct token_in should succeed this time
     t.app
-        .execute_contract(
+        .execute(
             t.accounts["alice"].clone(),
+            BankMsg::Send {
+                to_address: t.contract.to_string(),
+                amount: vec![token_in.clone()],
+            }
+            .into(),
+        )
+        .unwrap();
+
+    // swap with correct token_in should succeed this time
+    t.app
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["alice"].to_string(),
+                token_in,
                 token_out_denom: COSMOS_USDC.to_string(),
+                token_out_min_amount: Uint128::from(1_500u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(1_500, ETH_USDC)],
         )
         .unwrap();
 
@@ -327,15 +413,32 @@ fn test_transmute() {
         ]
     );
 
-    // transmute again with another user
+    // // swap again with another user
+
+    let token_in = Coin::new(29_902, ETH_USDC);
+
     t.app
-        .execute_contract(
+        .execute(
             t.accounts["bob"].clone(),
+            BankMsg::Send {
+                to_address: t.contract.to_string(),
+                amount: vec![token_in.clone()],
+            }
+            .into(),
+        )
+        .unwrap();
+
+    // swap with correct token_in should succeed this time
+    t.app
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["bob"].to_string(),
+                token_in,
                 token_out_denom: COSMOS_USDC.to_string(),
+                token_out_min_amount: Uint128::from(29_902u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(29_902, ETH_USDC)],
         )
         .unwrap();
 
@@ -399,15 +502,30 @@ fn test_exit_pool() {
         )
         .unwrap();
 
-    // transmute to build up token_in
+    // swap to build up token_in
+    let token_in = Coin::new(1_500, ETH_USDC);
+
     t.app
-        .execute_contract(
+        .execute(
             t.accounts["user"].clone(),
+            BankMsg::Send {
+                to_address: t.contract.to_string(),
+                amount: vec![token_in.clone()],
+            }
+            .into(),
+        )
+        .unwrap();
+
+    t.app
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["user"].to_string(),
+                token_in,
                 token_out_denom: COSMOS_USDC.to_string(),
+                token_out_min_amount: Uint128::from(1_500u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(1_500, ETH_USDC)],
         )
         .unwrap();
 
@@ -457,6 +575,15 @@ fn test_exit_pool() {
         .unwrap();
 
     assert_eq!(shares, Uint128::new(100_000 - 500));
+
+    // check total shares
+    let TotalSharesResponse { total_shares } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
+        .unwrap();
+
+    assert_eq!(total_shares, Uint128::new(200_000 - 500));
 
     // check balances
     assert_eq!(
@@ -508,6 +635,15 @@ fn test_exit_pool() {
         .unwrap();
 
     assert_eq!(shares, Uint128::new(0));
+
+    // check total shares
+    let TotalSharesResponse { total_shares } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
+        .unwrap();
+
+    assert_eq!(total_shares, Uint128::new(200_000 - 500 - 1000 - 99_000));
 
     // check balances
     assert_eq!(
@@ -575,7 +711,7 @@ fn test_exit_pool() {
 }
 
 #[test]
-fn test_3_pool_transmuter() {
+fn test_3_pool_swap() {
     let mut t = TestEnvBuilder::new()
         .with_account("alice", vec![Coin::new(1_500, ETH_USDC)])
         .with_account("bob", vec![Coin::new(1_500, ETH_DAI)])
@@ -646,16 +782,18 @@ fn test_3_pool_transmuter() {
         }
     );
 
-    // transmute ETH_USDC to ETH_DAI should fail
+    // swap ETH_USDC to ETH_DAI should fail
     let err = t
         .app
-        .execute_contract(
-            t.accounts["alice"].clone(),
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["alice"].to_string(),
+                token_in: Coin::new(1_000, ETH_USDC),
                 token_out_denom: ETH_DAI.to_string(),
+                token_out_min_amount: Uint128::from(1_000u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(1_000, ETH_USDC)],
         )
         .unwrap_err();
 
@@ -667,15 +805,29 @@ fn test_3_pool_transmuter() {
         }
     );
 
-    // transmute ETH_USDC to COSMOS_USDC
+    // swap ETH_USDC to COSMOS_USDC
+
     t.app
-        .execute_contract(
+        .execute(
             t.accounts["alice"].clone(),
+            BankMsg::Send {
+                to_address: t.contract.to_string(),
+                amount: vec![Coin::new(1_000, ETH_USDC)],
+            }
+            .into(),
+        )
+        .unwrap();
+
+    t.app
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["alice"].to_string(),
+                token_in: Coin::new(1_000, ETH_USDC),
                 token_out_denom: COSMOS_USDC.to_string(),
+                token_out_min_amount: Uint128::from(1_000u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(1_000, ETH_USDC)],
         )
         .unwrap();
 
@@ -712,15 +864,30 @@ fn test_3_pool_transmuter() {
         }
     );
 
-    // transmute ETH_DAI to ETH_USDC
+    // swap ETH_DAI to ETH_USDC
+
+    // bank send
     t.app
-        .execute_contract(
+        .execute(
             t.accounts["bob"].clone(),
+            BankMsg::Send {
+                to_address: t.contract.to_string(),
+                amount: vec![Coin::new(1_000, ETH_DAI)],
+            }
+            .into(),
+        )
+        .unwrap();
+
+    t.app
+        .wasm_sudo(
             t.contract.clone(),
-            &ExecMsg::Transmute {
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["bob"].to_string(),
+                token_in: Coin::new(1_000, ETH_DAI),
                 token_out_denom: ETH_USDC.to_string(),
+                token_out_min_amount: Uint128::from(1_000u128),
+                swap_fee: Decimal::zero(),
             },
-            &[Coin::new(1_000, ETH_DAI)],
         )
         .unwrap();
 
@@ -804,4 +971,112 @@ fn test_3_pool_transmuter() {
             .unwrap(),
         vec![Coin::new(1_000, ETH_DAI), Coin::new(99_000, COSMOS_USDC)]
     );
+}
+
+#[test]
+fn test_active_status() {
+    let mut t = TestEnvBuilder::new()
+        .with_account("user", vec![Coin::new(1_000, ETH_USDC)])
+        .with_account("provider", vec![Coin::new(100_000, COSMOS_USDC)])
+        .with_instantiate_msg(InstantiateMsg {
+            pool_asset_denoms: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
+        })
+        .build();
+
+    // check status
+    let IsActiveResponse { is_active } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::IsActive {})
+        .unwrap();
+
+    assert!(is_active); // active
+
+    // execute should work
+    t.app
+        .execute_contract(
+            t.accounts["provider"].clone(),
+            t.contract.clone(),
+            &ExecMsg::JoinPool {},
+            &[Coin::new(50_000, COSMOS_USDC)],
+        )
+        .unwrap();
+
+    // sudo should work
+    t.app
+        .wasm_sudo(
+            t.contract.clone(),
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["user"].to_string(),
+                token_in: Coin::new(500, ETH_USDC),
+                token_out_denom: COSMOS_USDC.to_string(),
+                token_out_min_amount: Uint128::from(500u128),
+                swap_fee: Decimal::zero(),
+            },
+        )
+        .unwrap();
+
+    // deactivate
+    t.app
+        .wasm_sudo(t.contract.clone(), &SudoMsg::SetActive { is_active: false })
+        .unwrap();
+
+    // check status
+    let IsActiveResponse { is_active } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::IsActive {})
+        .unwrap();
+
+    assert!(!is_active); // inactive
+
+    // execute shoud not work
+    let err = t
+        .app
+        .execute_contract(
+            t.accounts["provider"].clone(),
+            t.contract.clone(),
+            &ExecMsg::JoinPool {},
+            &[Coin::new(50_000, COSMOS_USDC)],
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        err.downcast_ref::<ContractError>().unwrap(),
+        &ContractError::InactivePool {}
+    );
+
+    // sudo should not work
+    let err = t
+        .app
+        .wasm_sudo(
+            t.contract.clone(),
+            &SudoMsg::SwapExactAmountIn {
+                sender: t.accounts["user"].to_string(),
+                token_in: Coin::new(500, ETH_USDC),
+                token_out_denom: COSMOS_USDC.to_string(),
+                token_out_min_amount: Uint128::from(500u128),
+                swap_fee: Decimal::zero(),
+            },
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        err.downcast_ref::<ContractError>().unwrap(),
+        &ContractError::InactivePool {}
+    );
+
+    // reactivate
+    t.app
+        .wasm_sudo(t.contract.clone(), &SudoMsg::SetActive { is_active: true })
+        .unwrap();
+
+    // check status
+    let IsActiveResponse { is_active } = t
+        .app
+        .wrap()
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::IsActive {})
+        .unwrap();
+
+    assert!(is_active); // active
 }
