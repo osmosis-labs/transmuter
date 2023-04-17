@@ -128,15 +128,6 @@ impl Transmuter<'_> {
             .add_message(bank_send_msg))
     }
 
-    /// Query the pool information of the contract.
-    #[msg(query)]
-    fn pool(&self, ctx: (Deps, Env)) -> Result<PoolResponse, ContractError> {
-        let (deps, _env) = ctx;
-        Ok(PoolResponse {
-            pool: self.pool.load(deps.storage)?,
-        })
-    }
-
     #[msg(query)]
     fn shares(&self, ctx: (Deps, Env), address: String) -> Result<SharesResponse, ContractError> {
         let (deps, _env) = ctx;
@@ -358,11 +349,6 @@ impl Transmuter<'_> {
 #[cw_serde]
 pub struct SharesResponse {
     pub shares: Uint128,
-}
-
-#[cw_serde]
-pub struct PoolResponse {
-    pub pool: TransmuterPool,
 }
 
 #[cw_serde]

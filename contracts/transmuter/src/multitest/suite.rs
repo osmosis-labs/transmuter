@@ -3,11 +3,10 @@ use std::vec;
 use super::test_env::*;
 use crate::{
     contract::{
-        ExecMsg, InstantiateMsg, IsActiveResponse, PoolResponse, QueryMsg, SharesResponse,
-        TotalSharesResponse,
+        ExecMsg, InstantiateMsg, IsActiveResponse, QueryMsg, SharesResponse,
+        TotalPoolLiquidityResponse, TotalSharesResponse,
     },
     sudo::SudoMsg,
-    transmuter_pool::TransmuterPool,
     ContractError,
 };
 use cosmwasm_std::{Addr, BankMsg, Coin, Decimal, Uint128};
@@ -89,19 +88,18 @@ fn test_join_pool() {
     assert_eq!(contract_balances, tokens_in);
 
     // check pool balance
-    let PoolResponse { pool } = t
+    let TotalPoolLiquidityResponse {
+        total_pool_liquidity,
+    } = t
         .app
         .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
 
     assert_eq!(
-        pool,
-        TransmuterPool {
-            pool_assets: vec![Coin::new(0, ETH_USDC), tokens_in[0].clone()]
-        }
+        total_pool_liquidity,
+        vec![Coin::new(0, ETH_USDC), tokens_in[0].clone()]
     );
-
     // check shares
     let SharesResponse { shares } = t
         .app
@@ -144,19 +142,18 @@ fn test_join_pool() {
     );
 
     // check pool balance
-    let PoolResponse { pool } = t
+    let TotalPoolLiquidityResponse {
+        total_pool_liquidity,
+    } = t
         .app
         .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
 
     assert_eq!(
-        pool,
-        TransmuterPool {
-            pool_assets: vec![Coin::new(1_000, ETH_USDC), Coin::new(2_000, COSMOS_USDC)]
-        }
+        total_pool_liquidity,
+        vec![Coin::new(1_000, ETH_USDC), Coin::new(2_000, COSMOS_USDC)]
     );
-
     // check shares
     let SharesResponse { shares } = t
         .app
@@ -199,17 +196,17 @@ fn test_join_pool() {
     );
 
     // check pool balance
-    let PoolResponse { pool } = t
+    let TotalPoolLiquidityResponse {
+        total_pool_liquidity,
+    } = t
         .app
         .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
 
     assert_eq!(
-        pool,
-        TransmuterPool {
-            pool_assets: vec![Coin::new(3_000, ETH_USDC), Coin::new(4_000, COSMOS_USDC)]
-        }
+        total_pool_liquidity,
+        vec![Coin::new(3_000, ETH_USDC), Coin::new(4_000, COSMOS_USDC)]
     );
 
     // check shares
@@ -375,10 +372,12 @@ fn test_swap() {
 
     // check balances
     let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
-    let PoolResponse { pool } = t
+    let TotalPoolLiquidityResponse {
+        total_pool_liquidity,
+    } = t
         .app
         .wrap()
-        .query_wasm_smart(&t.contract, &QueryMsg::Pool {})
+        .query_wasm_smart(&t.contract, &QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
     let alice_balances = t
         .app
@@ -395,13 +394,11 @@ fn test_swap() {
     );
 
     assert_eq!(
-        pool,
-        TransmuterPool {
-            pool_assets: vec![
-                Coin::new(1_500, ETH_USDC),
-                Coin::new(100_000 - 1_500, COSMOS_USDC)
-            ]
-        }
+        total_pool_liquidity,
+        vec![
+            Coin::new(1_500, ETH_USDC),
+            Coin::new(100_000 - 1_500, COSMOS_USDC)
+        ]
     );
 
     // +1_000 due to existing alice balance
@@ -444,10 +441,12 @@ fn test_swap() {
 
     // check balances
     let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
-    let PoolResponse { pool } = t
+    let TotalPoolLiquidityResponse {
+        total_pool_liquidity,
+    } = t
         .app
         .wrap()
-        .query_wasm_smart(t.contract, &QueryMsg::Pool {})
+        .query_wasm_smart(t.contract, &QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
     let bob_balances = t.app.wrap().query_all_balances(&t.accounts["bob"]).unwrap();
 
@@ -460,13 +459,11 @@ fn test_swap() {
     );
 
     assert_eq!(
-        pool,
-        TransmuterPool {
-            pool_assets: vec![
-                Coin::new(1_500 + 29_902, ETH_USDC),
-                Coin::new(100_000 - 1_500 - 29_902, COSMOS_USDC)
-            ]
-        }
+        total_pool_liquidity,
+        vec![
+            Coin::new(1_500 + 29_902, ETH_USDC),
+            Coin::new(100_000 - 1_500 - 29_902, COSMOS_USDC)
+        ]
     );
 
     assert_eq!(bob_balances, vec![Coin::new(29_902, COSMOS_USDC)]);
@@ -594,20 +591,20 @@ fn test_exit_pool() {
         ]
     );
 
-    let PoolResponse { pool } = t
+    let TotalPoolLiquidityResponse {
+        total_pool_liquidity,
+    } = t
         .app
         .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
 
     assert_eq!(
-        pool,
-        TransmuterPool {
-            pool_assets: vec![
-                Coin::new(1500 - 500, ETH_USDC),
-                Coin::new(200_000 - 1500, COSMOS_USDC)
-            ]
-        }
+        total_pool_liquidity,
+        vec![
+            Coin::new(1500 - 500, ETH_USDC),
+            Coin::new(200_000 - 1500, COSMOS_USDC)
+        ]
     );
 
     // provider can exit pool with any token
@@ -651,20 +648,20 @@ fn test_exit_pool() {
         vec![Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)]
     );
 
-    let PoolResponse { pool } = t
+    let TotalPoolLiquidityResponse {
+        total_pool_liquidity,
+    } = t
         .app
         .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
 
     assert_eq!(
-        pool,
-        TransmuterPool {
-            pool_assets: vec![
-                Coin::new(0, ETH_USDC),
-                Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)
-            ]
-        }
+        total_pool_liquidity,
+        vec![
+            Coin::new(0, ETH_USDC),
+            Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)
+        ]
     );
 
     // exit pool with excess shares fails
@@ -765,21 +762,21 @@ fn test_3_pool_swap() {
     );
 
     // check pool
-    let PoolResponse { pool } = t
+    let TotalPoolLiquidityResponse {
+        total_pool_liquidity,
+    } = t
         .app
         .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
 
     assert_eq!(
-        pool,
-        TransmuterPool {
-            pool_assets: vec![
-                Coin::new(0, ETH_USDC),
-                Coin::new(0, ETH_DAI),
-                Coin::new(100_000, COSMOS_USDC)
-            ]
-        }
+        total_pool_liquidity,
+        vec![
+            Coin::new(0, ETH_USDC),
+            Coin::new(0, ETH_DAI),
+            Coin::new(100_000, COSMOS_USDC)
+        ]
     );
 
     // swap ETH_USDC to ETH_DAI should fail
@@ -847,21 +844,21 @@ fn test_3_pool_swap() {
     );
 
     // check pool
-    let PoolResponse { pool } = t
+    let TotalPoolLiquidityResponse {
+        total_pool_liquidity,
+    } = t
         .app
         .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
 
     assert_eq!(
-        pool,
-        TransmuterPool {
-            pool_assets: vec![
-                Coin::new(1_000, ETH_USDC),
-                Coin::new(0, ETH_DAI),
-                Coin::new(99_000, COSMOS_USDC)
-            ]
-        }
+        total_pool_liquidity,
+        vec![
+            Coin::new(1_000, ETH_USDC),
+            Coin::new(0, ETH_DAI),
+            Coin::new(99_000, COSMOS_USDC)
+        ]
     );
 
     // swap ETH_DAI to ETH_USDC
@@ -904,21 +901,21 @@ fn test_3_pool_swap() {
     );
 
     // check pool
-    let PoolResponse { pool } = t
+    let TotalPoolLiquidityResponse {
+        total_pool_liquidity,
+    } = t
         .app
         .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
 
     assert_eq!(
-        pool,
-        TransmuterPool {
-            pool_assets: vec![
-                Coin::new(0, ETH_USDC),
-                Coin::new(1_000, ETH_DAI),
-                Coin::new(99_000, COSMOS_USDC)
-            ]
-        }
+        total_pool_liquidity,
+        vec![
+            Coin::new(0, ETH_USDC),
+            Coin::new(1_000, ETH_DAI),
+            Coin::new(99_000, COSMOS_USDC)
+        ]
     );
 
     // provider exit pool
@@ -940,21 +937,21 @@ fn test_3_pool_swap() {
     );
 
     // check pool
-    let PoolResponse { pool } = t
+    let TotalPoolLiquidityResponse {
+        total_pool_liquidity,
+    } = t
         .app
         .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::Pool {})
+        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
 
     assert_eq!(
-        pool,
-        TransmuterPool {
-            pool_assets: vec![
-                Coin::new(0, ETH_USDC),
-                Coin::new(0, ETH_DAI),
-                Coin::new(0, COSMOS_USDC)
-            ]
-        }
+        total_pool_liquidity,
+        vec![
+            Coin::new(0, ETH_USDC),
+            Coin::new(0, ETH_DAI),
+            Coin::new(0, COSMOS_USDC)
+        ]
     );
 
     // check contract balances
