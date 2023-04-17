@@ -147,11 +147,6 @@ impl Transmuter<'_> {
         })
     }
 
-    // // query msg:
-    // // { "get_swap_fee": {} }
-    // // response:
-    // // { "swap_fee": <swap_fee:string> }
-    // GetSwapFee(ctx sdk.Context) sdk.Dec
     #[msg(query)]
     pub(crate) fn get_swap_fee(
         &self,
@@ -160,11 +155,6 @@ impl Transmuter<'_> {
         Ok(GetSwapFeeResponse { swap_fee: SWAP_FEE })
     }
 
-    // // query msg:
-    // // { "is_active": {} }
-    // // response:
-    // // { "is_active": <is_active:boolean> }
-    // IsActive(ctx sdk.Context) bool
     #[msg(query)]
     pub(crate) fn is_active(&self, ctx: (Deps, Env)) -> Result<IsActiveResponse, ContractError> {
         let (deps, _env) = ctx;
@@ -173,11 +163,6 @@ impl Transmuter<'_> {
         })
     }
 
-    // // query msg:
-    // // { "get_total_shares": {} }
-    // // response:
-    // // { "total_shares": <total_shares:number> }
-    // GetTotalShares() sdk.Int
     #[msg(query)]
     pub(crate) fn get_total_shares(
         &self,
@@ -188,11 +173,6 @@ impl Transmuter<'_> {
         Ok(TotalSharesResponse { total_shares })
     }
 
-    // // query msg:
-    // // { "get_total_pool_liquidity": {} }
-    // // response:
-    // // { "total_pool_liquidity": [{ "denom": <denom:string>, "amount": <amount:string> }>,..] }
-    // GetTotalPoolLiquidity(ctx sdk.Context) sdk.Coins
     #[msg(query)]
     pub(crate) fn get_total_pool_liquidity(
         &self,
@@ -206,11 +186,6 @@ impl Transmuter<'_> {
         })
     }
 
-    // // query msg:
-    // // { "spot_price": { quote_asset_denom: <quote_asset_denom>, base_asset_denom: <base_asset_denom> } }
-    // // response:
-    // // { "spot_price": <spot_price:string> }
-    // SpotPrice(ctx sdk.Context, quoteAssetDenom string, baseAssetDenom string) (sdk.Dec, error)
     #[msg(query)]
     pub(crate) fn spot_price(
         &self,
@@ -259,23 +234,6 @@ impl Transmuter<'_> {
         })
     }
 
-    // // query msg:
-    // // {
-    // //   "calc_out_given_in": {
-    // //     "token_in": { "denom": <denom:string>, "amount": <amount:string> },
-    // //     "token_out_denom": <token_out_denom:string>,
-    // //     "swap_fee": <swap_fee:string>,
-    // //   }
-    // // }
-    // // response data:
-    // // { "token_out": { "denom": <denom:string>, "amount": <amount:string> } }
-    // CalcOutAmtGivenIn(
-    //     ctx sdk.Context,
-    //     poolI PoolI,
-    //     tokenIn sdk.Coin,
-    //     tokenOutDenom string,
-    //     swapFee sdk.Dec,
-    //   ) (tokenOut sdk.Coin, err error)
     #[msg(query)]
     pub(crate) fn calc_out_amt_given_in(
         &self,
@@ -317,23 +275,6 @@ impl Transmuter<'_> {
         Ok((pool, token_out))
     }
 
-    // // query msg:
-    // // {
-    // //   "calc_in_given_out": {
-    // //     "token_in_denom": <token_in_denom:string>,
-    // //     "token_out": { "denom": <denom:string>, "amount": <amount:string> },
-    // //     "swap_fee": <swap_fee:string>,
-    // //   }
-    // // }
-    // // response data:
-    // // { "token_in": { "denom": <denom:string>, "amount": <amount:string> } }
-    // CalcInAmtGivenOut(
-    //     ctx sdk.Context,
-    //     poolI PoolI,
-    //     tokenOut sdk.Coin,
-    //     tokenInDenom string,
-    //     swapFee sdk.Dec,
-    //   ) (tokenIn sdk.Coin, err error)
     #[msg(query)]
     pub(crate) fn calc_in_amt_given_out(
         &self,
