@@ -5,7 +5,7 @@ use cosmwasm_std::{
 use cw_storage_plus::Item;
 use sylvia::contract;
 
-use crate::{error::ContractError, shares::Shares, transmuter_pool::TransmuterPool};
+use crate::{error::ContractError, shares::Shares, sudo::SudoMsg, transmuter_pool::TransmuterPool};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:transmuter";
@@ -126,6 +126,54 @@ impl Transmuter<'_> {
         Ok(Response::new()
             .add_attribute("method", "exit_pool")
             .add_message(bank_send_msg))
+    }
+
+    /// SwapExactAmountIn swaps an exact amount of tokens in for as many tokens out as possible.
+    /// The amount of tokens out is determined by the current exchange rate and the swap fee.
+    /// The user specifies a minimum amount of tokens out, and the transaction will revert if that amount of tokens
+    /// is not received.
+    #[msg(exec)]
+    fn swap_exact_amount_in(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        token_in: Coin,
+        token_out_denom: String,
+        token_out_min_amount: Uint128,
+    ) -> Result<Response, ContractError> {
+        let (deps, env, info) = ctx;
+
+        let sudo_msg = SudoMsg::SwapExactAmountIn {
+            sender: info.sender.into_string(),
+            token_in,
+            token_out_denom,
+            token_out_min_amount,
+            swap_fee: SWAP_FEE,
+        };
+        sudo_msg.dispatch(self, (deps, env))
+    }
+
+    /// SwapExactAmountOut swaps as many tokens in as possible for an exact amount of tokens out.
+    /// The amount of tokens in is determined by the current exchange rate and the swap fee.
+    /// The user specifies a maximum amount of tokens in, and the transaction will revert if that amount of tokens
+    /// is exceeded.
+    #[msg(exec)]
+    fn swap_exact_amount_out(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        token_in_denom: String,
+        token_in_max_amount: Uint128,
+        token_out: Coin,
+    ) -> Result<Response, ContractError> {
+        let (deps, env, info) = ctx;
+
+        let sudo_msg = SudoMsg::SwapExactAmountOut {
+            sender: info.sender.into_string(),
+            token_in_denom,
+            token_in_max_amount,
+            token_out,
+            swap_fee: SWAP_FEE,
+        };
+        sudo_msg.dispatch(self, (deps, env))
     }
 
     #[msg(query)]
