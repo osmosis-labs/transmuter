@@ -177,7 +177,11 @@ impl Transmuter<'_> {
     }
 
     #[msg(query)]
-    fn shares(&self, ctx: (Deps, Env), address: String) -> Result<SharesResponse, ContractError> {
+    fn get_shares(
+        &self,
+        ctx: (Deps, Env),
+        address: String,
+    ) -> Result<SharesResponse, ContractError> {
         let (deps, _env) = ctx;
         Ok(SharesResponse {
             shares: self

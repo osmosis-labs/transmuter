@@ -106,7 +106,7 @@ fn test_join_pool() {
         .wrap()
         .query_wasm_smart(
             t.contract.clone(),
-            &QueryMsg::Shares {
+            &QueryMsg::GetShares {
                 address: t.accounts["provider_1"].to_string(),
             },
         )
@@ -160,7 +160,7 @@ fn test_join_pool() {
         .wrap()
         .query_wasm_smart(
             t.contract.clone(),
-            &QueryMsg::Shares {
+            &QueryMsg::GetShares {
                 address: t.accounts["provider_1"].to_string(),
             },
         )
@@ -215,7 +215,7 @@ fn test_join_pool() {
         .wrap()
         .query_wasm_smart(
             t.contract.clone(),
-            &QueryMsg::Shares {
+            &QueryMsg::GetShares {
                 address: t.accounts["provider_2"].to_string(),
             },
         )
@@ -565,7 +565,7 @@ fn test_exit_pool() {
         .wrap()
         .query_wasm_smart(
             t.contract.clone(),
-            &QueryMsg::Shares {
+            &QueryMsg::GetShares {
                 address: t.accounts["provider_1"].to_string(),
             },
         )
@@ -625,7 +625,7 @@ fn test_exit_pool() {
         .wrap()
         .query_wasm_smart(
             t.contract.clone(),
-            &QueryMsg::Shares {
+            &QueryMsg::GetShares {
                 address: t.accounts["provider_2"].to_string(),
             },
         )
@@ -738,7 +738,7 @@ fn test_3_pool_swap() {
         .wrap()
         .query_wasm_smart(
             t.contract.clone(),
-            &QueryMsg::Shares {
+            &QueryMsg::GetShares {
                 address: t.accounts["provider"].to_string(),
             },
         )
