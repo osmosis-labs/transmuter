@@ -6,7 +6,7 @@ mod transmuter_pool;
 pub use crate::error::ContractError;
 
 #[cfg(test)]
-mod multitest;
+mod test;
 
 #[cfg(not(feature = "library"))]
 mod entry_points {
