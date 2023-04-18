@@ -1,11 +1,17 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_eq, BankMsg, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Response, Uint128,
+    ensure, ensure_eq, to_binary, BankMsg, Coin, Decimal, Deps, DepsMut, Env, MessageInfo,
+    Response, Uint128,
 };
 use cw_storage_plus::Item;
 use sylvia::contract;
 
-use crate::{error::ContractError, shares::Shares, sudo::SudoMsg, transmuter_pool::TransmuterPool};
+use crate::{
+    error::ContractError,
+    shares::Shares,
+    sudo::{SwapExactAmountInResponseData, SwapExactAmountOutResponseData},
+    transmuter_pool::TransmuterPool,
+};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:transmuter";
@@ -58,7 +64,7 @@ impl Transmuter<'_> {
     /// Join pool with tokens that exist in the pool.
     /// Token used to join pool is sent to the contract via `funds` in `MsgExecuteContract`.
     #[msg(exec)]
-    fn join_pool(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
+    pub fn join_pool(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
         // ensure funds not empty
@@ -133,23 +139,70 @@ impl Transmuter<'_> {
     /// The user specifies a minimum amount of tokens out, and the transaction will revert if that amount of tokens
     /// is not received.
     #[msg(exec)]
-    fn swap_exact_amount_in(
+    pub fn swap_exact_amount_in(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
         token_in: Coin,
         token_out_denom: String,
         token_out_min_amount: Uint128,
     ) -> Result<Response, ContractError> {
-        let (deps, env, info) = ctx;
-
-        let sudo_msg = SudoMsg::SwapExactAmountIn {
-            sender: info.sender.into_string(),
+        self._swap_exact_amount_in(
+            ctx,
             token_in,
             token_out_denom,
             token_out_min_amount,
-            swap_fee: SWAP_FEE,
+            SWAP_FEE,
+        )
+    }
+
+    /// This is a helper function for `swap_exact_amount_in`. As it will also be used by sudo endpoint.
+    pub(crate) fn _swap_exact_amount_in(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        token_in: Coin,
+        token_out_denom: String,
+        token_out_min_amount: Uint128,
+        swap_fee: Decimal,
+    ) -> Result<Response, ContractError> {
+        let (deps, env, info) = ctx;
+
+        // ensure funds match token_in
+        ensure!(
+            info.funds.len() == 1 && info.funds[0] == token_in,
+            ContractError::FundsMismatchTokenIn {
+                funds: info.funds,
+                token_in
+            }
+        );
+
+        let (pool, token_out) =
+            self._calc_out_amt_given_in((deps.as_ref(), env), token_in, token_out_denom, swap_fee)?;
+
+        // ensure token_out amount is greater than or equal to token_out_min_amount
+        ensure!(
+            token_out.amount >= token_out_min_amount,
+            ContractError::InsufficientTokenOut {
+                required: token_out_min_amount,
+                available: token_out.amount
+            }
+        );
+
+        // save pool
+        self.pool.save(deps.storage, &pool)?;
+
+        let send_token_out_to_sender_msg = BankMsg::Send {
+            to_address: info.sender.to_string(),
+            amount: vec![token_out.clone()],
         };
-        sudo_msg.dispatch(self, (deps, env))
+
+        let swap_result = SwapExactAmountInResponseData {
+            token_out_amount: token_out.amount,
+        };
+
+        Ok(Response::new()
+            .add_attribute("method", "swap_exact_amount_in")
+            .add_message(send_token_out_to_sender_msg)
+            .set_data(to_binary(&swap_result)?))
     }
 
     /// SwapExactAmountOut swaps as many tokens in as possible for an exact amount of tokens out.
@@ -157,23 +210,73 @@ impl Transmuter<'_> {
     /// The user specifies a maximum amount of tokens in, and the transaction will revert if that amount of tokens
     /// is exceeded.
     #[msg(exec)]
-    fn swap_exact_amount_out(
+    pub fn swap_exact_amount_out(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
         token_in_denom: String,
         token_in_max_amount: Uint128,
         token_out: Coin,
     ) -> Result<Response, ContractError> {
-        let (deps, env, info) = ctx;
-
-        let sudo_msg = SudoMsg::SwapExactAmountOut {
-            sender: info.sender.into_string(),
+        self._swap_exact_amount_out(
+            ctx,
             token_in_denom,
             token_in_max_amount,
             token_out,
-            swap_fee: SWAP_FEE,
+            SWAP_FEE,
+        )
+    }
+
+    fn _swap_exact_amount_out(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        token_in_denom: String,
+        token_in_max_amount: Uint128,
+        token_out: Coin,
+        swap_fee: Decimal,
+    ) -> Result<Response, ContractError> {
+        let (deps, env, info) = ctx;
+
+        let (pool, token_in) = self._calc_in_amt_given_out(
+            (deps.as_ref(), env),
+            token_out.clone(),
+            token_in_denom,
+            swap_fee,
+        )?;
+
+        // ensure funds match token_in
+        ensure!(
+            info.funds.len() == 1 && info.funds[0] == token_in,
+            ContractError::FundsMismatchTokenIn {
+                funds: info.funds,
+                token_in
+            }
+        );
+
+        // ensure token_in amount is less than or equal to token_in_max_amount
+        ensure!(
+            token_in.amount <= token_in_max_amount,
+            ContractError::ExceedingTokenIn {
+                limit: token_in_max_amount,
+                required: token_in.amount,
+            }
+        );
+
+        // save pool
+        self.pool.save(deps.storage, &pool)?;
+
+        let send_token_out_to_sender_msg = BankMsg::Send {
+            to_address: info.sender.to_string(),
+            amount: vec![token_out],
         };
-        sudo_msg.dispatch(self, (deps, env))
+
+        let swap_result = SwapExactAmountOutResponseData {
+            token_in_amount: token_in.amount,
+        };
+
+        Ok(Response::new()
+            .add_attribute("method", "swap_exact_amount_out")
+            .add_message(send_token_out_to_sender_msg)
+            .set_data(to_binary(&swap_result)?))
     }
 
     #[msg(query)]

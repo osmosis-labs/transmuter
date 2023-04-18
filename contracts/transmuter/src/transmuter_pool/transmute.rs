@@ -49,7 +49,7 @@ impl TransmuterPool {
         let token_out_pool_asset = token_out_pool_asset.expect("already ensured it exists");
         ensure!(
             token_out_pool_asset.amount >= token_in.amount,
-            ContractError::InsufficientFund {
+            ContractError::InsufficientPoolAsset {
                 required: token_out,
                 available: token_out_pool_asset.clone()
             }
@@ -150,7 +150,7 @@ mod tests {
         assert_eq!(
             pool.transmute(&Coin::new(70_001, ETH_USDC), COSMOS_USDC)
                 .unwrap_err(),
-            ContractError::InsufficientFund {
+            ContractError::InsufficientPoolAsset {
                 required: Coin::new(70_001, COSMOS_USDC),
                 available: Coin::new(70_000, COSMOS_USDC)
             }

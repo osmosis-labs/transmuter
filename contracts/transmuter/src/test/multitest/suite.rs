@@ -280,7 +280,7 @@ fn test_swap() {
 
     assert_eq!(
         err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::InsufficientFund {
+        &ContractError::InsufficientPoolAsset {
             required: Coin::new(1_500, COSMOS_USDC),
             available: Coin::new(0, COSMOS_USDC)
         }
@@ -700,7 +700,7 @@ fn test_exit_pool() {
 
     assert_eq!(
         err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::InsufficientFund {
+        &ContractError::InsufficientPoolAsset {
             required: Coin::new(1, ETH_USDC),
             available: Coin::new(0, ETH_USDC)
         }
@@ -796,7 +796,7 @@ fn test_3_pool_swap() {
 
     assert_eq!(
         err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::InsufficientFund {
+        &ContractError::InsufficientPoolAsset {
             required: Coin::new(1_000, ETH_DAI),
             available: Coin::new(0, ETH_DAI),
         }

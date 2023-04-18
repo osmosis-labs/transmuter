@@ -1,5 +1,7 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{ensure, to_binary, BankMsg, Coin, Decimal, DepsMut, Env, Response, Uint128};
+use cosmwasm_std::{
+    ensure, to_binary, BankMsg, Coin, Decimal, DepsMut, Env, MessageInfo, Response, Uint128,
+};
 
 use crate::{contract::Transmuter, ContractError};
 
@@ -53,38 +55,21 @@ impl SudoMsg {
                 swap_fee,
             } => {
                 let (deps, env) = ctx;
-                let (pool, token_out) = transmuter._calc_out_amt_given_in(
-                    (deps.as_ref(), env),
+                let sender = deps.api.addr_validate(&sender)?;
+                transmuter._swap_exact_amount_in(
+                    (
+                        deps,
+                        env,
+                        MessageInfo {
+                            sender,
+                            funds: vec![token_in.clone()],
+                        },
+                    ),
                     token_in,
                     token_out_denom,
+                    token_out_min_amount,
                     swap_fee,
-                )?;
-
-                // ensure token_out amount is greater than or equal to token_out_min_amount
-                ensure!(
-                    token_out.amount >= token_out_min_amount,
-                    ContractError::InsufficientTokenOut {
-                        required: token_out_min_amount,
-                        available: token_out.amount
-                    }
-                );
-
-                // save pool
-                transmuter.pool.save(deps.storage, &pool)?;
-
-                let send_token_out_to_sender_msg = BankMsg::Send {
-                    to_address: sender,
-                    amount: vec![token_out.clone()],
-                };
-
-                let swap_result = SwapExactAmountInResponseData {
-                    token_out_amount: token_out.amount,
-                };
-
-                Ok(Response::new()
-                    .add_attribute("method", "swap_exact_amount_in")
-                    .add_message(send_token_out_to_sender_msg)
-                    .set_data(to_binary(&swap_result)?))
+                )
             }
             SudoMsg::SwapExactAmountOut {
                 sender,

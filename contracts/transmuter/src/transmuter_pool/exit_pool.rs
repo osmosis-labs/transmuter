@@ -18,7 +18,7 @@ impl TransmuterPool {
                     if token.denom == pool_asset.denom {
                         pool_asset.amount =
                             pool_asset.amount.checked_sub(token.amount).map_err(|_| {
-                                ContractError::InsufficientFund {
+                                ContractError::InsufficientPoolAsset {
                                     required: token.clone(),
                                     available: pool_asset.clone(),
                                 }
@@ -26,7 +26,7 @@ impl TransmuterPool {
                     }
                 }
             } else {
-                return Err(ContractError::InsufficientFund {
+                return Err(ContractError::InsufficientPoolAsset {
                     required: token.clone(),
                     available: Coin::new(0, token.denom.clone()),
                 });
@@ -94,7 +94,7 @@ mod tests {
         let err = pool.exit_pool(&[Coin::new(10_000, "invalid")]).unwrap_err();
         assert_eq!(
             err,
-            ContractError::InsufficientFund {
+            ContractError::InsufficientPoolAsset {
                 required: Coin::new(10_000, "invalid"),
                 available: Coin::new(0, "invalid")
             }
@@ -106,7 +106,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err,
-            ContractError::InsufficientFund {
+            ContractError::InsufficientPoolAsset {
                 required: Coin::new(10_000, "invalid"),
                 available: Coin::new(0, "invalid")
             }
@@ -125,7 +125,7 @@ mod tests {
         let err = pool.exit_pool(&[Coin::new(100_001, ETH_USDC)]).unwrap_err();
         assert_eq!(
             err,
-            ContractError::InsufficientFund {
+            ContractError::InsufficientPoolAsset {
                 required: Coin::new(100_001, ETH_USDC),
                 available: Coin::new(100_000, ETH_USDC)
             }
@@ -137,7 +137,7 @@ mod tests {
 
         assert_eq!(
             err,
-            ContractError::InsufficientFund {
+            ContractError::InsufficientPoolAsset {
                 required: Coin::new(110_000, COSMOS_USDC),
                 available: Coin::new(100_000, COSMOS_USDC)
             }
@@ -152,7 +152,7 @@ mod tests {
 
         assert_eq!(
             err,
-            ContractError::InsufficientFund {
+            ContractError::InsufficientPoolAsset {
                 required: Coin::new(110_000, ETH_USDC),
                 available: Coin::new(100_000, ETH_USDC)
             }
