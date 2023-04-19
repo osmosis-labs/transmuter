@@ -3,107 +3,47 @@ use cosmwasm_std::testing::{
 };
 use cosmwasm_std::{BankMsg, Coin, Empty, OwnedDeps, ReplyOn, Response, SubMsg, Uint128};
 
-use crate::contract::Transmuter;
-use crate::ContractError;
+use crate::contract::{ContractExecMsg, ExecMsg, Transmuter};
+use crate::{execute, ContractError};
 
-#[test]
-fn test_no_assets_pass() {
-    let pool_assets = &[Coin::new(0, "denom0"), Coin::new(0, "denom1")];
+const SWAPPER: &'static str = "swapperaddr";
 
-    for (token_in, token_out) in vec![
-        (
-            TokenIn::MatchedFund(Coin::new(0, "denom0")),
-            Coin::new(0, "denom1"),
-        ),
-        (
-            TokenIn::MatchedFund(Coin::new(0, "denom1")),
-            Coin::new(0, "denom0"),
-        ),
-    ] {
-        assert_ok_with_bank_send(
-            prep_and_swaps_exact_amount_in(pool_assets, token_in.clone(), token_out.clone()),
-            vec![token_out.clone()],
-        );
-
-        assert_ok_with_bank_send(
-            prep_and_swaps_exact_amount_out(pool_assets, token_in, token_out.clone()),
-            vec![token_out],
-        );
-    }
+#[macro_export]
+macro_rules! test_swap_exact_amount_in {
+    ($test_name:ident [expect ok] { setup = $setup:expr, msg = $msg:expr, funds = $funds:expr, received = $received:expr }) => {
+        #[test]
+        fn $test_name() {
+            test_swap_exact_amount_in_success_case($setup, $msg, &$funds, $received);
+        }
+    };
+    ($test_name:ident [expect error] { setup = $setup:expr, msg = $msg:expr, funds = $funds:expr, err = $err:expr }) => {
+        #[test]
+        fn $test_name() {
+            test_swap_exact_amount_in_failed_case($setup, $msg, &$funds, $err);
+        }
+    };
 }
 
-#[test]
-fn test_no_assets_failed() {
-    let pool_assets = &[Coin::new(0, "denom0"), Coin::new(0, "denom1")];
-
-    struct Case {
-        token_in: TokenIn,
-        token_out: Coin,
-        expected: Box<dyn Fn() -> ContractError>,
-    }
-
-    let cases: Vec<Case> = vec![
-        // insufficient token out in pool
-        Case {
-            token_in: TokenIn::MatchedFund(Coin::new(0, "denom0")),
-            token_out: Coin::new(1, "denom1"),
-            // exact in requires min token out
-            expected: Box::new(|| ContractError::InsufficientTokenOut {
-                required: Uint128::one(),
-                available: Uint128::zero(),
-            }),
-        },
-        // funds greater than token in
-        Case {
-            token_in: TokenIn::MismatchedFund {
-                fund: Coin::new(1, "denom0"),
-                token_in: Coin::new(0, "denom0"),
-            },
-            token_out: Coin::new(0, "denom1"),
-            expected: Box::new(|| ContractError::FundsMismatchTokenIn {
-                funds: vec![Coin::new(1, "denom0")],
-                token_in: Coin::new(0, "denom0"),
-            }),
-        },
-        // funds less than token in
-        Case {
-            token_in: TokenIn::MismatchedFund {
-                fund: Coin::new(0, "denom0"),
-                token_in: Coin::new(1, "denom0"),
-            },
-            token_out: Coin::new(0, "denom1"),
-            expected: Box::new(|| ContractError::FundsMismatchTokenIn {
-                funds: vec![Coin::new(0, "denom0")],
-                token_in: Coin::new(1, "denom0"),
-            }),
-        },
-    ];
-
-    // swap_exact_amount_in cases
-    for Case {
-        token_in,
-        token_out,
-        expected,
-    } in cases
-    {
-        assert_contract_error(
-            prep_and_swaps_exact_amount_in(pool_assets, token_in.clone(), token_out.clone()),
-            expected(),
-        );
-    }
-
-    // TODO: swap_exact_amount_out cases
-}
-
-fn assert_ok_with_bank_send(res: Result<Response, ContractError>, expected: Vec<Coin>) {
-    let res = res.unwrap();
+fn test_swap_exact_amount_in_success_case(
+    mut deps: OwnedDeps<MockStorage, MockApi, MockQuerier, Empty>,
+    msg: ExecMsg,
+    funds: &[Coin],
+    received: Coin,
+) {
     assert_eq!(
-        res.messages,
+        execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(SWAPPER, funds),
+            ContractExecMsg::Transmuter(msg)
+        )
+        .unwrap()
+        .messages,
         vec![SubMsg {
             id: 0,
             msg: BankMsg::Send {
-                to_address: "swapper".into(),
-                amount: expected,
+                to_address: SWAPPER.into(),
+                amount: vec![received],
             }
             .into(),
             gas_limit: None,
@@ -112,89 +52,114 @@ fn assert_ok_with_bank_send(res: Result<Response, ContractError>, expected: Vec<
     );
 }
 
-fn assert_contract_error(res: Result<Response, ContractError>, expected: ContractError) {
-    let err = res.unwrap_err();
-    assert_eq!(err, expected);
-}
-
-#[derive(Clone)]
-enum TokenIn {
-    MatchedFund(Coin),
-    MismatchedFund { fund: Coin, token_in: Coin },
-}
-
-impl TokenIn {
-    fn funds(&self) -> Vec<Coin> {
-        match self {
-            TokenIn::MatchedFund(fund) => vec![fund.clone()],
-            TokenIn::MismatchedFund { fund, token_in: _ } => vec![fund.clone()],
-        }
-    }
-
-    fn token_in(&self) -> Coin {
-        match self {
-            TokenIn::MatchedFund(fund) => fund.clone(),
-            TokenIn::MismatchedFund { fund: _, token_in } => token_in.clone(),
-        }
-    }
-}
-
-fn prep_and_swaps_exact_amount_in(
-    pool_assets: &[Coin],
-    token_in: TokenIn,
-    token_out_min: Coin,
-) -> Result<Response, ContractError> {
-    let mut deps = mock_dependencies();
-    let transmuter = Transmuter::new();
-
-    prep(&transmuter, &mut deps, pool_assets).unwrap();
-
-    transmuter.swap_exact_amount_in(
-        (
+fn test_swap_exact_amount_in_failed_case(
+    mut deps: OwnedDeps<MockStorage, MockApi, MockQuerier, Empty>,
+    msg: ExecMsg,
+    funds: &[Coin],
+    err: ContractError,
+) {
+    assert_eq!(
+        execute(
             deps.as_mut(),
             mock_env(),
-            mock_info("swapper", &token_in.funds()),
-        ),
-        token_in.token_in(),
-        token_out_min.denom,
-        token_out_min.amount,
-    )
-}
-fn prep_and_swaps_exact_amount_out(
-    pool_assets: &[Coin],
-    token_in: TokenIn,
-    token_out: Coin,
-) -> Result<Response, ContractError> {
-    let mut deps = mock_dependencies();
-    let transmuter = Transmuter::new();
-
-    prep(&transmuter, &mut deps, pool_assets).unwrap();
-
-    transmuter.swap_exact_amount_out(
-        (
-            deps.as_mut(),
-            mock_env(),
-            mock_info("swapper", &token_in.funds()),
-        ),
-        token_in.token_in().denom,
-        token_in.token_in().amount,
-        token_out,
+            mock_info(SWAPPER, funds),
+            ContractExecMsg::Transmuter(msg)
+        )
+        .unwrap_err(),
+        err,
     )
 }
 
-fn prep(
-    transmuter: &Transmuter,
-    deps: &mut OwnedDeps<MockStorage, MockApi, MockQuerier, Empty>,
+fn pool_with_single_lp(
     pool_assets: &[Coin],
-) -> Result<(), ContractError> {
+) -> OwnedDeps<MockStorage, MockApi, MockQuerier, Empty> {
+    let transmuter = Transmuter::new();
+    let mut deps = mock_dependencies();
     // instantiate contract
-    transmuter.instantiate(
-        (deps.as_mut(), mock_env(), mock_info("instantiator", &[])),
-        pool_assets.iter().map(|c| c.denom.clone()).collect(),
-    )?;
+    transmuter
+        .instantiate(
+            (deps.as_mut(), mock_env(), mock_info("instantiator", &[])),
+            pool_assets.iter().map(|c| c.denom.clone()).collect(),
+        )
+        .unwrap();
 
     // join pool with initial tokens
-    transmuter.join_pool((deps.as_mut(), mock_env(), mock_info("joiner", pool_assets)))?;
+    transmuter
+        .join_pool((deps.as_mut(), mock_env(), mock_info("joiner", pool_assets)))
+        .unwrap();
 
-    Ok(())
+    deps
 }
+
+mod empty_pool {
+    use super::*;
+
+    fn empty_pool() -> OwnedDeps<MockStorage, MockApi, MockQuerier, Empty> {
+        pool_with_single_lp(&[Coin::new(0, "denom0"), Coin::new(0, "denom1")])
+    }
+
+    test_swap_exact_amount_in! {
+        swap_exact_amount_in_with_0denom0_token_in_should_succeed [expect ok] {
+            setup = empty_pool(),
+            msg = ExecMsg::SwapExactAmountIn {
+                token_in: Coin::new(0, "denom0"),
+                token_out_denom: "denom1".to_string(),
+                token_out_min_amount: Uint128::zero(),
+            },
+            funds = [Coin::new(0, "denom0")],
+            received = Coin::new(0, "denom1")
+        }
+    }
+
+    test_swap_exact_amount_in! {
+        swap_exact_amount_in_with_0denom1_token_in_should_succeed [expect ok] {
+            setup = empty_pool(),
+            msg = ExecMsg::SwapExactAmountIn {
+                token_in: Coin::new(0, "denom1"),
+                token_out_denom: "denom0".to_string(),
+                token_out_min_amount: Uint128::zero(),
+            },
+            funds = [Coin::new(0, "denom1")],
+            received = Coin::new(0, "denom0")
+        }
+    }
+
+    test_swap_exact_amount_in! {
+        swap_exact_amount_in_with_1denom0_token_in_should_fail [expect error] {
+            setup = empty_pool(),
+            msg = ExecMsg::SwapExactAmountIn {
+                token_in: Coin::new(1, "denom0"),
+                token_out_denom: "denom1".to_string(),
+                token_out_min_amount: Uint128::zero(),
+            },
+            funds = [Coin::new(1, "denom0")],
+            err = ContractError::InsufficientPoolAsset {
+                available: Coin::new(0, "denom1"),
+                required: Coin::new(1, "denom1"),
+            }
+        }
+    }
+
+    test_swap_exact_amount_in! {
+        swap_exact_amount_in_with_1denom1_token_in_should_fail [expect error] {
+            setup = empty_pool(),
+            msg = ExecMsg::SwapExactAmountIn {
+                token_in: Coin::new(1, "denom1"),
+                token_out_denom: "denom0".to_string(),
+                token_out_min_amount: Uint128::zero(),
+            },
+            funds = [Coin::new(1, "denom1")],
+            err = ContractError::InsufficientPoolAsset {
+                available: Coin::new(0, "denom0"),
+                required: Coin::new(1, "denom0"),
+            }
+        }
+    }
+}
+
+// TODO: configuration
+// - impl test_swap_exact_amount_out
+// - impl invariant in test case
+// - max pool
+// - 3 pool
+// - normal 2 pool
