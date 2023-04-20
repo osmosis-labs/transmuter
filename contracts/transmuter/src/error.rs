@@ -12,9 +12,6 @@ pub enum ContractError {
     #[error("Custom Error val: {val:?}")]
     CustomError { val: String },
 
-    #[error("Denom not allowed: {denom}")]
-    DenomNotAllowed { denom: String },
-
     #[error("Funds must contain exactly one token")]
     SingleTokenExpected {},
 

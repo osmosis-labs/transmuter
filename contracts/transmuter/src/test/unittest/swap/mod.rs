@@ -172,10 +172,12 @@ fn pool_with_single_lp(
     deps
 }
 
+mod client_error;
 mod empty_pool;
 // TODO: configuration
 // - [x] impl test_swap_exact_amount_out
-// - [ ] impl invariant in test case
+// - [x] impl invariant in test case
+// - [ ] client error
 // - max pool
 // - 3 pool
 // - normal 2 pool
