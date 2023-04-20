@@ -11,7 +11,7 @@ use crate::contract::{
 };
 use crate::{execute, query, ContractError};
 
-const SWAPPER: &'static str = "swapperaddr";
+const SWAPPER: &str = "swapperaddr";
 
 #[macro_export]
 macro_rules! test_swap {
@@ -73,7 +73,7 @@ fn get_total_pool_liquidity(deps: Deps) -> Vec<Coin> {
 
 fn assert_invariants(
     mut deps: OwnedDeps<MockStorage, MockApi, MockQuerier, Empty>,
-    act: impl FnOnce(DepsMut) -> (),
+    act: impl FnOnce(DepsMut),
 ) {
     // store previous shares and pool assets
     let prev_shares = get_total_shares(deps.as_ref());
@@ -174,10 +174,5 @@ fn pool_with_single_lp(
 
 mod client_error;
 mod empty_pool;
-// TODO: configuration
-// - [x] impl test_swap_exact_amount_out
-// - [x] impl invariant in test case
-// - [ ] client error
-// - max pool
-// - 3 pool
-// - normal 2 pool
+
+mod non_empty_pool;
