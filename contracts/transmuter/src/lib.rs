@@ -6,6 +6,7 @@ mod transmuter_pool;
 pub use crate::error::ContractError;
 
 #[cfg(test)]
+#[macro_use]
 mod test;
 
 #[cfg(not(feature = "library"))]

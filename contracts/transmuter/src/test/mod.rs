@@ -2,4 +2,5 @@
 mod multitest;
 
 /// unittest is allow to test with mocked value to have finer grained control
+#[macro_use]
 mod unittest;
