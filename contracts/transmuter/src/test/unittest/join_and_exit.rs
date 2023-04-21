@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use cosmwasm_std::{
     testing::{mock_dependencies, mock_env, mock_info},
-    Addr, Coin, Uint128,
+    Addr, BankMsg, Coin, SubMsg, Uint128,
 };
 
 use crate::{contract::Transmuter, ContractError};
@@ -365,12 +365,26 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
         );
 
         // exit pool
-        transmuter
+        let res = transmuter
             .exit_pool(
                 (deps.as_mut(), mock_env(), mock_info("addr1", &[])),
                 case.exit.clone(),
             )
             .unwrap();
+
+        assert_eq!(
+            res.messages,
+            vec![SubMsg {
+                id: 0,
+                msg: BankMsg::Send {
+                    to_address: "addr1".to_string(),
+                    amount: case.exit.clone()
+                }
+                .into(),
+                gas_limit: None,
+                reply_on: cosmwasm_std::ReplyOn::Never
+            }]
+        );
 
         let total_exit_amount = case
             .exit
