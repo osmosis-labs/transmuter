@@ -6,8 +6,8 @@ use cosmwasm_std::{
 };
 
 use crate::contract::{
-    ContractExecMsg, ContractQueryMsg, ExecMsg, QueryMsg, TotalPoolLiquidityResponse,
-    TotalSharesResponse, Transmuter,
+    ContractExecMsg, ContractQueryMsg, ExecMsg, GetTotalPoolLiquidityResponse,
+    GetTotalSharesResponse, QueryMsg, Transmuter,
 };
 use crate::{execute, query, ContractError};
 
@@ -46,7 +46,7 @@ macro_rules! test_swap {
 }
 
 fn get_total_shares(deps: Deps) -> Uint128 {
-    from_binary::<TotalSharesResponse>(
+    from_binary::<GetTotalSharesResponse>(
         &query(
             deps,
             mock_env(),
@@ -59,7 +59,7 @@ fn get_total_shares(deps: Deps) -> Uint128 {
 }
 
 fn get_total_pool_liquidity(deps: Deps) -> Vec<Coin> {
-    from_binary::<TotalPoolLiquidityResponse>(
+    from_binary::<GetTotalPoolLiquidityResponse>(
         &query(
             deps,
             mock_env(),

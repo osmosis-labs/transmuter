@@ -284,9 +284,9 @@ impl Transmuter<'_> {
         &self,
         ctx: (Deps, Env),
         address: String,
-    ) -> Result<SharesResponse, ContractError> {
+    ) -> Result<GetSharesResponse, ContractError> {
         let (deps, _env) = ctx;
-        Ok(SharesResponse {
+        Ok(GetSharesResponse {
             shares: self
                 .shares
                 .get_share(deps.storage, &deps.api.addr_validate(&address)?)?,
@@ -313,21 +313,21 @@ impl Transmuter<'_> {
     pub(crate) fn get_total_shares(
         &self,
         ctx: (Deps, Env),
-    ) -> Result<TotalSharesResponse, ContractError> {
+    ) -> Result<GetTotalSharesResponse, ContractError> {
         let (deps, _env) = ctx;
         let total_shares = self.shares.get_total_shares(deps.storage)?;
-        Ok(TotalSharesResponse { total_shares })
+        Ok(GetTotalSharesResponse { total_shares })
     }
 
     #[msg(query)]
     pub(crate) fn get_total_pool_liquidity(
         &self,
         ctx: (Deps, Env),
-    ) -> Result<TotalPoolLiquidityResponse, ContractError> {
+    ) -> Result<GetTotalPoolLiquidityResponse, ContractError> {
         let (deps, _env) = ctx;
         let pool = self.pool.load(deps.storage)?;
 
-        Ok(TotalPoolLiquidityResponse {
+        Ok(GetTotalPoolLiquidityResponse {
             total_pool_liquidity: pool.pool_assets,
         })
     }
@@ -510,7 +510,7 @@ impl Transmuter<'_> {
 }
 
 #[cw_serde]
-pub struct SharesResponse {
+pub struct GetSharesResponse {
     pub shares: Uint128,
 }
 
@@ -525,12 +525,12 @@ pub struct IsActiveResponse {
 }
 
 #[cw_serde]
-pub struct TotalSharesResponse {
+pub struct GetTotalSharesResponse {
     pub total_shares: Uint128,
 }
 
 #[cw_serde]
-pub struct TotalPoolLiquidityResponse {
+pub struct GetTotalPoolLiquidityResponse {
     pub total_pool_liquidity: Vec<Coin>,
 }
 

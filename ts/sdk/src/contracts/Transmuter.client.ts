@@ -6,15 +6,43 @@
 
 import { CosmWasmClient, SigningCosmWasmClient, ExecuteResult } from "@cosmjs/cosmwasm-stargate";
 import { StdFee } from "@cosmjs/amino";
-import { ExecuteMsg, Uint128, Coin, InstantiateMsg, QueryMsg, AdminResponse, PoolResponse, TransmuterPool, SharesResponse } from "./Transmuter.types";
+import { ExecuteMsg, Uint128, Coin, InstantiateMsg, QueryMsg, Decimal, AdminResponse, CalcInAmtGivenOutResponse, CalcOutAmtGivenInResponse, GetSharesResponse, GetSwapFeeResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse, IsActiveResponse, PoolResponse, TransmuterPool, SharesResponse, SpotPriceResponse } from "./Transmuter.types";
 export interface TransmuterReadOnlyInterface {
   contractAddress: string;
-  pool: () => Promise<PoolResponse>;
-  shares: ({
+  getShares: ({
     address
   }: {
     address: string;
-  }) => Promise<SharesResponse>;
+  }) => Promise<GetSharesResponse>;
+  getSwapFee: () => Promise<GetSwapFeeResponse>;
+  isActive: () => Promise<IsActiveResponse>;
+  getTotalShares: () => Promise<GetTotalSharesResponse>;
+  getTotalPoolLiquidity: () => Promise<GetTotalPoolLiquidityResponse>;
+  spotPrice: ({
+    baseAssetDenom,
+    quoteAssetDenom
+  }: {
+    baseAssetDenom: string;
+    quoteAssetDenom: string;
+  }) => Promise<SpotPriceResponse>;
+  calcOutAmtGivenIn: ({
+    swapFee,
+    tokenIn,
+    tokenOutDenom
+  }: {
+    swapFee: Decimal;
+    tokenIn: Coin;
+    tokenOutDenom: string;
+  }) => Promise<CalcOutAmtGivenInResponse>;
+  calcInAmtGivenOut: ({
+    swapFee,
+    tokenInDenom,
+    tokenOut
+  }: {
+    swapFee: Decimal;
+    tokenInDenom: string;
+    tokenOut: Coin;
+  }) => Promise<CalcInAmtGivenOutResponse>;
 }
 export class TransmuterQueryClient implements TransmuterReadOnlyInterface {
   client: CosmWasmClient;
@@ -23,23 +51,92 @@ export class TransmuterQueryClient implements TransmuterReadOnlyInterface {
   constructor(client: CosmWasmClient, contractAddress: string) {
     this.client = client;
     this.contractAddress = contractAddress;
-    this.pool = this.pool.bind(this);
-    this.shares = this.shares.bind(this);
+    this.getShares = this.getShares.bind(this);
+    this.getSwapFee = this.getSwapFee.bind(this);
+    this.isActive = this.isActive.bind(this);
+    this.getTotalShares = this.getTotalShares.bind(this);
+    this.getTotalPoolLiquidity = this.getTotalPoolLiquidity.bind(this);
+    this.spotPrice = this.spotPrice.bind(this);
+    this.calcOutAmtGivenIn = this.calcOutAmtGivenIn.bind(this);
+    this.calcInAmtGivenOut = this.calcInAmtGivenOut.bind(this);
   }
 
-  pool = async (): Promise<PoolResponse> => {
-    return this.client.queryContractSmart(this.contractAddress, {
-      pool: {}
-    });
-  };
-  shares = async ({
+  getShares = async ({
     address
   }: {
     address: string;
-  }): Promise<SharesResponse> => {
+  }): Promise<GetSharesResponse> => {
     return this.client.queryContractSmart(this.contractAddress, {
-      shares: {
+      get_shares: {
         address
+      }
+    });
+  };
+  getSwapFee = async (): Promise<GetSwapFeeResponse> => {
+    return this.client.queryContractSmart(this.contractAddress, {
+      get_swap_fee: {}
+    });
+  };
+  isActive = async (): Promise<IsActiveResponse> => {
+    return this.client.queryContractSmart(this.contractAddress, {
+      is_active: {}
+    });
+  };
+  getTotalShares = async (): Promise<GetTotalSharesResponse> => {
+    return this.client.queryContractSmart(this.contractAddress, {
+      get_total_shares: {}
+    });
+  };
+  getTotalPoolLiquidity = async (): Promise<GetTotalPoolLiquidityResponse> => {
+    return this.client.queryContractSmart(this.contractAddress, {
+      get_total_pool_liquidity: {}
+    });
+  };
+  spotPrice = async ({
+    baseAssetDenom,
+    quoteAssetDenom
+  }: {
+    baseAssetDenom: string;
+    quoteAssetDenom: string;
+  }): Promise<SpotPriceResponse> => {
+    return this.client.queryContractSmart(this.contractAddress, {
+      spot_price: {
+        base_asset_denom: baseAssetDenom,
+        quote_asset_denom: quoteAssetDenom
+      }
+    });
+  };
+  calcOutAmtGivenIn = async ({
+    swapFee,
+    tokenIn,
+    tokenOutDenom
+  }: {
+    swapFee: Decimal;
+    tokenIn: Coin;
+    tokenOutDenom: string;
+  }): Promise<CalcOutAmtGivenInResponse> => {
+    return this.client.queryContractSmart(this.contractAddress, {
+      calc_out_amt_given_in: {
+        swap_fee: swapFee,
+        token_in: tokenIn,
+        token_out_denom: tokenOutDenom
+      }
+    });
+  };
+  calcInAmtGivenOut = async ({
+    swapFee,
+    tokenInDenom,
+    tokenOut
+  }: {
+    swapFee: Decimal;
+    tokenInDenom: string;
+    tokenOut: Coin;
+  }): Promise<CalcInAmtGivenOutResponse> => {
+    return this.client.queryContractSmart(this.contractAddress, {
+      calc_in_amt_given_out: {
+        swap_fee: swapFee,
+        token_in_denom: tokenInDenom,
+        token_out: tokenOut
       }
     });
   };
@@ -48,15 +145,28 @@ export interface TransmuterInterface extends TransmuterReadOnlyInterface {
   contractAddress: string;
   sender: string;
   joinPool: (fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
-  transmute: ({
-    tokenOutDenom
-  }: {
-    tokenOutDenom: string;
-  }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
   exitPool: ({
     tokensOut
   }: {
     tokensOut: Coin[];
+  }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
+  swapExactAmountIn: ({
+    tokenIn,
+    tokenOutDenom,
+    tokenOutMinAmount
+  }: {
+    tokenIn: Coin;
+    tokenOutDenom: string;
+    tokenOutMinAmount: Uint128;
+  }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
+  swapExactAmountOut: ({
+    tokenInDenom,
+    tokenInMaxAmount,
+    tokenOut
+  }: {
+    tokenInDenom: string;
+    tokenInMaxAmount: Uint128;
+    tokenOut: Coin;
   }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
 }
 export class TransmuterClient extends TransmuterQueryClient implements TransmuterInterface {
@@ -70,24 +180,14 @@ export class TransmuterClient extends TransmuterQueryClient implements Transmute
     this.sender = sender;
     this.contractAddress = contractAddress;
     this.joinPool = this.joinPool.bind(this);
-    this.transmute = this.transmute.bind(this);
     this.exitPool = this.exitPool.bind(this);
+    this.swapExactAmountIn = this.swapExactAmountIn.bind(this);
+    this.swapExactAmountOut = this.swapExactAmountOut.bind(this);
   }
 
   joinPool = async (fee: number | StdFee | "auto" = "auto", memo?: string, funds?: Coin[]): Promise<ExecuteResult> => {
     return await this.client.execute(this.sender, this.contractAddress, {
       join_pool: {}
-    }, fee, memo, funds);
-  };
-  transmute = async ({
-    tokenOutDenom
-  }: {
-    tokenOutDenom: string;
-  }, fee: number | StdFee | "auto" = "auto", memo?: string, funds?: Coin[]): Promise<ExecuteResult> => {
-    return await this.client.execute(this.sender, this.contractAddress, {
-      transmute: {
-        token_out_denom: tokenOutDenom
-      }
     }, fee, memo, funds);
   };
   exitPool = async ({
@@ -98,6 +198,40 @@ export class TransmuterClient extends TransmuterQueryClient implements Transmute
     return await this.client.execute(this.sender, this.contractAddress, {
       exit_pool: {
         tokens_out: tokensOut
+      }
+    }, fee, memo, funds);
+  };
+  swapExactAmountIn = async ({
+    tokenIn,
+    tokenOutDenom,
+    tokenOutMinAmount
+  }: {
+    tokenIn: Coin;
+    tokenOutDenom: string;
+    tokenOutMinAmount: Uint128;
+  }, fee: number | StdFee | "auto" = "auto", memo?: string, funds?: Coin[]): Promise<ExecuteResult> => {
+    return await this.client.execute(this.sender, this.contractAddress, {
+      swap_exact_amount_in: {
+        token_in: tokenIn,
+        token_out_denom: tokenOutDenom,
+        token_out_min_amount: tokenOutMinAmount
+      }
+    }, fee, memo, funds);
+  };
+  swapExactAmountOut = async ({
+    tokenInDenom,
+    tokenInMaxAmount,
+    tokenOut
+  }: {
+    tokenInDenom: string;
+    tokenInMaxAmount: Uint128;
+    tokenOut: Coin;
+  }, fee: number | StdFee | "auto" = "auto", memo?: string, funds?: Coin[]): Promise<ExecuteResult> => {
+    return await this.client.execute(this.sender, this.contractAddress, {
+      swap_exact_amount_out: {
+        token_in_denom: tokenInDenom,
+        token_in_max_amount: tokenInMaxAmount,
+        token_out: tokenOut
       }
     }, fee, memo, funds);
   };

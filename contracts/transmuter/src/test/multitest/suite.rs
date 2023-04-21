@@ -3,8 +3,8 @@ use std::vec;
 use super::test_env::*;
 use crate::{
     contract::{
-        ExecMsg, InstantiateMsg, IsActiveResponse, QueryMsg, SharesResponse,
-        TotalPoolLiquidityResponse, TotalSharesResponse,
+        ExecMsg, GetSharesResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse,
+        InstantiateMsg, IsActiveResponse, QueryMsg,
     },
     sudo::SudoMsg,
     ContractError,
@@ -88,7 +88,7 @@ fn test_join_pool() {
     assert_eq!(contract_balances, tokens_in);
 
     // check pool balance
-    let TotalPoolLiquidityResponse {
+    let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
     } = t
         .app
@@ -101,7 +101,7 @@ fn test_join_pool() {
         vec![Coin::new(0, ETH_USDC), tokens_in[0].clone()]
     );
     // check shares
-    let SharesResponse { shares } = t
+    let GetSharesResponse { shares } = t
         .app
         .wrap()
         .query_wasm_smart(
@@ -115,7 +115,7 @@ fn test_join_pool() {
     assert_eq!(shares, tokens_in[0].amount);
 
     // check total shares
-    let TotalSharesResponse { total_shares } = t
+    let GetTotalSharesResponse { total_shares } = t
         .app
         .wrap()
         .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
@@ -142,7 +142,7 @@ fn test_join_pool() {
     );
 
     // check pool balance
-    let TotalPoolLiquidityResponse {
+    let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
     } = t
         .app
@@ -155,7 +155,7 @@ fn test_join_pool() {
         vec![Coin::new(1_000, ETH_USDC), Coin::new(2_000, COSMOS_USDC)]
     );
     // check shares
-    let SharesResponse { shares } = t
+    let GetSharesResponse { shares } = t
         .app
         .wrap()
         .query_wasm_smart(
@@ -169,7 +169,7 @@ fn test_join_pool() {
     assert_eq!(shares, Uint128::new(3000));
 
     // check total shares
-    let TotalSharesResponse { total_shares } = t
+    let GetTotalSharesResponse { total_shares } = t
         .app
         .wrap()
         .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
@@ -196,7 +196,7 @@ fn test_join_pool() {
     );
 
     // check pool balance
-    let TotalPoolLiquidityResponse {
+    let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
     } = t
         .app
@@ -210,7 +210,7 @@ fn test_join_pool() {
     );
 
     // check shares
-    let SharesResponse { shares } = t
+    let GetSharesResponse { shares } = t
         .app
         .wrap()
         .query_wasm_smart(
@@ -224,7 +224,7 @@ fn test_join_pool() {
     assert_eq!(shares, Uint128::new(4000));
 
     // check total shares
-    let TotalSharesResponse { total_shares } = t
+    let GetTotalSharesResponse { total_shares } = t
         .app
         .wrap()
         .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
@@ -372,7 +372,7 @@ fn test_swap() {
 
     // check balances
     let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
-    let TotalPoolLiquidityResponse {
+    let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
     } = t
         .app
@@ -441,7 +441,7 @@ fn test_swap() {
 
     // check balances
     let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
-    let TotalPoolLiquidityResponse {
+    let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
     } = t
         .app
@@ -560,7 +560,7 @@ fn test_exit_pool() {
         .unwrap();
 
     // check shares
-    let SharesResponse { shares } = t
+    let GetSharesResponse { shares } = t
         .app
         .wrap()
         .query_wasm_smart(
@@ -574,7 +574,7 @@ fn test_exit_pool() {
     assert_eq!(shares, Uint128::new(100_000 - 500));
 
     // check total shares
-    let TotalSharesResponse { total_shares } = t
+    let GetTotalSharesResponse { total_shares } = t
         .app
         .wrap()
         .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
@@ -591,7 +591,7 @@ fn test_exit_pool() {
         ]
     );
 
-    let TotalPoolLiquidityResponse {
+    let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
     } = t
         .app
@@ -620,7 +620,7 @@ fn test_exit_pool() {
         .unwrap();
 
     // check shares
-    let SharesResponse { shares } = t
+    let GetSharesResponse { shares } = t
         .app
         .wrap()
         .query_wasm_smart(
@@ -634,7 +634,7 @@ fn test_exit_pool() {
     assert_eq!(shares, Uint128::new(0));
 
     // check total shares
-    let TotalSharesResponse { total_shares } = t
+    let GetTotalSharesResponse { total_shares } = t
         .app
         .wrap()
         .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
@@ -648,7 +648,7 @@ fn test_exit_pool() {
         vec![Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)]
     );
 
-    let TotalPoolLiquidityResponse {
+    let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
     } = t
         .app
@@ -733,7 +733,7 @@ fn test_3_pool_swap() {
         .unwrap();
 
     // check shares
-    let SharesResponse { shares } = t
+    let GetSharesResponse { shares } = t
         .app
         .wrap()
         .query_wasm_smart(
@@ -762,7 +762,7 @@ fn test_3_pool_swap() {
     );
 
     // check pool
-    let TotalPoolLiquidityResponse {
+    let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
     } = t
         .app
@@ -844,7 +844,7 @@ fn test_3_pool_swap() {
     );
 
     // check pool
-    let TotalPoolLiquidityResponse {
+    let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
     } = t
         .app
@@ -901,7 +901,7 @@ fn test_3_pool_swap() {
     );
 
     // check pool
-    let TotalPoolLiquidityResponse {
+    let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
     } = t
         .app
@@ -937,7 +937,7 @@ fn test_3_pool_swap() {
     );
 
     // check pool
-    let TotalPoolLiquidityResponse {
+    let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
     } = t
         .app

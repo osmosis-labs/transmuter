@@ -8,13 +8,22 @@ export type ExecuteMsg = {
         [k: string]: unknown;
     };
 } | {
-    transmute: {
-        token_out_denom: string;
+    exit_pool: {
+        tokens_out: Coin[];
         [k: string]: unknown;
     };
 } | {
-    exit_pool: {
-        tokens_out: Coin[];
+    swap_exact_amount_in: {
+        token_in: Coin;
+        token_out_denom: string;
+        token_out_min_amount: Uint128;
+        [k: string]: unknown;
+    };
+} | {
+    swap_exact_amount_out: {
+        token_in_denom: string;
+        token_in_max_amount: Uint128;
+        token_out: Coin;
         [k: string]: unknown;
     };
 };
@@ -29,17 +38,71 @@ export interface InstantiateMsg {
     [k: string]: unknown;
 }
 export type QueryMsg = {
-    pool: {
-        [k: string]: unknown;
-    };
-} | {
-    shares: {
+    get_shares: {
         address: string;
         [k: string]: unknown;
     };
+} | {
+    get_swap_fee: {
+        [k: string]: unknown;
+    };
+} | {
+    is_active: {
+        [k: string]: unknown;
+    };
+} | {
+    get_total_shares: {
+        [k: string]: unknown;
+    };
+} | {
+    get_total_pool_liquidity: {
+        [k: string]: unknown;
+    };
+} | {
+    spot_price: {
+        base_asset_denom: string;
+        quote_asset_denom: string;
+        [k: string]: unknown;
+    };
+} | {
+    calc_out_amt_given_in: {
+        swap_fee: Decimal;
+        token_in: Coin;
+        token_out_denom: string;
+        [k: string]: unknown;
+    };
+} | {
+    calc_in_amt_given_out: {
+        swap_fee: Decimal;
+        token_in_denom: string;
+        token_out: Coin;
+        [k: string]: unknown;
+    };
 };
+export type Decimal = string;
 export interface AdminResponse {
     admin?: string | null;
+}
+export interface CalcInAmtGivenOutResponse {
+    token_in: Coin;
+}
+export interface CalcOutAmtGivenInResponse {
+    token_out: Coin;
+}
+export interface GetSharesResponse {
+    shares: Uint128;
+}
+export interface GetSwapFeeResponse {
+    swap_fee: Decimal;
+}
+export interface GetTotalPoolLiquidityResponse {
+    total_pool_liquidity: Coin[];
+}
+export interface GetTotalSharesResponse {
+    total_shares: Uint128;
+}
+export interface IsActiveResponse {
+    is_active: boolean;
 }
 export interface PoolResponse {
     pool: TransmuterPool;
@@ -49,5 +112,8 @@ export interface TransmuterPool {
 }
 export interface SharesResponse {
     shares: Uint128;
+}
+export interface SpotPriceResponse {
+    spot_price: Decimal;
 }
 //# sourceMappingURL=Transmuter.types.d.ts.map

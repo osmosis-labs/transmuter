@@ -102,20 +102,82 @@ var _0 = /*#__PURE__*/Object.freeze({
 var TransmuterQueryClient = /** @class */ (function () {
     function TransmuterQueryClient(client, contractAddress) {
         var _this = this;
-        this.pool = function () { return __awaiter(_this, void 0, void 0, function () {
-            return __generator(this, function (_a) {
-                return [2 /*return*/, this.client.queryContractSmart(this.contractAddress, {
-                        pool: {}
-                    })];
-            });
-        }); };
-        this.shares = function (_a) {
+        this.getShares = function (_a) {
             var address = _a.address;
             return __awaiter(_this, void 0, void 0, function () {
                 return __generator(this, function (_b) {
                     return [2 /*return*/, this.client.queryContractSmart(this.contractAddress, {
-                            shares: {
+                            get_shares: {
                                 address: address
+                            }
+                        })];
+                });
+            });
+        };
+        this.getSwapFee = function () { return __awaiter(_this, void 0, void 0, function () {
+            return __generator(this, function (_a) {
+                return [2 /*return*/, this.client.queryContractSmart(this.contractAddress, {
+                        get_swap_fee: {}
+                    })];
+            });
+        }); };
+        this.isActive = function () { return __awaiter(_this, void 0, void 0, function () {
+            return __generator(this, function (_a) {
+                return [2 /*return*/, this.client.queryContractSmart(this.contractAddress, {
+                        is_active: {}
+                    })];
+            });
+        }); };
+        this.getTotalShares = function () { return __awaiter(_this, void 0, void 0, function () {
+            return __generator(this, function (_a) {
+                return [2 /*return*/, this.client.queryContractSmart(this.contractAddress, {
+                        get_total_shares: {}
+                    })];
+            });
+        }); };
+        this.getTotalPoolLiquidity = function () { return __awaiter(_this, void 0, void 0, function () {
+            return __generator(this, function (_a) {
+                return [2 /*return*/, this.client.queryContractSmart(this.contractAddress, {
+                        get_total_pool_liquidity: {}
+                    })];
+            });
+        }); };
+        this.spotPrice = function (_a) {
+            var baseAssetDenom = _a.baseAssetDenom, quoteAssetDenom = _a.quoteAssetDenom;
+            return __awaiter(_this, void 0, void 0, function () {
+                return __generator(this, function (_b) {
+                    return [2 /*return*/, this.client.queryContractSmart(this.contractAddress, {
+                            spot_price: {
+                                base_asset_denom: baseAssetDenom,
+                                quote_asset_denom: quoteAssetDenom
+                            }
+                        })];
+                });
+            });
+        };
+        this.calcOutAmtGivenIn = function (_a) {
+            var swapFee = _a.swapFee, tokenIn = _a.tokenIn, tokenOutDenom = _a.tokenOutDenom;
+            return __awaiter(_this, void 0, void 0, function () {
+                return __generator(this, function (_b) {
+                    return [2 /*return*/, this.client.queryContractSmart(this.contractAddress, {
+                            calc_out_amt_given_in: {
+                                swap_fee: swapFee,
+                                token_in: tokenIn,
+                                token_out_denom: tokenOutDenom
+                            }
+                        })];
+                });
+            });
+        };
+        this.calcInAmtGivenOut = function (_a) {
+            var swapFee = _a.swapFee, tokenInDenom = _a.tokenInDenom, tokenOut = _a.tokenOut;
+            return __awaiter(_this, void 0, void 0, function () {
+                return __generator(this, function (_b) {
+                    return [2 /*return*/, this.client.queryContractSmart(this.contractAddress, {
+                            calc_in_amt_given_out: {
+                                swap_fee: swapFee,
+                                token_in_denom: tokenInDenom,
+                                token_out: tokenOut
                             }
                         })];
                 });
@@ -123,8 +185,14 @@ var TransmuterQueryClient = /** @class */ (function () {
         };
         this.client = client;
         this.contractAddress = contractAddress;
-        this.pool = this.pool.bind(this);
-        this.shares = this.shares.bind(this);
+        this.getShares = this.getShares.bind(this);
+        this.getSwapFee = this.getSwapFee.bind(this);
+        this.isActive = this.isActive.bind(this);
+        this.getTotalShares = this.getTotalShares.bind(this);
+        this.getTotalPoolLiquidity = this.getTotalPoolLiquidity.bind(this);
+        this.spotPrice = this.spotPrice.bind(this);
+        this.calcOutAmtGivenIn = this.calcOutAmtGivenIn.bind(this);
+        this.calcInAmtGivenOut = this.calcInAmtGivenOut.bind(this);
     }
     return TransmuterQueryClient;
 }());
@@ -145,22 +213,6 @@ var TransmuterClient = /** @class */ (function (_super) {
                 });
             });
         };
-        _this.transmute = function (_a, fee, memo, funds) {
-            var tokenOutDenom = _a.tokenOutDenom;
-            if (fee === void 0) { fee = "auto"; }
-            return __awaiter(_this, void 0, void 0, function () {
-                return __generator(this, function (_b) {
-                    switch (_b.label) {
-                        case 0: return [4 /*yield*/, this.client.execute(this.sender, this.contractAddress, {
-                                transmute: {
-                                    token_out_denom: tokenOutDenom
-                                }
-                            }, fee, memo, funds)];
-                        case 1: return [2 /*return*/, _b.sent()];
-                    }
-                });
-            });
-        };
         _this.exitPool = function (_a, fee, memo, funds) {
             var tokensOut = _a.tokensOut;
             if (fee === void 0) { fee = "auto"; }
@@ -177,12 +229,49 @@ var TransmuterClient = /** @class */ (function (_super) {
                 });
             });
         };
+        _this.swapExactAmountIn = function (_a, fee, memo, funds) {
+            var tokenIn = _a.tokenIn, tokenOutDenom = _a.tokenOutDenom, tokenOutMinAmount = _a.tokenOutMinAmount;
+            if (fee === void 0) { fee = "auto"; }
+            return __awaiter(_this, void 0, void 0, function () {
+                return __generator(this, function (_b) {
+                    switch (_b.label) {
+                        case 0: return [4 /*yield*/, this.client.execute(this.sender, this.contractAddress, {
+                                swap_exact_amount_in: {
+                                    token_in: tokenIn,
+                                    token_out_denom: tokenOutDenom,
+                                    token_out_min_amount: tokenOutMinAmount
+                                }
+                            }, fee, memo, funds)];
+                        case 1: return [2 /*return*/, _b.sent()];
+                    }
+                });
+            });
+        };
+        _this.swapExactAmountOut = function (_a, fee, memo, funds) {
+            var tokenInDenom = _a.tokenInDenom, tokenInMaxAmount = _a.tokenInMaxAmount, tokenOut = _a.tokenOut;
+            if (fee === void 0) { fee = "auto"; }
+            return __awaiter(_this, void 0, void 0, function () {
+                return __generator(this, function (_b) {
+                    switch (_b.label) {
+                        case 0: return [4 /*yield*/, this.client.execute(this.sender, this.contractAddress, {
+                                swap_exact_amount_out: {
+                                    token_in_denom: tokenInDenom,
+                                    token_in_max_amount: tokenInMaxAmount,
+                                    token_out: tokenOut
+                                }
+                            }, fee, memo, funds)];
+                        case 1: return [2 /*return*/, _b.sent()];
+                    }
+                });
+            });
+        };
         _this.client = client;
         _this.sender = sender;
         _this.contractAddress = contractAddress;
         _this.joinPool = _this.joinPool.bind(_this);
-        _this.transmute = _this.transmute.bind(_this);
         _this.exitPool = _this.exitPool.bind(_this);
+        _this.swapExactAmountIn = _this.swapExactAmountIn.bind(_this);
+        _this.swapExactAmountOut = _this.swapExactAmountOut.bind(_this);
         return _this;
     }
     return TransmuterClient;
