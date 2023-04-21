@@ -58,7 +58,7 @@ test_swap! {
             token_out: Coin::new(1_000_000, "denom1"),
         },
         funds = [Coin::new(1_000_000, "denom0")],
-        err = ContractError::ExceedingTokenIn {
+        err = ContractError::ExcessiveRequiredTokenIn {
             limit: 999_999u128.into(),
             required: 1_000_000u128.into()
         }

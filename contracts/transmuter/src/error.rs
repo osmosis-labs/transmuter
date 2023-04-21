@@ -6,12 +6,6 @@ pub enum ContractError {
     #[error("{0}")]
     Std(#[from] StdError),
 
-    #[error("Unauthorized")]
-    Unauthorized {},
-
-    #[error("Custom Error val: {val:?}")]
-    CustomError { val: String },
-
     #[error("Funds must contain exactly one token")]
     SingleTokenExpected {},
 
@@ -45,22 +39,22 @@ pub enum ContractError {
     #[error("Invalid swap fee: expected: {expected}, actual: {actual}")]
     InvalidSwapFee { expected: Decimal, actual: Decimal },
 
-    /// Error when >= requirement is not met
-    #[error("Insufficient token out: required: {required}, available: {available}")]
-    InsufficientTokenOut {
-        required: Uint128,
-        available: Uint128,
-    },
-
-    /// Error when == requirement is not met
+    /// This error should never occur, but is here for completeness
+    /// This will happens if and only if calculated token out and expected token out are not equal
     #[error("Invalid token out amount: expected: {expected}, actual: {actual}")]
     InvalidTokenOutAmount { expected: Uint128, actual: Uint128 },
 
     #[error("Spot price query failed: reason {reason}")]
     SpotPriceQueryFailed { reason: String },
 
-    #[error("Exceeding token in required: max acceptable token in: {limit}, required: {required}")]
-    ExceedingTokenIn { limit: Uint128, required: Uint128 },
+    #[error("Insufficient token out: required: {required}, available: {available}")]
+    InsufficientTokenOut {
+        required: Uint128,
+        available: Uint128,
+    },
+
+    #[error("Excessive token in required: max acceptable token in: {limit}, required: {required}")]
+    ExcessiveRequiredTokenIn { limit: Uint128, required: Uint128 },
 
     #[error("The pool is currently inactive")]
     InactivePool {},

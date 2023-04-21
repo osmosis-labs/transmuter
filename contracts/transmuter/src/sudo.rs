@@ -89,7 +89,7 @@ impl SudoMsg {
 
                 ensure!(
                     token_in.amount <= token_in_max_amount,
-                    ContractError::ExceedingTokenIn {
+                    ContractError::ExcessiveRequiredTokenIn {
                         limit: token_in_max_amount,
                         required: token_in.amount,
                     }
