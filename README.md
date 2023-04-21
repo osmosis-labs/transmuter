@@ -41,20 +41,23 @@ transmuter_user = transmuter.signer(user);
 
 ### Checking the contract state
 
-checking pool
+checking pool liquidity
 
 ```js
-await transmuter.pool();
-
-// or make `[Object]` visible
-console.dir(await transmuter.pool(), { depth: null });
+await transmuter.getTotalPoolLiquidity()
 ```
 
-checking shares
+checking shares for each address
 
 ```js
-await transmuter.shares({ address: provider.address }); // => { shares: '1000000' }
-await transmuter.shares({ address: user.address }); // => { shares: '0' }
+await transmuter.getShares({ address: provider.address });
+await transmuter.getShares({ address: user.address });
+```
+
+checking total shares
+
+```js
+await transmuter.getTotalShares();
 ```
 
 ### Join pool
@@ -69,15 +72,36 @@ await transmuter_provider.joinPool(
 
 ### Transmute
 
+Transmutation is a 1-direction 1:1 conversion of one asset to another.
+
+For this, we keep the interface for transmute to follow the same convention with `swapExactAmountIn` and `swapExactAmountOut` from `poolmanager` module as we will integrate this contract with `poolmanager` module in the future. (see [future work](#future-work))
+
 ```js
-await transmuter_user.transmute(
+await transmuter_user.swapExactAmountIn(
   {
+    tokenIn: { amount: "200000", denom: osmo_denom },
     tokenOutDenom: xosmo_denom,
+    tokenOutMinAmount: "200000",
   }, // argument
   "auto", // gas
   undefined, // memo
   [{ amount: "200000", denom: osmo_denom }] // funds
 );
+```
+
+or equivalently
+
+```js
+await transmuter_user.swapExactAmountOut(
+  {
+    tokenInDenom: osmo_denom,
+    tokenInMaxAmount: "200000",
+    tokenOut: { amount: "200000", denom: xosmo_denom }
+  },
+  "auto", // gas
+  undefined, // memo
+  [{ amount: "200000", denom: osmo_denom }] // funds
+)
 ```
 
 ### Exit pool
