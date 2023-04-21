@@ -358,7 +358,11 @@ impl Transmuter<'_> {
             ContractError::SpotPriceQueryFailed {
                 reason: format!(
                     "quote_asset_denom is not in pool assets: must be one of {:?} but got {}",
-                    pool.pool_assets, quote_asset_denom
+                    pool.pool_assets
+                        .iter()
+                        .map(|coin| coin.denom.clone())
+                        .collect::<Vec<_>>(),
+                    quote_asset_denom
                 )
             }
         );
@@ -369,7 +373,11 @@ impl Transmuter<'_> {
             ContractError::SpotPriceQueryFailed {
                 reason: format!(
                     "base_asset_denom is not in pool assets: must be one of {:?} but got {}",
-                    pool.pool_assets, base_asset_denom
+                    pool.pool_assets
+                        .iter()
+                        .map(|coin| coin.denom.clone())
+                        .collect::<Vec<_>>(),
+                    base_asset_denom
                 )
             }
         );
