@@ -93,7 +93,7 @@ impl Transmuter<'_> {
     /// As long as the sender has enough shares, the contract will send `tokens_out` amount of tokens to the sender.
     /// The amount of shares will be deducted from the sender's shares.
     #[msg(exec)]
-    fn exit_pool(
+    pub fn exit_pool(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
         tokens_out: Vec<Coin>,
@@ -280,7 +280,7 @@ impl Transmuter<'_> {
     }
 
     #[msg(query)]
-    fn get_shares(
+    pub fn get_shares(
         &self,
         ctx: (Deps, Env),
         address: String,

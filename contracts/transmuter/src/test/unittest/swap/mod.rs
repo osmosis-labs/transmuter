@@ -174,5 +174,4 @@ fn pool_with_single_lp(
 
 mod client_error;
 mod empty_pool;
-
 mod non_empty_pool;
