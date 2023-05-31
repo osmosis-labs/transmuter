@@ -1,9 +1,10 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_eq, to_binary, BankMsg, Coin, Decimal, Deps, DepsMut, Env, MessageInfo,
-    Response, Uint128,
+    ensure, ensure_eq, to_binary, BankMsg, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Reply,
+    Response, StdError, SubMsg, Uint128,
 };
 use cw_storage_plus::Item;
+use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgCreateDenom, MsgCreateDenomResponse};
 use sylvia::contract;
 
 use crate::{
@@ -18,6 +19,8 @@ const CONTRACT_NAME: &str = "crates.io:transmuter";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const SWAP_FEE: Decimal = Decimal::zero();
+
+const CREATE_LP_DENOM_REPLY_ID: u64 = 1;
 
 pub struct Transmuter<'a> {
     pub(crate) active_status: Item<'a, bool>,
@@ -43,7 +46,7 @@ impl Transmuter<'_> {
         ctx: (DepsMut, Env, MessageInfo),
         pool_asset_denoms: Vec<String>,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, _info) = ctx;
+        let (deps, env, _info) = ctx;
 
         // store contract version for migration info
         cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
@@ -55,10 +58,36 @@ impl Transmuter<'_> {
         // set active status to true
         self.active_status.save(deps.storage, &true)?;
 
+        // create lp denom
+        let msg_create_lp_denom = SubMsg::reply_on_success(
+            MsgCreateDenom {
+                sender: env.contract.address.to_string(),
+                subdenom: format!("cosmwasmpool/lp/{}", pool_asset_denoms.join("-")),
+            },
+            CREATE_LP_DENOM_REPLY_ID,
+        );
+
         Ok(Response::new()
             .add_attribute("method", "instantiate")
             .add_attribute("contract_name", CONTRACT_NAME)
-            .add_attribute("contract_version", CONTRACT_VERSION))
+            .add_attribute("contract_version", CONTRACT_VERSION)
+            .add_submessage(msg_create_lp_denom))
+    }
+
+    pub fn reply(&self, ctx: (DepsMut, Env), msg: Reply) -> Result<Response, ContractError> {
+        let (deps, _env) = ctx;
+
+        match msg.id {
+            CREATE_LP_DENOM_REPLY_ID => {
+                // register created token denom
+                let MsgCreateDenomResponse { new_token_denom } = msg.result.try_into()?;
+                self.shares
+                    .set_share_denom(deps.storage, &new_token_denom)?;
+
+                Ok(Response::new().add_attribute("lp_denom", new_token_denom))
+            }
+            _ => Err(StdError::not_found(format!("No reply handler found for: {:?}", msg)).into()),
+        }
     }
 
     /// Join pool with tokens that exist in the pool.
@@ -294,6 +323,17 @@ impl Transmuter<'_> {
     }
 
     #[msg(query)]
+    pub(crate) fn get_share_denom(
+        &self,
+        ctx: (Deps, Env),
+    ) -> Result<GetShareDenomResponse, ContractError> {
+        let (deps, _env) = ctx;
+        Ok(GetShareDenomResponse {
+            share_denom: self.shares.get_share_denom(deps.storage)?,
+        })
+    }
+
+    #[msg(query)]
     pub(crate) fn get_swap_fee(
         &self,
         _ctx: (Deps, Env),
@@ -512,6 +552,11 @@ impl Transmuter<'_> {
 #[cw_serde]
 pub struct GetSharesResponse {
     pub shares: Uint128,
+}
+
+#[cw_serde]
+pub struct GetShareDenomResponse {
+    pub share_denom: String,
 }
 
 #[cw_serde]

@@ -4,6 +4,7 @@ use cw_storage_plus::{Item, Map};
 pub struct Shares<'a> {
     shares: Map<'a, &'a Addr, Uint128>,
     total_shares: Item<'a, Uint128>,
+    share_denom: Item<'a, String>,
 }
 
 impl Shares<'_> {
@@ -11,7 +12,18 @@ impl Shares<'_> {
         Self {
             shares: Map::new("shares"),
             total_shares: Item::new("total_shares"),
+            share_denom: Item::new("share_denom"),
         }
+    }
+
+    /// get the share denom
+    pub fn get_share_denom(&self, store: &dyn Storage) -> StdResult<String> {
+        self.share_denom.load(store)
+    }
+
+    /// set the share denom
+    pub fn set_share_denom(&self, store: &mut dyn Storage, share_denom: &String) -> StdResult<()> {
+        self.share_denom.save(store, share_denom)
     }
 
     /// get the total shares
