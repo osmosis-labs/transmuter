@@ -4,7 +4,9 @@ use cosmwasm_std::{
     Response, StdError, SubMsg, Uint128,
 };
 use cw_storage_plus::Item;
-use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgCreateDenom, MsgCreateDenomResponse};
+use osmosis_std::types::osmosis::tokenfactory::v1beta1::{
+    MsgBurn, MsgCreateDenom, MsgCreateDenomResponse, MsgMint,
+};
 use sylvia::contract;
 
 use crate::{
@@ -62,7 +64,7 @@ impl Transmuter<'_> {
         let msg_create_lp_denom = SubMsg::reply_on_success(
             MsgCreateDenom {
                 sender: env.contract.address.to_string(),
-                subdenom: format!("cosmwasmpool/lp/{}", pool_asset_denoms.join("-")),
+                subdenom: "cosmwasmpoo/lp".to_owned(),
             },
             CREATE_LP_DENOM_REPLY_ID,
         );
@@ -94,7 +96,7 @@ impl Transmuter<'_> {
     /// Token used to join pool is sent to the contract via `funds` in `MsgExecuteContract`.
     #[msg(exec)]
     pub fn join_pool(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
+        let (deps, env, info) = ctx;
 
         // ensure funds not empty
         ensure!(
@@ -115,7 +117,17 @@ impl Transmuter<'_> {
                 Ok(pool)
             })?;
 
-        Ok(Response::new().add_attribute("method", "join_pool"))
+        // mint lp tokens
+        let share_denom = self.shares.get_share_denom(deps.storage)?;
+        let mint_msg = MsgMint {
+            sender: env.contract.address.to_string(),
+            amount: Some(Coin::new(new_shares.u128(), share_denom).into()),
+            mint_to_address: info.sender.to_string(),
+        };
+
+        Ok(Response::new()
+            .add_attribute("method", "join_pool")
+            .add_message(mint_msg))
     }
 
     /// Exit pool with `tokens_out` amount of tokens.
@@ -127,7 +139,7 @@ impl Transmuter<'_> {
         ctx: (DepsMut, Env, MessageInfo),
         tokens_out: Vec<Coin>,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
+        let (deps, env, info) = ctx;
 
         // check if sender's shares is enough
         let sender_shares = self.shares.get_share(deps.as_ref().storage, &info.sender)?;
@@ -158,8 +170,17 @@ impl Transmuter<'_> {
             amount: tokens_out,
         };
 
+        // burn lp tokens
+        let share_denom = self.shares.get_share_denom(deps.storage)?;
+        let burn_msg = MsgBurn {
+            sender: env.contract.address.to_string(),
+            amount: Some(Coin::new(required_shares.u128(), share_denom).into()),
+            burn_from_address: info.sender.to_string(),
+        };
+
         Ok(Response::new()
             .add_attribute("method", "exit_pool")
+            .add_message(burn_msg)
             .add_message(bank_send_msg))
     }
 

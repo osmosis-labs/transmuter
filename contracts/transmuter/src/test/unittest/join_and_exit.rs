@@ -112,8 +112,8 @@ fn test_join_pool_with_single_lp_should_update_shares_and_liquidity_properly() {
         assert_eq!(
             pool_liquidity,
             case.funds
-                .to_vec()
-                .into_iter()
+                .iter()
+                .cloned()
                 .filter(|coin| !coin.amount.is_zero())
                 .collect::<Vec<Coin>>(),
             "check if pool liquidity is updated: {:?}",
@@ -243,9 +243,7 @@ fn test_join_pool_should_update_shares_and_liquidity_properly() {
             .iter()
             .fold(HashMap::new(), |mut acc, (_, funds)| {
                 for coin in funds {
-                    let amount = acc
-                        .entry(coin.denom.clone())
-                        .or_insert_with(|| Uint128::zero());
+                    let amount = acc.entry(coin.denom.clone()).or_insert_with(Uint128::zero);
                     *amount += coin.amount;
                 }
                 acc
@@ -356,8 +354,8 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
         assert_eq!(
             pool_liquidity,
             case.join
-                .to_vec()
-                .into_iter()
+                .iter()
+                .cloned()
                 .filter(|coin| !coin.amount.is_zero())
                 .collect::<Vec<Coin>>(),
             "check if pool liquidity is updated: {:?}",
