@@ -64,7 +64,7 @@ impl Transmuter<'_> {
         let msg_create_lp_denom = SubMsg::reply_on_success(
             MsgCreateDenom {
                 sender: env.contract.address.to_string(),
-                subdenom: "cosmwasmpoo/lp".to_owned(),
+                subdenom: "transmuter/poolshare".to_owned(),
             },
             CREATE_LP_DENOM_REPLY_ID,
         );
