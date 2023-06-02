@@ -55,3 +55,4 @@ osmosis-std = { git = "https://github.com/osmosis-labs/osmosis-rust.git"}
 [dev-dependencies]
 anyhow = "1.0.68"
 cw-multi-test = "0.13.2"
+osmosis-test-tube = { git = "https://github.com/osmosis-labs/test-tube.git", branch = "main" }

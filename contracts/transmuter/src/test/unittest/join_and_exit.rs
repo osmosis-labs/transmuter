@@ -4,6 +4,7 @@ use cosmwasm_std::{
     testing::{mock_dependencies, mock_env, mock_info},
     Addr, BankMsg, Coin, SubMsg, Uint128,
 };
+use osmosis_std::types::osmosis::tokenfactory::v1beta1::MsgBurn;
 
 use crate::{contract::Transmuter, ContractError};
 
@@ -67,6 +68,14 @@ fn test_join_pool_with_single_lp_should_update_shares_and_liquidity_properly() {
             .instantiate(
                 (deps.as_mut(), mock_env(), mock_info("instantiator", &[])),
                 vec!["denom0".to_string(), "denom1".to_string()],
+            )
+            .unwrap();
+
+        transmuter
+            .shares
+            .set_share_denom(
+                &mut deps.storage,
+                &"factory/contract_address/transmuter/poolshare".to_string(),
             )
             .unwrap();
 
@@ -183,6 +192,14 @@ fn test_join_pool_should_update_shares_and_liquidity_properly() {
             .instantiate(
                 (deps.as_mut(), mock_env(), mock_info("instantiator", &[])),
                 vec!["denom0".to_string(), "denom1".to_string()],
+            )
+            .unwrap();
+
+        transmuter
+            .shares
+            .set_share_denom(
+                &mut deps.storage,
+                &"factory/contract_address/transmuter/poolshare".to_string(),
             )
             .unwrap();
 
@@ -312,6 +329,13 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
             )
             .unwrap();
 
+        let share_denom = "factory/contract_address/transmuter/poolshare".to_string();
+
+        transmuter
+            .shares
+            .set_share_denom(&mut deps.storage, &share_denom)
+            .unwrap();
+
         transmuter
             .join_pool((deps.as_mut(), mock_env(), mock_info("addr1", &case.join)))
             .unwrap();
@@ -370,18 +394,38 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
             )
             .unwrap();
 
+        // sum of exit amount
+        let exit_amount = case
+            .exit
+            .iter()
+            .fold(Uint128::zero(), |acc, coin| acc + coin.amount)
+            .u128();
+
         assert_eq!(
             res.messages,
-            vec![SubMsg {
-                id: 0,
-                msg: BankMsg::Send {
-                    to_address: "addr1".to_string(),
-                    amount: case.exit.clone()
+            vec![
+                SubMsg {
+                    id: 0,
+                    msg: MsgBurn {
+                        sender: mock_env().contract.address.to_string(),
+                        amount: Some(Coin::new(exit_amount, share_denom).into()),
+                        burn_from_address: "addr1".to_string(),
+                    }
+                    .into(),
+                    gas_limit: None,
+                    reply_on: cosmwasm_std::ReplyOn::Never
+                },
+                SubMsg {
+                    id: 0,
+                    msg: BankMsg::Send {
+                        to_address: "addr1".to_string(),
+                        amount: case.exit.clone()
+                    }
+                    .into(),
+                    gas_limit: None,
+                    reply_on: cosmwasm_std::ReplyOn::Never
                 }
-                .into(),
-                gas_limit: None,
-                reply_on: cosmwasm_std::ReplyOn::Never
-            }]
+            ]
         );
 
         let total_exit_amount = case
@@ -481,6 +525,14 @@ fn test_exit_pool_greater_than_their_shares_should_fail() {
             .unwrap();
 
         transmuter
+            .shares
+            .set_share_denom(
+                &mut deps.storage,
+                &"factory/contract_address/transmuter/poolshare".to_string(),
+            )
+            .unwrap();
+
+        transmuter
             .join_pool((deps.as_mut(), mock_env(), mock_info("addr1", &case.join)))
             .unwrap();
 
@@ -516,6 +568,14 @@ fn test_exit_pool_within_shares_but_over_joined_denom_amount() {
         .instantiate(
             (deps.as_mut(), mock_env(), mock_info("instantiator", &[])),
             vec!["denom0".to_string(), "denom1".to_string()],
+        )
+        .unwrap();
+
+    transmuter
+        .shares
+        .set_share_denom(
+            &mut deps.storage,
+            &"factory/contract_address/transmuter/poolshare".to_string(),
         )
         .unwrap();
 
