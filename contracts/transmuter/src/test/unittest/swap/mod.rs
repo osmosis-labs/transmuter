@@ -164,6 +164,15 @@ fn pool_with_single_lp(
         )
         .unwrap();
 
+    // set share denom
+    transmuter
+        .shares
+        .set_share_denom(
+            &mut deps.storage,
+            &"factory/contract_address/transmuter/poolshare".to_string(),
+        )
+        .unwrap();
+
     // join pool with initial tokens
     transmuter
         .join_pool((deps.as_mut(), mock_env(), mock_info("joiner", pool_assets)))
