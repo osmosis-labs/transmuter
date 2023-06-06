@@ -46,13 +46,15 @@ cosmwasm-storage = "1.1.2"
 cw-controllers = "1.0.1"
 cw-storage-plus = "0.13.2"
 cw2 = "0.13.2"
+osmosis-std = {git = "https://github.com/osmosis-labs/osmosis-rust.git"}
 schemars = "0.8.8"
 serde = {version = "1.0.137", default-features = false, features = ["derive"]}
 sylvia = "0.2.2"
 thiserror = {version = "1.0.31"}
-osmosis-std = { git = "https://github.com/osmosis-labs/osmosis-rust.git"}
 
 [dev-dependencies]
 anyhow = "1.0.68"
 cw-multi-test = "0.13.2"
-osmosis-test-tube = { git = "https://github.com/osmosis-labs/test-tube.git", branch = "main" }
+# osmosis-test-tube = { git = "https://github.com/osmosis-labs/test-tube.git", branch = "main" }
+osmosis-test-tube = {path = "../../../test-tube/packages/osmosis-test-tube"}
+# fix accumnulator

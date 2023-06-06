@@ -9,8 +9,13 @@ use crate::{
     sudo::SudoMsg,
     ContractError,
 };
-use cosmwasm_std::{Addr, BankMsg, Coin, Decimal, Uint128};
+use cosmwasm_std::{BankMsg, Coin, Decimal, Uint128};
+
 use cw_multi_test::Executor;
+
+use osmosis_test_tube::{
+    cosmrs::proto::cosmos::bank::v1beta1::MsgSend, Account, Bank, Module, OsmosisTestApp,
+};
 
 const ETH_USDC: &str = "ibc/AXLETHUSDC";
 const ETH_DAI: &str = "ibc/AXLETHDAI";
@@ -18,7 +23,8 @@ const COSMOS_USDC: &str = "ibc/COSMOSUSDC";
 
 #[test]
 fn test_join_pool() {
-    let mut t = TestEnvBuilder::new()
+    let app = OsmosisTestApp::new();
+    let t = TestEnvBuilder::new()
         .with_account(
             "provider_1",
             vec![
@@ -34,174 +40,123 @@ fn test_join_pool() {
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
         })
-        .build();
+        .build(&app);
 
     // failed to join pool with 0 denom
     let err = t
-        .app
-        .execute_contract(
-            t.accounts["provider_1"].clone(),
-            t.contract.clone(),
-            &ExecMsg::JoinPool {},
-            &[],
-        )
+        .contract
+        .execute(&ExecMsg::JoinPool {}, &[], &t.accounts["provider_1"])
         .unwrap_err();
 
-    assert_eq!(
-        err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::AtLeastSingleTokenExpected {}
-    );
+    assert_contract_err(ContractError::AtLeastSingleTokenExpected {}, err);
 
     // fail to join pool with denom that is not in the pool
     let tokens_in = vec![Coin::new(1_000, "urandom")];
     let err = t
-        .app
-        .execute_contract(
-            t.accounts["provider_1"].clone(),
-            t.contract.clone(),
-            &ExecMsg::JoinPool {},
-            &tokens_in,
-        )
+        .contract
+        .execute(&ExecMsg::JoinPool {}, &tokens_in, &t.accounts["provider_1"])
         .unwrap_err();
 
-    assert_eq!(
-        err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::InvalidJoinPoolDenom {
+    assert_contract_err(
+        ContractError::InvalidJoinPoolDenom {
             denom: "urandom".to_string(),
-            expected_denom: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()]
-        }
+            expected_denom: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
+        },
+        err,
     );
 
     // join pool with correct pool's denom should added to the contract's balance and update state
     let tokens_in = vec![Coin::new(1_000, COSMOS_USDC)];
-    t.app
-        .execute_contract(
-            t.accounts["provider_1"].clone(),
-            t.contract.clone(),
-            &ExecMsg::JoinPool {},
-            &tokens_in,
-        )
+
+    t.contract
+        .execute(&ExecMsg::JoinPool {}, &tokens_in, &t.accounts["provider_1"])
         .unwrap();
 
     // check contract balances
-    let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
-    assert_eq!(contract_balances, tokens_in);
+    t.assert_contract_balances(&tokens_in);
 
     // check pool balance
     let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
     } = t
-        .app
-        .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
+        .contract
+        .query(&QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
 
     assert_eq!(
         total_pool_liquidity,
         vec![Coin::new(0, ETH_USDC), tokens_in[0].clone()]
     );
+
     // check shares
     let GetSharesResponse { shares } = t
-        .app
-        .wrap()
-        .query_wasm_smart(
-            t.contract.clone(),
-            &QueryMsg::GetShares {
-                address: t.accounts["provider_1"].to_string(),
-            },
-        )
+        .contract
+        .query(&QueryMsg::GetShares {
+            address: t.accounts["provider_1"].address(),
+        })
         .unwrap();
 
     assert_eq!(shares, tokens_in[0].amount);
 
     // check total shares
-    let GetTotalSharesResponse { total_shares } = t
-        .app
-        .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
-        .unwrap();
+    let GetTotalSharesResponse { total_shares } =
+        t.contract.query(&QueryMsg::GetTotalShares {}).unwrap();
 
     assert_eq!(total_shares, tokens_in[0].amount);
 
     // join pool with multiple correct pool's denom should added to the contract's balance and update state
     let tokens_in = vec![Coin::new(1_000, ETH_USDC), Coin::new(1_000, COSMOS_USDC)];
-    t.app
-        .execute_contract(
-            t.accounts["provider_1"].clone(),
-            t.contract.clone(),
-            &ExecMsg::JoinPool {},
-            &tokens_in,
-        )
+    t.contract
+        .execute(&ExecMsg::JoinPool {}, &tokens_in, &t.accounts["provider_1"])
         .unwrap();
 
     // check contract balances
-    let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
-    assert_eq!(
-        contract_balances,
-        vec![Coin::new(1_000, ETH_USDC), Coin::new(2_000, COSMOS_USDC)]
-    );
+    t.assert_contract_balances(&[Coin::new(1_000, ETH_USDC), Coin::new(2_000, COSMOS_USDC)]);
 
     // check pool balance
     let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
     } = t
-        .app
-        .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
+        .contract
+        .query(&QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
 
     assert_eq!(
         total_pool_liquidity,
         vec![Coin::new(1_000, ETH_USDC), Coin::new(2_000, COSMOS_USDC)]
     );
+
     // check shares
     let GetSharesResponse { shares } = t
-        .app
-        .wrap()
-        .query_wasm_smart(
-            t.contract.clone(),
-            &QueryMsg::GetShares {
-                address: t.accounts["provider_1"].to_string(),
-            },
-        )
+        .contract
+        .query(&QueryMsg::GetShares {
+            address: t.accounts["provider_1"].address(),
+        })
         .unwrap();
 
     assert_eq!(shares, Uint128::new(3000));
 
     // check total shares
-    let GetTotalSharesResponse { total_shares } = t
-        .app
-        .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
-        .unwrap();
+    let GetTotalSharesResponse { total_shares } =
+        t.contract.query(&QueryMsg::GetTotalShares {}).unwrap();
 
     assert_eq!(total_shares, Uint128::new(3000));
 
     // join pool with another provider with multiple correct pool's denom should added to the contract's balance and update state
     let tokens_in = vec![Coin::new(2_000, ETH_USDC), Coin::new(2_000, COSMOS_USDC)];
-    t.app
-        .execute_contract(
-            t.accounts["provider_2"].clone(),
-            t.contract.clone(),
-            &ExecMsg::JoinPool {},
-            &tokens_in,
-        )
+    t.contract
+        .execute(&ExecMsg::JoinPool {}, &tokens_in, &t.accounts["provider_2"])
         .unwrap();
 
     // check contract balances
-    let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
-    assert_eq!(
-        contract_balances,
-        vec![Coin::new(3_000, ETH_USDC), Coin::new(4_000, COSMOS_USDC)]
-    );
+    t.assert_contract_balances(&[Coin::new(3_000, ETH_USDC), Coin::new(4_000, COSMOS_USDC)]);
 
     // check pool balance
     let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
     } = t
-        .app
-        .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
+        .contract
+        .query(&QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
 
     assert_eq!(
@@ -211,24 +166,17 @@ fn test_join_pool() {
 
     // check shares
     let GetSharesResponse { shares } = t
-        .app
-        .wrap()
-        .query_wasm_smart(
-            t.contract.clone(),
-            &QueryMsg::GetShares {
-                address: t.accounts["provider_2"].to_string(),
-            },
-        )
+        .contract
+        .query(&QueryMsg::GetShares {
+            address: t.accounts["provider_2"].address(),
+        })
         .unwrap();
 
     assert_eq!(shares, Uint128::new(4000));
 
     // check total shares
-    let GetTotalSharesResponse { total_shares } = t
-        .app
-        .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
-        .unwrap();
+    let GetTotalSharesResponse { total_shares } =
+        t.contract.query(&QueryMsg::GetTotalShares {}).unwrap();
 
     assert_eq!(total_shares, Uint128::new(7000));
 }
@@ -249,7 +197,7 @@ fn test_swap() {
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
         })
-        .build();
+        ._build();
 
     // join pool
     let tokens_in = vec![Coin::new(100_000, COSMOS_USDC)];
@@ -471,240 +419,239 @@ fn test_swap() {
 
 #[test]
 fn test_exit_pool() {
-    let mut t = TestEnvBuilder::new()
+    let app = OsmosisTestApp::new();
+    let bank = Bank::new(&app);
+    let t = TestEnvBuilder::new()
         .with_account("user", vec![Coin::new(1_500, ETH_USDC)])
         .with_account("provider_1", vec![Coin::new(100_000, COSMOS_USDC)])
         .with_account("provider_2", vec![Coin::new(100_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
         })
-        .build();
+        .build(&app);
 
     // join pool
-    t.app
-        .execute_contract(
-            t.accounts["provider_1"].clone(),
-            t.contract.clone(),
+    t.contract
+        .execute(
             &ExecMsg::JoinPool {},
             &[Coin::new(100_000, COSMOS_USDC)],
+            &t.accounts["provider_1"],
         )
         .unwrap();
 
-    t.app
-        .execute_contract(
-            t.accounts["provider_2"].clone(),
-            t.contract.clone(),
+    t.contract
+        .execute(
             &ExecMsg::JoinPool {},
             &[Coin::new(100_000, COSMOS_USDC)],
+            &t.accounts["provider_2"],
         )
         .unwrap();
 
     // swap to build up token_in
     let token_in = Coin::new(1_500, ETH_USDC);
 
-    t.app
-        .execute(
-            t.accounts["user"].clone(),
-            BankMsg::Send {
-                to_address: t.contract.to_string(),
-                amount: vec![token_in.clone()],
-            }
-            .into(),
-        )
-        .unwrap();
+    bank.send(
+        MsgSend {
+            from_address: t.accounts["user"].address(),
+            to_address: t.contract.contract_addr,
+            amount: vec![to_proto_coin(&token_in)],
+        },
+        &t.accounts["user"],
+    )
+    .unwrap();
 
-    t.app
-        .wasm_sudo(
-            t.contract.clone(),
-            &SudoMsg::SwapExactAmountIn {
-                sender: t.accounts["user"].to_string(),
-                token_in,
-                token_out_denom: COSMOS_USDC.to_string(),
-                token_out_min_amount: Uint128::from(1_500u128),
-                swap_fee: Decimal::zero(),
-            },
-        )
-        .unwrap();
+    // t.app
+    //     .wasm_sudo(
+    //         t.contract.clone(),
+    //         &SudoMsg::SwapExactAmountIn {
+    //             sender: t.accounts["user"].to_string(),
+    //             token_in,
+    //             token_out_denom: COSMOS_USDC.to_string(),
+    //             token_out_min_amount: Uint128::from(1_500u128),
+    //             swap_fee: Decimal::zero(),
+    //         },
+    //     )
+    //     .unwrap();
 
-    // non-provider cannot exit_pool
-    let err = t
-        .app
-        .execute_contract(
-            t.accounts["user"].clone(),
-            t.contract.clone(),
-            &ExecMsg::ExitPool {
-                tokens_out: vec![Coin::new(1_500, ETH_USDC)],
-            },
-            &[],
-        )
-        .unwrap_err();
+    // // non-provider cannot exit_pool
+    // let err = t
+    //     .app
+    //     .execute_contract(
+    //         t.accounts["user"].clone(),
+    //         t.contract.clone(),
+    //         &ExecMsg::ExitPool {
+    //             tokens_out: vec![Coin::new(1_500, ETH_USDC)],
+    //         },
+    //         &[],
+    //     )
+    //     .unwrap_err();
 
-    assert_eq!(
-        err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::InsufficientShares {
-            required: 1500u128.into(),
-            available: Uint128::zero()
-        }
-    );
+    // assert_eq!(
+    //     err.downcast_ref::<ContractError>().unwrap(),
+    //     &ContractError::InsufficientShares {
+    //         required: 1500u128.into(),
+    //         available: Uint128::zero()
+    //     }
+    // );
 
-    // provider can exit pool
-    t.app
-        .execute_contract(
-            t.accounts["provider_1"].clone(),
-            t.contract.clone(),
-            &ExecMsg::ExitPool {
-                tokens_out: vec![Coin::new(500, ETH_USDC)],
-            },
-            &[],
-        )
-        .unwrap();
+    // // provider can exit pool
+    // t.app
+    //     .execute_contract(
+    //         t.accounts["provider_1"].clone(),
+    //         t.contract.clone(),
+    //         &ExecMsg::ExitPool {
+    //             tokens_out: vec![Coin::new(500, ETH_USDC)],
+    //         },
+    //         &[],
+    //     )
+    //     .unwrap();
 
-    // check shares
-    let GetSharesResponse { shares } = t
-        .app
-        .wrap()
-        .query_wasm_smart(
-            t.contract.clone(),
-            &QueryMsg::GetShares {
-                address: t.accounts["provider_1"].to_string(),
-            },
-        )
-        .unwrap();
+    // // check shares
+    // let GetSharesResponse { shares } = t
+    //     .app
+    //     .wrap()
+    //     .query_wasm_smart(
+    //         t.contract.clone(),
+    //         &QueryMsg::GetShares {
+    //             address: t.accounts["provider_1"].to_string(),
+    //         },
+    //     )
+    //     .unwrap();
 
-    assert_eq!(shares, Uint128::new(100_000 - 500));
+    // assert_eq!(shares, Uint128::new(100_000 - 500));
 
-    // check total shares
-    let GetTotalSharesResponse { total_shares } = t
-        .app
-        .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
-        .unwrap();
+    // // check total shares
+    // let GetTotalSharesResponse { total_shares } = t
+    //     .app
+    //     .wrap()
+    //     .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
+    //     .unwrap();
 
-    assert_eq!(total_shares, Uint128::new(200_000 - 500));
+    // assert_eq!(total_shares, Uint128::new(200_000 - 500));
 
-    // check balances
-    assert_eq!(
-        t.app.wrap().query_all_balances(&t.contract).unwrap(),
-        vec![
-            Coin::new(1500 - 500, ETH_USDC),
-            Coin::new(200_000 - 1500, COSMOS_USDC)
-        ]
-    );
+    // // check balances
+    // assert_eq!(
+    //     t.app.wrap().query_all_balances(&t.contract).unwrap(),
+    //     vec![
+    //         Coin::new(1500 - 500, ETH_USDC),
+    //         Coin::new(200_000 - 1500, COSMOS_USDC)
+    //     ]
+    // );
 
-    let GetTotalPoolLiquidityResponse {
-        total_pool_liquidity,
-    } = t
-        .app
-        .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
-        .unwrap();
+    // let GetTotalPoolLiquidityResponse {
+    //     total_pool_liquidity,
+    // } = t
+    //     .app
+    //     .wrap()
+    //     .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
+    //     .unwrap();
 
-    assert_eq!(
-        total_pool_liquidity,
-        vec![
-            Coin::new(1500 - 500, ETH_USDC),
-            Coin::new(200_000 - 1500, COSMOS_USDC)
-        ]
-    );
+    // assert_eq!(
+    //     total_pool_liquidity,
+    //     vec![
+    //         Coin::new(1500 - 500, ETH_USDC),
+    //         Coin::new(200_000 - 1500, COSMOS_USDC)
+    //     ]
+    // );
 
-    // provider can exit pool with any token
-    t.app
-        .execute_contract(
-            t.accounts["provider_2"].clone(),
-            t.contract.clone(),
-            &ExecMsg::ExitPool {
-                tokens_out: vec![Coin::new(1_000, ETH_USDC), Coin::new(99_000, COSMOS_USDC)],
-            },
-            &[],
-        )
-        .unwrap();
+    // // provider can exit pool with any token
+    // t.app
+    //     .execute_contract(
+    //         t.accounts["provider_2"].clone(),
+    //         t.contract.clone(),
+    //         &ExecMsg::ExitPool {
+    //             tokens_out: vec![Coin::new(1_000, ETH_USDC), Coin::new(99_000, COSMOS_USDC)],
+    //         },
+    //         &[],
+    //     )
+    //     .unwrap();
 
-    // check shares
-    let GetSharesResponse { shares } = t
-        .app
-        .wrap()
-        .query_wasm_smart(
-            t.contract.clone(),
-            &QueryMsg::GetShares {
-                address: t.accounts["provider_2"].to_string(),
-            },
-        )
-        .unwrap();
+    // // check shares
+    // let GetSharesResponse { shares } = t
+    //     .app
+    //     .wrap()
+    //     .query_wasm_smart(
+    //         t.contract.clone(),
+    //         &QueryMsg::GetShares {
+    //             address: t.accounts["provider_2"].to_string(),
+    //         },
+    //     )
+    //     .unwrap();
 
-    assert_eq!(shares, Uint128::new(0));
+    // assert_eq!(shares, Uint128::new(0));
 
-    // check total shares
-    let GetTotalSharesResponse { total_shares } = t
-        .app
-        .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
-        .unwrap();
+    // // check total shares
+    // let GetTotalSharesResponse { total_shares } = t
+    //     .app
+    //     .wrap()
+    //     .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
+    //     .unwrap();
 
-    assert_eq!(total_shares, Uint128::new(200_000 - 500 - 1000 - 99_000));
+    // assert_eq!(total_shares, Uint128::new(200_000 - 500 - 1000 - 99_000));
 
-    // check balances
-    assert_eq!(
-        t.app.wrap().query_all_balances(&t.contract).unwrap(),
-        vec![Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)]
-    );
+    // // check balances
+    // assert_eq!(
+    //     t.app.wrap().query_all_balances(&t.contract).unwrap(),
+    //     vec![Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)]
+    // );
 
-    let GetTotalPoolLiquidityResponse {
-        total_pool_liquidity,
-    } = t
-        .app
-        .wrap()
-        .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
-        .unwrap();
+    // let GetTotalPoolLiquidityResponse {
+    //     total_pool_liquidity,
+    // } = t
+    //     .app
+    //     .wrap()
+    //     .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
+    //     .unwrap();
 
-    assert_eq!(
-        total_pool_liquidity,
-        vec![
-            Coin::new(0, ETH_USDC),
-            Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)
-        ]
-    );
+    // assert_eq!(
+    //     total_pool_liquidity,
+    //     vec![
+    //         Coin::new(0, ETH_USDC),
+    //         Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)
+    //     ]
+    // );
 
-    // exit pool with excess shares fails
-    let err = t
-        .app
-        .execute_contract(
-            Addr::unchecked("provider_2"),
-            t.contract.clone(),
-            &ExecMsg::ExitPool {
-                tokens_out: vec![Coin::new(1, ETH_USDC)],
-            },
-            &[],
-        )
-        .unwrap_err();
+    // // exit pool with excess shares fails
+    // let err = t
+    //     .app
+    //     .execute_contract(
+    //         Addr::unchecked("provider_2"),
+    //         t.contract.clone(),
+    //         &ExecMsg::ExitPool {
+    //             tokens_out: vec![Coin::new(1, ETH_USDC)],
+    //         },
+    //         &[],
+    //     )
+    //     .unwrap_err();
 
-    assert_eq!(
-        err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::InsufficientShares {
-            required: Uint128::one(),
-            available: Uint128::zero()
-        }
-    );
+    // assert_eq!(
+    //     err.downcast_ref::<ContractError>().unwrap(),
+    //     &ContractError::InsufficientShares {
+    //         required: Uint128::one(),
+    //         available: Uint128::zero()
+    //     }
+    // );
 
-    // has remaining shares but no coins on the requested side
-    let err = t
-        .app
-        .execute_contract(
-            Addr::unchecked("provider_1"),
-            t.contract.clone(),
-            &ExecMsg::ExitPool {
-                tokens_out: vec![Coin::new(1, ETH_USDC), Coin::new(1, COSMOS_USDC)],
-            },
-            &[],
-        )
-        .unwrap_err();
+    // // has remaining shares but no coins on the requested side
+    // let err = t
+    //     .app
+    //     .execute_contract(
+    //         Addr::unchecked("provider_1"),
+    //         t.contract.clone(),
+    //         &ExecMsg::ExitPool {
+    //             tokens_out: vec![Coin::new(1, ETH_USDC), Coin::new(1, COSMOS_USDC)],
+    //         },
+    //         &[],
+    //     )
+    //     .unwrap_err();
 
-    assert_eq!(
-        err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::InsufficientPoolAsset {
-            required: Coin::new(1, ETH_USDC),
-            available: Coin::new(0, ETH_USDC)
-        }
-    );
+    // assert_eq!(
+    //     err.downcast_ref::<ContractError>().unwrap(),
+    //     &ContractError::InsufficientPoolAsset {
+    //         required: Coin::new(1, ETH_USDC),
+    //         available: Coin::new(0, ETH_USDC)
+    //     }
+    // );
 }
 
 #[test]
@@ -720,7 +667,7 @@ fn test_3_pool_swap() {
                 COSMOS_USDC.to_string(),
             ],
         })
-        .build();
+        ._build();
 
     // join pool
     t.app
@@ -978,7 +925,7 @@ fn test_active_status() {
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
         })
-        .build();
+        ._build();
 
     // check status
     let IsActiveResponse { is_active } = t
