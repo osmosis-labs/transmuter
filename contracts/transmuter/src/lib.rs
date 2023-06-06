@@ -1,5 +1,6 @@
 pub mod contract;
 mod error;
+mod migration;
 mod shares;
 mod sudo;
 mod transmuter_pool;
@@ -11,11 +12,12 @@ mod test;
 #[cfg(not(feature = "library"))]
 mod entry_points {
     use cosmwasm_std::{
-        ensure, entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response,
+        ensure, entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response, StdResult,
     };
 
     use crate::contract::{ContractExecMsg, ContractQueryMsg, InstantiateMsg, Transmuter};
     use crate::error::ContractError;
+    use crate::migration::MigrateMsg;
     use crate::sudo::SudoMsg;
 
     const CONTRACT: Transmuter = Transmuter::new();
@@ -28,6 +30,11 @@ mod entry_points {
         msg: InstantiateMsg,
     ) -> Result<Response, ContractError> {
         msg.dispatch(&CONTRACT, (deps, env, info))
+    }
+
+    #[entry_point]
+    pub fn migrate(_deps: DepsMut, _env: Env, _msg: MigrateMsg) -> StdResult<Response> {
+        Ok(Response::default())
     }
 
     #[entry_point]
