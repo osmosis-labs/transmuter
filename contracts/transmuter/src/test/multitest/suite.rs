@@ -848,6 +848,7 @@ fn test_3_pool_swap() {
 }
 
 #[test]
+#[ignore = "active status sudo is not implemented on cosmwasmpool"]
 fn test_active_status() {
     let mut t = TestEnvBuilder::new()
         .with_account("user", vec![Coin::new(1_000, ETH_USDC)])
