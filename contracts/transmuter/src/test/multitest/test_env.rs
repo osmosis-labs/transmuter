@@ -8,8 +8,14 @@ use crate::{
 };
 use anyhow::{bail, Result as AnyResult};
 use cosmwasm_std::{from_slice, to_binary, Addr, Coin, Empty};
-use osmosis_std::types::osmosis::cosmwasmpool::v1beta1::MsgCreateCosmWasmPool;
-use osmosis_test_tube::cosmrs;
+use osmosis_std::types::osmosis::cosmwasmpool::v1beta1::{
+    ContractInfoByPoolIdRequest, ContractInfoByPoolIdResponse, MsgCreateCosmWasmPool,
+};
+use osmosis_test_tube::{
+    cosmrs,
+    osmosis_std::types::osmosis::cosmwasmpool::v1beta1::UploadCosmWasmPoolCodeAndWhiteListProposal,
+    GovWithAppAccess,
+};
 
 use cw_multi_test::{App, AppBuilder, Contract, Executor};
 use osmosis_test_tube::{
@@ -201,12 +207,13 @@ impl TestEnvBuilder {
                     .into_iter()
                     .chain(vec![Coin::new(1000000000000, "uosmo")])
                     .collect();
+
                 (account, app.init_account(&balance).unwrap())
             })
             .collect();
 
         let creator = app
-            .init_account(&[Coin::new(100000000000u128, "uosmo")])
+            .init_account(&[Coin::new(1000000000000000u128, "uosmo")])
             .unwrap();
 
         let contract = TransmuterContract::deploy(
@@ -228,6 +235,7 @@ impl TestEnvBuilder {
 pub struct TransmuterContract<'a> {
     app: &'a OsmosisTestApp,
     pub code_id: u64,
+    pub pool_id: u64,
     pub contract_addr: String,
 }
 
@@ -240,41 +248,41 @@ impl<'a> TransmuterContract<'a> {
         let wasm = Wasm::new(app);
         let cp = CosmwasmPool::new(app);
 
-        let code_id = wasm
-            .store_code(&Self::get_wasm_byte_code(), None, signer)?
-            .data
-            .code_id;
+        let gov = GovWithAppAccess::new(&app);
 
-        // TODO: wait for roman's PR to be merged and use this instead
-        // let res = cp.create_cosmwasm_pool(
-        //     MsgCreateCosmWasmPool {
-        //         code_id,
-        //         instantiate_msg: to_binary(instantiate_msg).unwrap().to_vec(),
-        //         sender: signer.address(),
-        //     },
-        //     signer,
-        // )?;
+        let code_id = 1; // temporary solution
+        gov.propose_and_execute(
+            UploadCosmWasmPoolCodeAndWhiteListProposal::TYPE_URL.to_string(),
+            UploadCosmWasmPoolCodeAndWhiteListProposal {
+                title: String::from("store test cosmwasm pool code"),
+                description: String::from("test"),
+                wasm_byte_code: Self::get_wasm_byte_code(),
+            },
+            signer.address(),
+            signer,
+        )?;
 
-        // dbg!(res.events);
-        // let pool_id = res.data.pool_id;
-
-        let contract_addr = wasm
-            .instantiate(
+        let res = cp.create_cosmwasm_pool(
+            MsgCreateCosmWasmPool {
                 code_id,
-                instantiate_msg,
-                None,
-                None,
-                // denom creation fee
-                &[Coin::new(10000000u128, "uosmo")],
-                signer,
-            )?
-            .data
-            .address;
+                instantiate_msg: to_binary(instantiate_msg).unwrap().to_vec(),
+                sender: signer.address(),
+            },
+            signer,
+        )?;
+
+        let pool_id = res.data.pool_id;
+
+        let ContractInfoByPoolIdResponse {
+            contract_address,
+            code_id: _,
+        } = cp.contract_info_by_pool_id(&ContractInfoByPoolIdRequest { pool_id })?;
 
         Ok(Self {
             app,
             code_id,
-            contract_addr,
+            pool_id,
+            contract_addr: contract_address,
         })
     }
 

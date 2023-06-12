@@ -1,11 +1,12 @@
 use osmosis_std::types::osmosis::cosmwasmpool::v1beta1::{
-    MsgCreateCosmWasmPool, MsgCreateCosmWasmPoolResponse,
+    ContractInfoByPoolIdRequest, ContractInfoByPoolIdResponse, MsgCreateCosmWasmPool,
+    MsgCreateCosmWasmPoolResponse,
 };
 use osmosis_std::types::osmosis::poolmanager::v1beta1::{
     MsgSwapExactAmountIn, MsgSwapExactAmountInResponse, MsgSwapExactAmountOut,
     MsgSwapExactAmountOutResponse,
 };
-use osmosis_test_tube::fn_execute;
+use osmosis_test_tube::{fn_execute, fn_query};
 
 use osmosis_test_tube::Module;
 use osmosis_test_tube::Runner;
@@ -34,5 +35,9 @@ where
 
     fn_execute! {
         pub swap_exact_amount_out: MsgSwapExactAmountOut => MsgSwapExactAmountOutResponse
+    }
+
+    fn_query! {
+        pub contract_info_by_pool_id ["/osmosis.cosmwasmpool.v1beta1.Query/ContractInfoByPoolId"]: ContractInfoByPoolIdRequest => ContractInfoByPoolIdResponse
     }
 }

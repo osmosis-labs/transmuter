@@ -1,6 +1,6 @@
 use std::vec;
 
-use super::test_env::*;
+use super::{modules::cosmwasm_pool::CosmwasmPool, test_env::*};
 use crate::{
     contract::{
         ExecMsg, GetSharesResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse,
@@ -13,6 +13,7 @@ use cosmwasm_std::{BankMsg, Coin, Decimal, Uint128};
 
 use cw_multi_test::Executor;
 
+use osmosis_std::types::osmosis::poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute};
 use osmosis_test_tube::{
     cosmrs::proto::cosmos::bank::v1beta1::MsgSend, Account, Bank, Module, OsmosisTestApp,
 };
@@ -421,6 +422,8 @@ fn test_swap() {
 fn test_exit_pool() {
     let app = OsmosisTestApp::new();
     let bank = Bank::new(&app);
+    let cp = CosmwasmPool::new(&app);
+
     let t = TestEnvBuilder::new()
         .with_account("user", vec![Coin::new(1_500, ETH_USDC)])
         .with_account("provider_1", vec![Coin::new(100_000, COSMOS_USDC)])
@@ -450,208 +453,172 @@ fn test_exit_pool() {
     // swap to build up token_in
     let token_in = Coin::new(1_500, ETH_USDC);
 
-    bank.send(
-        MsgSend {
-            from_address: t.accounts["user"].address(),
-            to_address: t.contract.contract_addr,
-            amount: vec![to_proto_coin(&token_in)],
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["user"].address(),
+            token_in: Some(token_in.into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: COSMOS_USDC.to_string(),
+            }],
+            token_out_min_amount: Uint128::from(1_500u128).to_string(),
         },
         &t.accounts["user"],
     )
     .unwrap();
 
-    // t.app
-    //     .wasm_sudo(
-    //         t.contract.clone(),
-    //         &SudoMsg::SwapExactAmountIn {
-    //             sender: t.accounts["user"].to_string(),
-    //             token_in,
-    //             token_out_denom: COSMOS_USDC.to_string(),
-    //             token_out_min_amount: Uint128::from(1_500u128),
-    //             swap_fee: Decimal::zero(),
-    //         },
-    //     )
-    //     .unwrap();
+    // non-provider cannot exit_pool
+    let err = t
+        .contract
+        .execute(
+            &ExecMsg::ExitPool {
+                tokens_out: vec![Coin::new(1_500, ETH_USDC)],
+            },
+            &[],
+            &t.accounts["user"],
+        )
+        .unwrap_err();
 
-    // // non-provider cannot exit_pool
-    // let err = t
-    //     .app
-    //     .execute_contract(
-    //         t.accounts["user"].clone(),
-    //         t.contract.clone(),
-    //         &ExecMsg::ExitPool {
-    //             tokens_out: vec![Coin::new(1_500, ETH_USDC)],
-    //         },
-    //         &[],
-    //     )
-    //     .unwrap_err();
+    assert_contract_err(
+        ContractError::InsufficientShares {
+            required: 1500u128.into(),
+            available: Uint128::zero(),
+        },
+        err,
+    );
 
-    // assert_eq!(
-    //     err.downcast_ref::<ContractError>().unwrap(),
-    //     &ContractError::InsufficientShares {
-    //         required: 1500u128.into(),
-    //         available: Uint128::zero()
-    //     }
-    // );
+    // provider can exit pool
+    t.contract
+        .execute(
+            &ExecMsg::ExitPool {
+                tokens_out: vec![Coin::new(500, ETH_USDC)],
+            },
+            &[],
+            &t.accounts["provider_1"],
+        )
+        .unwrap();
 
-    // // provider can exit pool
-    // t.app
-    //     .execute_contract(
-    //         t.accounts["provider_1"].clone(),
-    //         t.contract.clone(),
-    //         &ExecMsg::ExitPool {
-    //             tokens_out: vec![Coin::new(500, ETH_USDC)],
-    //         },
-    //         &[],
-    //     )
-    //     .unwrap();
+    // check shares
+    let GetSharesResponse { shares } = t
+        .contract
+        .query(&QueryMsg::GetShares {
+            address: t.accounts["provider_1"].address(),
+        })
+        .unwrap();
 
-    // // check shares
-    // let GetSharesResponse { shares } = t
-    //     .app
-    //     .wrap()
-    //     .query_wasm_smart(
-    //         t.contract.clone(),
-    //         &QueryMsg::GetShares {
-    //             address: t.accounts["provider_1"].to_string(),
-    //         },
-    //     )
-    //     .unwrap();
+    assert_eq!(shares, Uint128::new(100_000 - 500));
 
-    // assert_eq!(shares, Uint128::new(100_000 - 500));
+    // check total shares
+    let GetTotalSharesResponse { total_shares } =
+        t.contract.query(&QueryMsg::GetTotalShares {}).unwrap();
 
-    // // check total shares
-    // let GetTotalSharesResponse { total_shares } = t
-    //     .app
-    //     .wrap()
-    //     .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
-    //     .unwrap();
+    assert_eq!(total_shares, Uint128::new(200_000 - 500));
 
-    // assert_eq!(total_shares, Uint128::new(200_000 - 500));
+    // check balances
+    t.assert_contract_balances(&[
+        Coin::new(1500 - 500, ETH_USDC),
+        Coin::new(200_000 - 1500, COSMOS_USDC),
+    ]);
 
-    // // check balances
-    // assert_eq!(
-    //     t.app.wrap().query_all_balances(&t.contract).unwrap(),
-    //     vec![
-    //         Coin::new(1500 - 500, ETH_USDC),
-    //         Coin::new(200_000 - 1500, COSMOS_USDC)
-    //     ]
-    // );
+    let GetTotalPoolLiquidityResponse {
+        total_pool_liquidity,
+    } = t
+        .contract
+        .query(&QueryMsg::GetTotalPoolLiquidity {})
+        .unwrap();
 
-    // let GetTotalPoolLiquidityResponse {
-    //     total_pool_liquidity,
-    // } = t
-    //     .app
-    //     .wrap()
-    //     .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
-    //     .unwrap();
+    assert_eq!(
+        total_pool_liquidity,
+        vec![
+            Coin::new(1500 - 500, ETH_USDC),
+            Coin::new(200_000 - 1500, COSMOS_USDC)
+        ]
+    );
 
-    // assert_eq!(
-    //     total_pool_liquidity,
-    //     vec![
-    //         Coin::new(1500 - 500, ETH_USDC),
-    //         Coin::new(200_000 - 1500, COSMOS_USDC)
-    //     ]
-    // );
+    // provider can exit pool with any token
+    t.contract
+        .execute(
+            &ExecMsg::ExitPool {
+                tokens_out: vec![Coin::new(1_000, ETH_USDC), Coin::new(99_000, COSMOS_USDC)],
+            },
+            &[],
+            &t.accounts["provider_2"],
+        )
+        .unwrap();
 
-    // // provider can exit pool with any token
-    // t.app
-    //     .execute_contract(
-    //         t.accounts["provider_2"].clone(),
-    //         t.contract.clone(),
-    //         &ExecMsg::ExitPool {
-    //             tokens_out: vec![Coin::new(1_000, ETH_USDC), Coin::new(99_000, COSMOS_USDC)],
-    //         },
-    //         &[],
-    //     )
-    //     .unwrap();
+    // check shares
+    let GetSharesResponse { shares } = t
+        .contract
+        .query(&QueryMsg::GetShares {
+            address: t.accounts["provider_2"].address(),
+        })
+        .unwrap();
 
-    // // check shares
-    // let GetSharesResponse { shares } = t
-    //     .app
-    //     .wrap()
-    //     .query_wasm_smart(
-    //         t.contract.clone(),
-    //         &QueryMsg::GetShares {
-    //             address: t.accounts["provider_2"].to_string(),
-    //         },
-    //     )
-    //     .unwrap();
+    assert_eq!(shares, Uint128::new(0));
 
-    // assert_eq!(shares, Uint128::new(0));
+    // check total shares
+    let GetTotalSharesResponse { total_shares } =
+        t.contract.query(&QueryMsg::GetTotalShares {}).unwrap();
 
-    // // check total shares
-    // let GetTotalSharesResponse { total_shares } = t
-    //     .app
-    //     .wrap()
-    //     .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalShares {})
-    //     .unwrap();
+    assert_eq!(total_shares, Uint128::new(200_000 - 500 - 1000 - 99_000));
 
-    // assert_eq!(total_shares, Uint128::new(200_000 - 500 - 1000 - 99_000));
+    // check balances
+    t.assert_contract_balances(&[Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)]);
 
-    // // check balances
-    // assert_eq!(
-    //     t.app.wrap().query_all_balances(&t.contract).unwrap(),
-    //     vec![Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)]
-    // );
+    let GetTotalPoolLiquidityResponse {
+        total_pool_liquidity,
+    } = t
+        .contract
+        .query(&QueryMsg::GetTotalPoolLiquidity {})
+        .unwrap();
 
-    // let GetTotalPoolLiquidityResponse {
-    //     total_pool_liquidity,
-    // } = t
-    //     .app
-    //     .wrap()
-    //     .query_wasm_smart(t.contract.clone(), &QueryMsg::GetTotalPoolLiquidity {})
-    //     .unwrap();
+    assert_eq!(
+        total_pool_liquidity,
+        vec![
+            Coin::new(0, ETH_USDC),
+            Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)
+        ]
+    );
 
-    // assert_eq!(
-    //     total_pool_liquidity,
-    //     vec![
-    //         Coin::new(0, ETH_USDC),
-    //         Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)
-    //     ]
-    // );
+    // exit pool with excess shares fails
+    let err = t
+        .contract
+        .execute(
+            &ExecMsg::ExitPool {
+                tokens_out: vec![Coin::new(1, ETH_USDC)],
+            },
+            &[],
+            &t.accounts["provider_2"],
+        )
+        .unwrap_err();
 
-    // // exit pool with excess shares fails
-    // let err = t
-    //     .app
-    //     .execute_contract(
-    //         Addr::unchecked("provider_2"),
-    //         t.contract.clone(),
-    //         &ExecMsg::ExitPool {
-    //             tokens_out: vec![Coin::new(1, ETH_USDC)],
-    //         },
-    //         &[],
-    //     )
-    //     .unwrap_err();
+    assert_contract_err(
+        ContractError::InsufficientShares {
+            required: Uint128::one(),
+            available: Uint128::zero(),
+        },
+        err,
+    );
 
-    // assert_eq!(
-    //     err.downcast_ref::<ContractError>().unwrap(),
-    //     &ContractError::InsufficientShares {
-    //         required: Uint128::one(),
-    //         available: Uint128::zero()
-    //     }
-    // );
+    // has remaining shares but no coins on the requested side
+    let err = t
+        .contract
+        .execute(
+            &ExecMsg::ExitPool {
+                tokens_out: vec![Coin::new(1, ETH_USDC)],
+            },
+            &[],
+            &t.accounts["provider_1"],
+        )
+        .unwrap_err();
 
-    // // has remaining shares but no coins on the requested side
-    // let err = t
-    //     .app
-    //     .execute_contract(
-    //         Addr::unchecked("provider_1"),
-    //         t.contract.clone(),
-    //         &ExecMsg::ExitPool {
-    //             tokens_out: vec![Coin::new(1, ETH_USDC), Coin::new(1, COSMOS_USDC)],
-    //         },
-    //         &[],
-    //     )
-    //     .unwrap_err();
-
-    // assert_eq!(
-    //     err.downcast_ref::<ContractError>().unwrap(),
-    //     &ContractError::InsufficientPoolAsset {
-    //         required: Coin::new(1, ETH_USDC),
-    //         available: Coin::new(0, ETH_USDC)
-    //     }
-    // );
+    assert_contract_err(
+        ContractError::InsufficientPoolAsset {
+            required: Coin::new(1, ETH_USDC),
+            available: Coin::new(0, ETH_USDC),
+        },
+        err,
+    );
 }
 
 #[test]
