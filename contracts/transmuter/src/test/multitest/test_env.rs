@@ -109,7 +109,12 @@ pub struct TestEnv2<'a> {
 }
 
 impl<'a> TestEnv2<'a> {
-    pub fn assert_account_balances(&self, account: &str, expected_balances: Vec<Coin>) {
+    pub fn assert_account_balances(
+        &self,
+        account: &str,
+        expected_balances: Vec<Coin>,
+        ignore_denoms: Vec<&str>,
+    ) {
         let account_balances: Vec<Coin> = Bank::new(self.app)
             .query_all_balances(&QueryAllBalancesRequest {
                 address: self.accounts.get(account).unwrap().address(),
@@ -119,6 +124,7 @@ impl<'a> TestEnv2<'a> {
             .balances
             .into_iter()
             .map(|coin| Coin::new(coin.amount.parse().unwrap(), coin.denom))
+            .filter(|coin| !ignore_denoms.contains(&coin.denom.as_str()))
             .collect();
 
         assert_eq!(account_balances, expected_balances);

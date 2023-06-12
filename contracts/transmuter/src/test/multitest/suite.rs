@@ -184,6 +184,10 @@ fn test_join_pool() {
 
 #[test]
 fn test_swap() {
+    let app = OsmosisTestApp::new();
+    let bank = Bank::new(&app);
+    let cp = CosmwasmPool::new(&app);
+
     let mut t = TestEnvBuilder::new()
         .with_account(
             "alice",
@@ -198,149 +202,125 @@ fn test_swap() {
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
         })
-        ._build();
+        .build(&app);
 
     // join pool
-    let tokens_in = vec![Coin::new(100_000, COSMOS_USDC)];
+    let tokens_in = vec![Coin::new(100_000, COSMOS_USDC).into()];
 
     // join pool with send tokens should not update pool balance
-    t.app
-        .send_tokens(
-            t.accounts["provider"].clone(),
-            t.contract.clone(),
-            &tokens_in,
-        )
-        .unwrap();
+    bank.send(
+        MsgSend {
+            from_address: t.accounts["provider"].address(),
+            to_address: t.contract.contract_addr.clone(),
+            amount: tokens_in.iter().map(to_proto_coin).collect(),
+        },
+        &t.accounts["provider"],
+    )
+    .unwrap();
 
-    // transmute should fail since there has no token_out_denom remaining in the pool
-    let err = t
-        .app
-        .wasm_sudo(
-            t.contract.clone(),
-            &SudoMsg::SwapExactAmountIn {
-                sender: t.accounts["alice"].clone().into(),
-                token_in: Coin::new(1_500, ETH_USDC),
-                token_out_denom: COSMOS_USDC.to_string(),
-                token_out_min_amount: Uint128::from(1500u128),
-                swap_fee: Decimal::zero(),
+    let err = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["alice"].address(),
+                token_in: Some(Coin::new(1_500, ETH_USDC).into()),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: COSMOS_USDC.to_string(),
+                }],
+                token_out_min_amount: Uint128::from(1500u128).to_string(),
             },
+            &t.accounts["alice"],
         )
         .unwrap_err();
 
-    assert_eq!(
-        err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::InsufficientPoolAsset {
+    assert_contract_err(
+        ContractError::InsufficientPoolAsset {
             required: Coin::new(1_500, COSMOS_USDC),
-            available: Coin::new(0, COSMOS_USDC)
-        }
+            available: Coin::new(0, COSMOS_USDC),
+        },
+        err,
     );
 
     // join pool properly
-    t.app
-        .execute_contract(
-            t.accounts["provider"].clone(),
-            t.contract.clone(),
-            &ExecMsg::JoinPool {},
-            &tokens_in,
-        )
+    t.contract
+        .execute(&ExecMsg::JoinPool {}, &tokens_in, &t.accounts["provider"])
         .unwrap();
 
     // transmute with incorrect funds should still fail
-    let err = t
-        .app
-        .wasm_sudo(
-            t.contract.clone(),
-            &SudoMsg::SwapExactAmountIn {
-                sender: t.accounts["alice"].clone().into(),
-                token_in: Coin::new(1_000, COSMOS_USDC),
-                token_out_denom: "urandom".to_string(),
-                token_out_min_amount: Uint128::from(1_000u128),
-                swap_fee: Decimal::zero(),
+    let err = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["alice"].address(),
+                token_in: Some(Coin::new(1_000, COSMOS_USDC).into()),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: "urandom".to_string(),
+                }],
+                token_out_min_amount: Uint128::from(1_000u128).to_string(),
             },
+            &t.accounts["alice"],
         )
         .unwrap_err();
 
-    assert_eq!(
-        err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::InvalidTransmuteDenom {
+    assert_contract_err(
+        ContractError::InvalidTransmuteDenom {
             denom: "urandom".to_string(),
-            expected_denom: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()]
-        }
+            expected_denom: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
+        },
+        err,
     );
 
-    let err = t
-        .app
-        .wasm_sudo(
-            t.contract.clone(),
-            &SudoMsg::SwapExactAmountIn {
-                sender: t.accounts["alice"].clone().into(),
-                token_in: Coin::new(1_000, COSMOS_USDC),
-                token_out_denom: "urandom2".to_string(),
-                token_out_min_amount: Uint128::from(1_000u128),
-                swap_fee: Decimal::zero(),
+    let err = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["alice"].address(),
+                token_in: Some(Coin::new(1_000, COSMOS_USDC).into()),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: "urandom2".to_string(),
+                }],
+                token_out_min_amount: Uint128::from(1_000u128).to_string(),
             },
+            &t.accounts["alice"],
         )
         .unwrap_err();
 
-    assert_eq!(
-        err.downcast_ref::<ContractError>().unwrap(),
-        &ContractError::InvalidTransmuteDenom {
+    assert_contract_err(
+        ContractError::InvalidTransmuteDenom {
             denom: "urandom2".to_string(),
-            expected_denom: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()]
-        }
+            expected_denom: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
+        },
+        err,
     );
-
-    // bank send before sudo
-
-    let token_in = Coin::new(1_500, ETH_USDC);
-
-    t.app
-        .execute(
-            t.accounts["alice"].clone(),
-            BankMsg::Send {
-                to_address: t.contract.to_string(),
-                amount: vec![token_in.clone()],
-            }
-            .into(),
-        )
-        .unwrap();
 
     // swap with correct token_in should succeed this time
-    t.app
-        .wasm_sudo(
-            t.contract.clone(),
-            &SudoMsg::SwapExactAmountIn {
-                sender: t.accounts["alice"].to_string(),
-                token_in,
+    let token_in = Coin::new(1_500, ETH_USDC);
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["alice"].address(),
+            token_in: Some(token_in.into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
                 token_out_denom: COSMOS_USDC.to_string(),
-                token_out_min_amount: Uint128::from(1_500u128),
-                swap_fee: Decimal::zero(),
-            },
-        )
-        .unwrap();
+            }],
+            token_out_min_amount: Uint128::from(1_500u128).to_string(),
+        },
+        &t.accounts["alice"],
+    )
+    .unwrap();
 
     // check balances
-    let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
+    t.assert_contract_balances(&[
+        Coin::new(1_500, ETH_USDC),
+        Coin::new(100_000 + 100_000 - 1_500, COSMOS_USDC), // +100_000 due to bank send
+    ]);
+
     let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
     } = t
-        .app
-        .wrap()
-        .query_wasm_smart(&t.contract, &QueryMsg::GetTotalPoolLiquidity {})
+        .contract
+        .query(&QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
-    let alice_balances = t
-        .app
-        .wrap()
-        .query_all_balances(&t.accounts["alice"])
-        .unwrap();
-
-    assert_eq!(
-        contract_balances,
-        vec![
-            Coin::new(1_500, ETH_USDC),
-            Coin::new(100_000 + 100_000 - 1_500, COSMOS_USDC), // +100_000 due to bank send
-        ]
-    );
 
     assert_eq!(
         total_pool_liquidity,
@@ -351,61 +331,44 @@ fn test_swap() {
     );
 
     // +1_000 due to existing alice balance
-    assert_eq!(
-        alice_balances,
+    t.assert_account_balances(
+        "alice",
         vec![
             Coin::new(1_500 + 1_000, COSMOS_USDC),
-            Coin::new(1_000, "urandom2")
-        ]
+            Coin::new(1_000, "urandom2"),
+        ],
+        vec!["uosmo"],
     );
 
-    // // swap again with another user
-
-    let token_in = Coin::new(29_902, ETH_USDC);
-
-    t.app
-        .execute(
-            t.accounts["bob"].clone(),
-            BankMsg::Send {
-                to_address: t.contract.to_string(),
-                amount: vec![token_in.clone()],
-            }
-            .into(),
-        )
-        .unwrap();
-
+    // swap again with another user
     // swap with correct token_in should succeed this time
-    t.app
-        .wasm_sudo(
-            t.contract.clone(),
-            &SudoMsg::SwapExactAmountIn {
-                sender: t.accounts["bob"].to_string(),
-                token_in,
+    let token_in = Coin::new(29_902, ETH_USDC);
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["bob"].address(),
+            token_in: Some(token_in.into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
                 token_out_denom: COSMOS_USDC.to_string(),
-                token_out_min_amount: Uint128::from(29_902u128),
-                swap_fee: Decimal::zero(),
-            },
-        )
-        .unwrap();
+            }],
+            token_out_min_amount: Uint128::from(29_902u128).to_string(),
+        },
+        &t.accounts["bob"],
+    )
+    .unwrap();
 
     // check balances
-    let contract_balances = t.app.wrap().query_all_balances(&t.contract).unwrap();
+    t.assert_contract_balances(&[
+        Coin::new(1_500 + 29_902, ETH_USDC),
+        Coin::new(100_000 + 100_000 - 1_500 - 29_902, COSMOS_USDC), // +100_000 due to bank send
+    ]);
+
     let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
     } = t
-        .app
-        .wrap()
-        .query_wasm_smart(t.contract, &QueryMsg::GetTotalPoolLiquidity {})
+        .contract
+        .query(&QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
-    let bob_balances = t.app.wrap().query_all_balances(&t.accounts["bob"]).unwrap();
-
-    assert_eq!(
-        contract_balances,
-        vec![
-            Coin::new(1_500 + 29_902, ETH_USDC),
-            Coin::new(100_000 + 100_000 - 1_500 - 29_902, COSMOS_USDC), // +100_000 due to bank send
-        ]
-    );
 
     assert_eq!(
         total_pool_liquidity,
@@ -415,7 +378,7 @@ fn test_swap() {
         ]
     );
 
-    assert_eq!(bob_balances, vec![Coin::new(29_902, COSMOS_USDC)]);
+    t.assert_account_balances("bob", vec![Coin::new(29_902, COSMOS_USDC)], vec!["uosmo"]);
 }
 
 #[test]
