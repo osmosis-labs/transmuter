@@ -104,12 +104,6 @@ impl Transmuter<'_> {
             ContractError::AtLeastSingleTokenExpected {}
         );
 
-        let new_shares = Shares::calc_shares(&info.funds)?;
-
-        // update shares
-        self.shares
-            .add_share(deps.storage, &info.sender, new_shares)?;
-
         // update pool
         self.pool
             .update(deps.storage, |mut pool| -> Result<_, ContractError> {
@@ -119,6 +113,7 @@ impl Transmuter<'_> {
 
         // mint lp tokens
         let share_denom = self.shares.get_share_denom(deps.storage)?;
+        let new_shares = Shares::calc_shares(&info.funds)?;
         let mint_msg = MsgMint {
             sender: env.contract.address.to_string(),
             amount: Some(Coin::new(new_shares.u128(), share_denom).into()),
@@ -142,7 +137,7 @@ impl Transmuter<'_> {
         let (deps, env, info) = ctx;
 
         // check if sender's shares is enough
-        let sender_shares = self.shares.get_share(deps.as_ref().storage, &info.sender)?;
+        let sender_shares = self.shares.get_share(deps.as_ref(), &info.sender)?;
 
         let required_shares = Shares::calc_shares(&tokens_out)?;
 
@@ -153,10 +148,6 @@ impl Transmuter<'_> {
                 available: sender_shares
             }
         );
-
-        // update shares
-        self.shares
-            .sub_share(deps.storage, &info.sender, required_shares)?;
 
         // exit pool
         self.pool
@@ -339,7 +330,7 @@ impl Transmuter<'_> {
         Ok(GetSharesResponse {
             shares: self
                 .shares
-                .get_share(deps.storage, &deps.api.addr_validate(&address)?)?,
+                .get_share(deps, &deps.api.addr_validate(&address)?)?,
         })
     }
 
@@ -376,7 +367,7 @@ impl Transmuter<'_> {
         ctx: (Deps, Env),
     ) -> Result<GetTotalSharesResponse, ContractError> {
         let (deps, _env) = ctx;
-        let total_shares = self.shares.get_total_shares(deps.storage)?;
+        let total_shares = self.shares.get_total_shares(deps)?;
         Ok(GetTotalSharesResponse { total_shares })
     }
 

@@ -1,3 +1,3 @@
 mod modules;
 mod suite;
-mod test_env;
+pub(super) mod test_env;

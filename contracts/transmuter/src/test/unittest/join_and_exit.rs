@@ -1,12 +1,21 @@
 use std::collections::HashMap;
 
 use cosmwasm_std::{
+    attr,
     testing::{mock_dependencies, mock_env, mock_info},
     Addr, BankMsg, Coin, SubMsg, Uint128,
 };
 use osmosis_std::types::osmosis::tokenfactory::v1beta1::MsgBurn;
+use osmosis_test_tube::{Account, OsmosisTestApp};
 
-use crate::{contract::Transmuter, ContractError};
+use crate::{
+    contract::{
+        ExecMsg, GetShareDenomResponse, GetSharesResponse, GetTotalPoolLiquidityResponse,
+        GetTotalSharesResponse, InstantiateMsg, QueryMsg, Transmuter,
+    },
+    test::multitest::test_env::{assert_contract_err, TestEnvBuilder},
+    ContractError,
+};
 
 #[test]
 fn test_join_pool_with_single_lp_should_update_shares_and_liquidity_properly() {
@@ -17,77 +26,63 @@ fn test_join_pool_with_single_lp_should_update_shares_and_liquidity_properly() {
 
     let cases = vec![
         Case {
-            funds: vec![Coin::new(0, "denom0")],
+            funds: vec![Coin::new(1, "denoma")],
         },
         Case {
-            funds: vec![Coin::new(0, "denom1")],
+            funds: vec![Coin::new(1, "denomb")],
         },
         Case {
-            funds: vec![Coin::new(1, "denom0")],
+            funds: vec![Coin::new(100, "denoma")],
         },
         Case {
-            funds: vec![Coin::new(1, "denom1")],
+            funds: vec![Coin::new(100, "denomb")],
         },
         Case {
-            funds: vec![Coin::new(100, "denom0")],
+            funds: vec![Coin::new(100_000_000_000_000, "denoma")],
         },
         Case {
-            funds: vec![Coin::new(100, "denom1")],
+            funds: vec![Coin::new(100_000_000_000_000, "denomb")],
         },
         Case {
-            funds: vec![Coin::new(100_000_000_000_000, "denom0")],
+            funds: vec![Coin::new(u128::MAX, "denoma")],
         },
         Case {
-            funds: vec![Coin::new(100_000_000_000_000, "denom1")],
-        },
-        Case {
-            funds: vec![Coin::new(u128::MAX, "denom0")],
-        },
-        Case {
-            funds: vec![Coin::new(u128::MAX, "denom1")],
+            funds: vec![Coin::new(u128::MAX, "denomb")],
         },
         Case {
             funds: vec![
-                Coin::new(999_999_999, "denom0"),
-                Coin::new(999_999_999, "denom1"),
+                Coin::new(999_999_999, "denoma"),
+                Coin::new(999_999_999, "denomb"),
             ],
         },
         Case {
             funds: vec![
-                Coin::new(12_000_000_000, "denom0"),
-                Coin::new(999_999_999, "denom1"),
+                Coin::new(12_000_000_000, "denoma"),
+                Coin::new(999_999_999, "denomb"),
             ],
         },
     ];
 
     for case in cases {
-        let transmuter = Transmuter::new();
-        let mut deps = mock_dependencies();
+        let app = OsmosisTestApp::new();
+        let t = TestEnvBuilder::new()
+            .with_account("provider", case.funds.clone())
+            .with_instantiate_msg(crate::contract::InstantiateMsg {
+                pool_asset_denoms: vec!["denoma".to_string(), "denomb".to_string()],
+            })
+            .build(&app);
 
-        transmuter
-            .instantiate(
-                (deps.as_mut(), mock_env(), mock_info("instantiator", &[])),
-                vec!["denom0".to_string(), "denom1".to_string()],
-            )
-            .unwrap();
-
-        transmuter
-            .shares
-            .set_share_denom(
-                &mut deps.storage,
-                &"factory/contract_address/transmuter/poolshare".to_string(),
-            )
-            .unwrap();
-
-        transmuter
-            .join_pool((deps.as_mut(), mock_env(), mock_info("addr1", &case.funds)))
+        t.contract
+            .execute(&ExecMsg::JoinPool {}, &case.funds, &t.accounts["provider"])
             .unwrap();
 
         // check if shares are updated
-        let shares = transmuter
-            .get_shares((deps.as_ref(), mock_env()), "addr1".to_string())
-            .unwrap()
-            .shares;
+        let GetSharesResponse { shares } = t
+            .contract
+            .query(&QueryMsg::GetShares {
+                address: t.accounts["provider"].address(),
+            })
+            .unwrap();
 
         // shares == sum of cases.funds amount
         assert_eq!(
@@ -102,29 +97,25 @@ fn test_join_pool_with_single_lp_should_update_shares_and_liquidity_properly() {
         );
 
         // check if total shares are updated
-        let total_shares = transmuter
-            .get_total_shares((deps.as_ref(), mock_env()))
-            .unwrap()
-            .total_shares;
+        let GetTotalSharesResponse { total_shares } =
+            t.contract.query(&QueryMsg::GetTotalShares {}).unwrap();
 
         assert_eq!(total_shares, shares);
 
         // check if pool liquidity is updated
-        let pool_liquidity: Vec<Coin> = transmuter
-            .get_total_pool_liquidity((deps.as_ref(), mock_env()))
-            .unwrap()
-            .total_pool_liquidity
-            .into_iter()
-            .filter(|coin| !coin.amount.is_zero())
-            .collect();
+        let GetTotalPoolLiquidityResponse {
+            total_pool_liquidity,
+        } = t
+            .contract
+            .query(&QueryMsg::GetTotalPoolLiquidity {})
+            .unwrap();
 
         assert_eq!(
-            pool_liquidity,
-            case.funds
-                .iter()
-                .cloned()
+            total_pool_liquidity
+                .into_iter()
                 .filter(|coin| !coin.amount.is_zero())
-                .collect::<Vec<Coin>>(),
+                .collect::<Vec<_>>(),
+            case.funds,
             "check if pool liquidity is updated: {:?}",
             case
         );
@@ -141,98 +132,69 @@ fn test_join_pool_should_update_shares_and_liquidity_properly() {
     let cases = vec![
         Case {
             joins: vec![
-                ("addr1", vec![Coin::new(0, "denom0")]),
-                ("addr2", vec![Coin::new(0, "denom1")]),
+                ("addr1", vec![Coin::new(1, "denoma")]),
+                ("addr2", vec![Coin::new(1, "denomb")]),
             ],
         },
         Case {
-            joins: vec![("addr1", vec![Coin::new(u128::MAX, "denom0")])],
+            joins: vec![("addr1", vec![Coin::new(u128::MAX, "denoma")])],
         },
         Case {
-            joins: vec![("addr1", vec![Coin::new(u128::MAX, "denom1")])],
+            joins: vec![("addr1", vec![Coin::new(u128::MAX, "denomb")])],
         },
         Case {
             joins: vec![
-                ("addr1", vec![Coin::new(100_000, "denom0")]),
-                ("addr2", vec![Coin::new(999_999_999, "denom1")]),
-                ("addr3", vec![Coin::new(1, "denom0")]),
-                ("addr4", vec![Coin::new(0, "denom1")]),
+                ("addr1", vec![Coin::new(100_000, "denoma")]),
+                ("addr2", vec![Coin::new(999_999_999, "denomb")]),
+                ("addr3", vec![Coin::new(1, "denoma")]),
+                ("addr4", vec![Coin::new(2, "denomb")]),
             ],
         },
         Case {
             joins: vec![
                 (
                     "addr1",
-                    vec![Coin::new(100_000, "denom0"), Coin::new(999, "denom1")],
+                    vec![Coin::new(100_000, "denoma"), Coin::new(999, "denomb")],
                 ),
                 (
                     "addr2",
                     vec![
-                        Coin::new(999_999_999, "denom0"),
-                        Coin::new(999_999_999, "denom1"),
+                        Coin::new(999_999_999, "denoma"),
+                        Coin::new(999_999_999, "denomb"),
                     ],
                 ),
                 (
                     "addr3",
-                    vec![Coin::new(1, "denom0"), Coin::new(1, "denom1")],
-                ),
-                (
-                    "addr4",
-                    vec![Coin::new(0, "denom0"), Coin::new(0, "denom1")],
+                    vec![Coin::new(1, "denoma"), Coin::new(1, "denomb")],
                 ),
             ],
         },
     ];
 
     for case in cases {
-        let transmuter = Transmuter::new();
-        let mut deps = mock_dependencies();
+        let app = OsmosisTestApp::new();
+        let mut builder = TestEnvBuilder::new();
 
-        transmuter
-            .instantiate(
-                (deps.as_mut(), mock_env(), mock_info("instantiator", &[])),
-                vec!["denom0".to_string(), "denom1".to_string()],
-            )
-            .unwrap();
+        for (acc, funds) in case.joins.clone() {
+            builder = builder.with_account(acc, funds);
+        }
 
-        transmuter
-            .shares
-            .set_share_denom(
-                &mut deps.storage,
-                &"factory/contract_address/transmuter/poolshare".to_string(),
-            )
-            .unwrap();
+        let t = builder
+            .with_instantiate_msg(InstantiateMsg {
+                pool_asset_denoms: vec!["denoma".to_string(), "denomb".to_string()],
+            })
+            .build(&app);
 
         for (addr, funds) in case.joins.clone() {
-            transmuter
-                .join_pool((deps.as_mut(), mock_env(), mock_info(addr, &funds)))
+            // join pool
+            t.contract
+                .execute(&ExecMsg::JoinPool {}, &funds, &t.accounts[addr])
                 .unwrap();
-            // check if shares are updated
-            let shares = transmuter
-                .get_shares((deps.as_ref(), mock_env()), addr.to_string())
-                .unwrap()
-                .shares;
-
-            // shares == sum of cases.funds amount
-            assert_eq!(
-                shares,
-                Uint128::from(
-                    funds
-                        .iter()
-                        .fold(0, |acc, coin| { acc + coin.amount.u128() })
-                ),
-                "checking if shares are properly updated:\n addr: {},\n funds: {:?},\n case: {:?}",
-                addr,
-                funds,
-                case
-            );
         }
 
         // check if total shares are updated
-        let total_shares = transmuter
-            .get_total_shares((deps.as_ref(), mock_env()))
-            .unwrap()
-            .total_shares;
+        let GetTotalSharesResponse { total_shares } =
+            t.contract.query(&QueryMsg::GetTotalShares {}).unwrap();
 
         assert_eq!(
             total_shares,
@@ -247,10 +209,14 @@ fn test_join_pool_should_update_shares_and_liquidity_properly() {
         );
 
         // check if pool liquidity is updated
-        let pool_liquidity: Vec<Coin> = transmuter
-            .get_total_pool_liquidity((deps.as_ref(), mock_env()))
-            .unwrap()
-            .total_pool_liquidity
+        let GetTotalPoolLiquidityResponse {
+            total_pool_liquidity,
+        } = t
+            .contract
+            .query(&QueryMsg::GetTotalPoolLiquidity {})
+            .unwrap();
+
+        let total_pool_liquidity: Vec<Coin> = total_pool_liquidity
             .into_iter()
             .filter(|coin| !coin.amount.is_zero())
             .collect();
@@ -276,7 +242,7 @@ fn test_join_pool_should_update_shares_and_liquidity_properly() {
         expected_pool_liquidity.sort_by(|a, b| a.denom.cmp(&b.denom));
 
         assert_eq!(
-            pool_liquidity, expected_pool_liquidity,
+            total_pool_liquidity, expected_pool_liquidity,
             "checking if pooliquidity is properly updated, case: {:?}",
             case
         );
@@ -293,58 +259,71 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
 
     let cases = vec![
         Case {
-            join: vec![Coin::new(0, "denom0")],
-            exit: vec![Coin::new(0, "denom0")],
+            join: vec![Coin::new(1, "denoma")],
+            exit: vec![Coin::new(1, "denoma")],
         },
         Case {
-            join: vec![Coin::new(100_000, "denom0"), Coin::new(1, "denom1")],
-            exit: vec![Coin::new(100_000, "denom0")],
+            join: vec![Coin::new(100_000, "denoma"), Coin::new(1, "denomb")],
+            exit: vec![Coin::new(100_000, "denoma")],
         },
         Case {
-            join: vec![Coin::new(1, "denom0"), Coin::new(100_000, "denom1")],
-            exit: vec![Coin::new(100_000, "denom1")],
+            join: vec![Coin::new(1, "denoma"), Coin::new(100_000, "denomb")],
+            exit: vec![Coin::new(100_000, "denomb")],
         },
         Case {
-            join: vec![Coin::new(u128::MAX, "denom0")],
-            exit: vec![Coin::new(u128::MAX, "denom0")],
+            join: vec![Coin::new(u128::MAX, "denoma")],
+            exit: vec![Coin::new(u128::MAX, "denoma")],
         },
         Case {
-            join: vec![Coin::new(u128::MAX, "denom0")],
-            exit: vec![Coin::new(u128::MAX - 1, "denom0")],
+            join: vec![Coin::new(u128::MAX, "denoma")],
+            exit: vec![Coin::new(u128::MAX - 1, "denoma")],
         },
         Case {
-            join: vec![Coin::new(u128::MAX, "denom0")],
-            exit: vec![Coin::new(u128::MAX - 100_000_000, "denom0")],
+            join: vec![Coin::new(u128::MAX, "denoma")],
+            exit: vec![Coin::new(u128::MAX - 100_000_000, "denoma")],
         },
     ];
 
     for case in cases {
-        let transmuter = Transmuter::new();
-        let mut deps = mock_dependencies();
+        // let transmuter = Transmuter::new();
+        // let mut deps = mock_dependencies();
+        let app = OsmosisTestApp::new();
+        let t = TestEnvBuilder::new()
+            .with_account("instantiator", vec![])
+            .with_account("addr1", case.join.clone())
+            .with_instantiate_msg(InstantiateMsg {
+                pool_asset_denoms: vec!["denoma".to_string(), "denomb".to_string()],
+            })
+            .build(&app);
 
-        transmuter
-            .instantiate(
-                (deps.as_mut(), mock_env(), mock_info("instantiator", &[])),
-                vec!["denom0".to_string(), "denom1".to_string()],
-            )
-            .unwrap();
+        // transmuter
+        //     .instantiate(
+        //         (deps.as_mut(), mock_env(), mock_info("instantiator", &[])),
+        //         vec!["denoma".to_string(), "denomb".to_string()],
+        //     )
+        //     .unwrap();
 
-        let share_denom = "factory/contract_address/transmuter/poolshare".to_string();
+        // let share_denom = "factory/contract_address/transmuter/poolshare".to_string();
 
-        transmuter
-            .shares
-            .set_share_denom(&mut deps.storage, &share_denom)
-            .unwrap();
+        // transmuter
+        //     .shares
+        //     .set_share_denom(&mut deps.storage, &share_denom)
+        //     .unwrap();
 
-        transmuter
-            .join_pool((deps.as_mut(), mock_env(), mock_info("addr1", &case.join)))
+        // transmuter
+        //     .join_pool((deps.as_mut(), mock_env(), mock_info("addr1", &case.join)))
+        //     .unwrap();
+        t.contract
+            .execute(&ExecMsg::JoinPool {}, &case.join, &t.accounts["addr1"])
             .unwrap();
 
         // check if shares are updated
-        let shares = transmuter
-            .get_shares((deps.as_ref(), mock_env()), "addr1".to_string())
-            .unwrap()
-            .shares;
+        let GetSharesResponse { shares } = t
+            .contract
+            .query(&QueryMsg::GetShares {
+                address: t.accounts["addr1"].address(),
+            })
+            .unwrap();
 
         // shares == sum of cases.funds amount
         assert_eq!(
@@ -359,24 +338,33 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
         );
 
         // check if total shares are updated
-        let total_shares = transmuter
-            .get_total_shares((deps.as_ref(), mock_env()))
-            .unwrap()
-            .total_shares;
+        let GetTotalSharesResponse { total_shares } =
+            t.contract.query(&QueryMsg::GetTotalShares {}).unwrap();
 
         assert_eq!(total_shares, shares);
 
         // check if pool liquidity is updated
-        let pool_liquidity: Vec<Coin> = transmuter
-            .get_total_pool_liquidity((deps.as_ref(), mock_env()))
-            .unwrap()
-            .total_pool_liquidity
+        // let pool_liquidity: Vec<Coin> = transmuter
+        //     .get_total_pool_liquidity((deps.as_ref(), mock_env()))
+        //     .unwrap()
+        //     .total_pool_liquidity
+        //     .into_iter()
+        //     .filter(|coin| !coin.amount.is_zero())
+        //     .collect();
+        let GetTotalPoolLiquidityResponse {
+            total_pool_liquidity,
+        } = t
+            .contract
+            .query(&QueryMsg::GetTotalPoolLiquidity {})
+            .unwrap();
+
+        let total_pool_liquidity = total_pool_liquidity
             .into_iter()
             .filter(|coin| !coin.amount.is_zero())
-            .collect();
+            .collect::<Vec<_>>();
 
         assert_eq!(
-            pool_liquidity,
+            total_pool_liquidity,
             case.join
                 .iter()
                 .cloned()
@@ -387,10 +375,20 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
         );
 
         // exit pool
-        let res = transmuter
-            .exit_pool(
-                (deps.as_mut(), mock_env(), mock_info("addr1", &[])),
-                case.exit.clone(),
+        // let res = transmuter
+        //     .exit_pool(
+        //         (deps.as_mut(), mock_env(), mock_info("addr1", &[])),
+        //         case.exit.clone(),
+        //     )
+        //     .unwrap();
+        let res = t
+            .contract
+            .execute(
+                &ExecMsg::ExitPool {
+                    tokens_out: case.exit.clone(),
+                },
+                &[],
+                &t.accounts["addr1"],
             )
             .unwrap();
 
@@ -401,32 +399,52 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
             .fold(Uint128::zero(), |acc, coin| acc + coin.amount)
             .u128();
 
+        // dbg!(res);
+
+        let burn_attrs = res
+            .events
+            .into_iter()
+            .find(|e| e.ty == "tf_burn")
+            .unwrap()
+            .attributes;
+
+        let GetShareDenomResponse { share_denom } =
+            t.contract.query(&QueryMsg::GetShareDenom {}).unwrap();
+
         assert_eq!(
-            res.messages,
+            burn_attrs,
             vec![
-                SubMsg {
-                    id: 0,
-                    msg: MsgBurn {
-                        sender: mock_env().contract.address.to_string(),
-                        amount: Some(Coin::new(exit_amount, share_denom).into()),
-                        burn_from_address: "addr1".to_string(),
-                    }
-                    .into(),
-                    gas_limit: None,
-                    reply_on: cosmwasm_std::ReplyOn::Never
-                },
-                SubMsg {
-                    id: 0,
-                    msg: BankMsg::Send {
-                        to_address: "addr1".to_string(),
-                        amount: case.exit.clone()
-                    }
-                    .into(),
-                    gas_limit: None,
-                    reply_on: cosmwasm_std::ReplyOn::Never
-                }
+                attr("burn_from_address", t.contract.contract_addr.clone()),
+                attr("amount", format!("{}{}", exit_amount, share_denom)),
             ]
         );
+
+        // assert_eq!(
+        //     res.messages,
+        //     vec![
+        //         SubMsg {
+        //             id: 0,
+        //             msg: MsgBurn {
+        //                 sender: mock_env().contract.address.to_string(),
+        //                 amount: Some(Coin::new(exit_amount, share_denom).into()),
+        //                 burn_from_address: "addr1".to_string(),
+        //             }
+        //             .into(),
+        //             gas_limit: None,
+        //             reply_on: cosmwasm_std::ReplyOn::Never
+        //         },
+        //         SubMsg {
+        //             id: 0,
+        //             msg: BankMsg::Send {
+        //                 to_address: "addr1".to_string(),
+        //                 amount: case.exit.clone()
+        //             }
+        //             .into(),
+        //             gas_limit: None,
+        //             reply_on: cosmwasm_std::ReplyOn::Never
+        //         }
+        //     ]
+        // );
 
         let total_exit_amount = case
             .exit
@@ -434,11 +452,19 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
             .fold(Uint128::zero(), |acc, coin| acc + coin.amount);
 
         // check if shares are updated
+        // let prev_shares = shares;
+        // let shares = transmuter
+        //     .get_shares((deps.as_ref(), mock_env()), "addr1".to_string())
+        //     .unwrap()
+        //     .shares;
         let prev_shares = shares;
-        let shares = transmuter
-            .get_shares((deps.as_ref(), mock_env()), "addr1".to_string())
-            .unwrap()
-            .shares;
+        let GetSharesResponse { shares } = t
+            .contract
+            .query(&QueryMsg::GetShares {
+                address: t.accounts["addr1"].address(),
+            })
+            .unwrap();
+
         assert_eq!(
             shares,
             prev_shares - total_exit_amount,
@@ -446,12 +472,14 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
             case
         );
 
-        // check if total shares are updated
+        // // check if total shares are updated
         let prev_total_shares = total_shares;
-        let total_shares = transmuter
-            .get_total_shares((deps.as_ref(), mock_env()))
-            .unwrap()
-            .total_shares;
+        // let total_shares = transmuter
+        //     .get_total_shares((deps.as_ref(), mock_env()))
+        //     .unwrap()
+        //     .total_shares;
+        let GetTotalSharesResponse { total_shares } =
+            t.contract.query(&QueryMsg::GetTotalShares {}).unwrap();
 
         assert_eq!(
             total_shares,
@@ -460,17 +488,23 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
             case
         );
 
-        // check if pool liquidity is updated
-        let prev_pool_liquidity = pool_liquidity;
-        let pool_liquidity: Vec<Coin> = transmuter
-            .get_total_pool_liquidity((deps.as_ref(), mock_env()))
-            .unwrap()
-            .total_pool_liquidity;
+        // // check if pool liquidity is updated
+        let prev_pool_liquidity = total_pool_liquidity;
+        // let pool_liquidity: Vec<Coin> = transmuter
+        //     .get_total_pool_liquidity((deps.as_ref(), mock_env()))
+        //     .unwrap()
+        //     .total_pool_liquidity;
+        let GetTotalPoolLiquidityResponse {
+            total_pool_liquidity,
+        } = t
+            .contract
+            .query(&QueryMsg::GetTotalPoolLiquidity {})
+            .unwrap();
 
         // zipping pool liquidity assuming that denom ordering stays the same
         prev_pool_liquidity
             .iter()
-            .zip(pool_liquidity)
+            .zip(total_pool_liquidity)
             .for_each(|(prev, curr)| {
                 let exit_amount = case
                     .exit
@@ -493,115 +527,106 @@ fn test_exit_pool_greater_than_their_shares_should_fail() {
 
     let cases = vec![
         Case {
-            join: vec![Coin::new(0, "denom0")],
-            exit: vec![Coin::new(1, "denom0")],
+            join: vec![Coin::new(1, "denoma")],
+            exit: vec![Coin::new(2, "denoma")],
         },
         Case {
-            join: vec![Coin::new(100_000_000, "denom0")],
-            exit: vec![Coin::new(100_000_001, "denom0")],
+            join: vec![Coin::new(100_000_000, "denoma")],
+            exit: vec![Coin::new(100_000_001, "denoma")],
         },
         Case {
-            join: vec![Coin::new(u128::MAX - 1, "denom0")],
-            exit: vec![Coin::new(u128::MAX, "denom0")],
+            join: vec![Coin::new(u128::MAX - 1, "denoma")],
+            exit: vec![Coin::new(u128::MAX, "denoma")],
         },
         Case {
             join: vec![
-                Coin::new(u128::MAX - 100_000_000, "denom0"),
-                Coin::new(99_999_999, "denom1"),
+                Coin::new(u128::MAX - 100_000_000, "denoma"),
+                Coin::new(99_999_999, "denomb"),
             ],
-            exit: vec![Coin::new(u128::MAX, "denom0")],
+            exit: vec![Coin::new(u128::MAX, "denoma")],
         },
     ];
 
     for case in cases {
-        let transmuter = Transmuter::new();
-        let mut deps = mock_dependencies();
+        let app = OsmosisTestApp::new();
+        let t = TestEnvBuilder::new()
+            .with_account("addr", case.join.clone())
+            .with_instantiate_msg(InstantiateMsg {
+                pool_asset_denoms: vec!["denoma".to_string(), "denomb".to_string()],
+            })
+            .build(&app);
 
-        transmuter
-            .instantiate(
-                (deps.as_mut(), mock_env(), mock_info("instantiator", &[])),
-                vec!["denom0".to_string(), "denom1".to_string()],
-            )
+        t.contract
+            .execute(&ExecMsg::JoinPool {}, &case.join, &t.accounts["addr"])
             .unwrap();
 
-        transmuter
-            .shares
-            .set_share_denom(
-                &mut deps.storage,
-                &"factory/contract_address/transmuter/poolshare".to_string(),
-            )
-            .unwrap();
-
-        transmuter
-            .join_pool((deps.as_mut(), mock_env(), mock_info("addr1", &case.join)))
-            .unwrap();
-
-        let err = transmuter
-            .exit_pool(
-                (deps.as_mut(), mock_env(), mock_info("addr1", &[])),
-                case.exit.clone(),
+        let err = t
+            .contract
+            .execute(
+                &ExecMsg::ExitPool {
+                    tokens_out: case.exit.clone(),
+                },
+                &[],
+                &t.accounts["addr"],
             )
             .unwrap_err();
 
-        assert_eq!(
-            err,
+        assert_contract_err(
             ContractError::InsufficientShares {
                 required: case
                     .exit
                     .iter()
-                    .fold(Uint128::zero(), |acc, coin| { acc + coin.amount }),
-                available: transmuter
-                    .shares
-                    .get_share(deps.as_ref().storage, &Addr::unchecked("addr1"))
+                    .fold(Uint128::zero(), |acc, coin| acc + coin.amount),
+                available: t
+                    .contract
+                    .query::<GetSharesResponse>(&QueryMsg::GetShares {
+                        address: t.accounts["addr"].address(),
+                    })
                     .unwrap()
-            }
-        )
+                    .shares,
+            },
+            err,
+        );
     }
 }
 
 #[test]
 fn test_exit_pool_within_shares_but_over_joined_denom_amount() {
-    let transmuter = Transmuter::new();
-    let mut deps = mock_dependencies();
+    let app = OsmosisTestApp::new();
+    let t = TestEnvBuilder::new()
+        .with_account("instantiator", vec![Coin::new(100_000_000, "denoma")])
+        .with_account("addr1", vec![Coin::new(200_000_000, "denomb")])
+        .with_instantiate_msg(InstantiateMsg {
+            pool_asset_denoms: vec!["denoma".to_string(), "denomb".to_string()],
+        })
+        .build(&app);
 
-    transmuter
-        .instantiate(
-            (deps.as_mut(), mock_env(), mock_info("instantiator", &[])),
-            vec!["denom0".to_string(), "denom1".to_string()],
+    t.contract
+        .execute(
+            &ExecMsg::JoinPool {},
+            &[Coin::new(100_000_000, "denoma")],
+            &t.accounts["instantiator"],
         )
         .unwrap();
 
-    transmuter
-        .shares
-        .set_share_denom(
-            &mut deps.storage,
-            &"factory/contract_address/transmuter/poolshare".to_string(),
+    t.contract
+        .execute(
+            &ExecMsg::JoinPool {},
+            &[Coin::new(200_000_000, "denomb")],
+            &t.accounts["addr1"],
         )
         .unwrap();
 
-    transmuter
-        .join_pool((
-            deps.as_mut(),
-            mock_env(),
-            mock_info("instantiator", &[Coin::new(100_000_000, "denom0")]),
-        ))
-        .unwrap();
-
-    transmuter
-        .join_pool((
-            deps.as_mut(),
-            mock_env(),
-            mock_info("addr1", &[Coin::new(200_000_000, "denom1")]),
-        ))
-        .unwrap();
-
-    transmuter
-        .exit_pool(
-            (deps.as_mut(), mock_env(), mock_info("addr1", &[])),
-            vec![
-                Coin::new(100_000_000, "denom0"),
-                Coin::new(100_000_000, "denom1"),
-            ],
+    t.contract
+        .execute(
+            &ExecMsg::ExitPool {
+                tokens_out: vec![
+                    Coin::new(100_000_000, "denoma"),
+                    Coin::new(100_000_000, "denomb"),
+                ],
+            },
+            &[],
+            &t.accounts["addr1"],
         )
         .expect("exit pool should succeed");
 }

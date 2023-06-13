@@ -9,7 +9,7 @@ use crate::{
     sudo::SudoMsg,
     ContractError,
 };
-use cosmwasm_std::{BankMsg, Coin, Decimal, Uint128};
+use cosmwasm_std::{Coin, Decimal, Uint128};
 
 use cw_multi_test::Executor;
 
@@ -188,7 +188,7 @@ fn test_swap() {
     let bank = Bank::new(&app);
     let cp = CosmwasmPool::new(&app);
 
-    let mut t = TestEnvBuilder::new()
+    let t = TestEnvBuilder::new()
         .with_account(
             "alice",
             vec![
@@ -384,7 +384,6 @@ fn test_swap() {
 #[test]
 fn test_exit_pool() {
     let app = OsmosisTestApp::new();
-    let bank = Bank::new(&app);
     let cp = CosmwasmPool::new(&app);
 
     let t = TestEnvBuilder::new()
@@ -587,10 +586,9 @@ fn test_exit_pool() {
 #[test]
 fn test_3_pool_swap() {
     let app = OsmosisTestApp::new();
-    let bank = Bank::new(&app);
     let cp = CosmwasmPool::new(&app);
 
-    let mut t = TestEnvBuilder::new()
+    let t = TestEnvBuilder::new()
         .with_account("alice", vec![Coin::new(1_500, ETH_USDC)])
         .with_account("bob", vec![Coin::new(1_500, ETH_DAI)])
         .with_account("provider", vec![Coin::new(100_000, COSMOS_USDC)])

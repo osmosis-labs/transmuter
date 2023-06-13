@@ -30,7 +30,7 @@ use serde::de::DeserializeOwned;
 
 use crate::contract::Transmuter;
 
-use super::modules::cosmwasm_pool::{self, CosmwasmPool};
+use super::modules::cosmwasm_pool::CosmwasmPool;
 
 impl Contract<Empty> for Transmuter<'_> {
     fn execute(
@@ -251,9 +251,7 @@ impl<'a> TransmuterContract<'a> {
         instantiate_msg: &InstantiateMsg,
         signer: &SigningAccount,
     ) -> Result<Self, RunnerError> {
-        let wasm = Wasm::new(app);
         let cp = CosmwasmPool::new(app);
-
         let gov = GovWithAppAccess::new(&app);
 
         let code_id = 1; // temporary solution
