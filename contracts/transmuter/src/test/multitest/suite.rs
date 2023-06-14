@@ -205,7 +205,7 @@ fn test_swap() {
         .build(&app);
 
     // join pool
-    let tokens_in = vec![Coin::new(100_000, COSMOS_USDC).into()];
+    let tokens_in = vec![Coin::new(100_000, COSMOS_USDC)];
 
     // join pool with send tokens should not update pool balance
     bank.send(

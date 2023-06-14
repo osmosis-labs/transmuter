@@ -1,17 +1,12 @@
 use std::collections::HashMap;
 
-use cosmwasm_std::{
-    attr,
-    testing::{mock_dependencies, mock_env, mock_info},
-    Addr, BankMsg, Coin, SubMsg, Uint128,
-};
-use osmosis_std::types::osmosis::tokenfactory::v1beta1::MsgBurn;
+use cosmwasm_std::{attr, Coin, Uint128};
 use osmosis_test_tube::{Account, OsmosisTestApp};
 
 use crate::{
     contract::{
         ExecMsg, GetShareDenomResponse, GetSharesResponse, GetTotalPoolLiquidityResponse,
-        GetTotalSharesResponse, InstantiateMsg, QueryMsg, Transmuter,
+        GetTotalSharesResponse, InstantiateMsg, QueryMsg,
     },
     test::multitest::test_env::{assert_contract_err, TestEnvBuilder},
     ContractError,
@@ -296,23 +291,6 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
             })
             .build(&app);
 
-        // transmuter
-        //     .instantiate(
-        //         (deps.as_mut(), mock_env(), mock_info("instantiator", &[])),
-        //         vec!["denoma".to_string(), "denomb".to_string()],
-        //     )
-        //     .unwrap();
-
-        // let share_denom = "factory/contract_address/transmuter/poolshare".to_string();
-
-        // transmuter
-        //     .shares
-        //     .set_share_denom(&mut deps.storage, &share_denom)
-        //     .unwrap();
-
-        // transmuter
-        //     .join_pool((deps.as_mut(), mock_env(), mock_info("addr1", &case.join)))
-        //     .unwrap();
         t.contract
             .execute(&ExecMsg::JoinPool {}, &case.join, &t.accounts["addr1"])
             .unwrap();
@@ -344,13 +322,6 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
         assert_eq!(total_shares, shares);
 
         // check if pool liquidity is updated
-        // let pool_liquidity: Vec<Coin> = transmuter
-        //     .get_total_pool_liquidity((deps.as_ref(), mock_env()))
-        //     .unwrap()
-        //     .total_pool_liquidity
-        //     .into_iter()
-        //     .filter(|coin| !coin.amount.is_zero())
-        //     .collect();
         let GetTotalPoolLiquidityResponse {
             total_pool_liquidity,
         } = t
@@ -375,12 +346,6 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
         );
 
         // exit pool
-        // let res = transmuter
-        //     .exit_pool(
-        //         (deps.as_mut(), mock_env(), mock_info("addr1", &[])),
-        //         case.exit.clone(),
-        //     )
-        //     .unwrap();
         let res = t
             .contract
             .execute(
@@ -419,44 +384,12 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
             ]
         );
 
-        // assert_eq!(
-        //     res.messages,
-        //     vec![
-        //         SubMsg {
-        //             id: 0,
-        //             msg: MsgBurn {
-        //                 sender: mock_env().contract.address.to_string(),
-        //                 amount: Some(Coin::new(exit_amount, share_denom).into()),
-        //                 burn_from_address: "addr1".to_string(),
-        //             }
-        //             .into(),
-        //             gas_limit: None,
-        //             reply_on: cosmwasm_std::ReplyOn::Never
-        //         },
-        //         SubMsg {
-        //             id: 0,
-        //             msg: BankMsg::Send {
-        //                 to_address: "addr1".to_string(),
-        //                 amount: case.exit.clone()
-        //             }
-        //             .into(),
-        //             gas_limit: None,
-        //             reply_on: cosmwasm_std::ReplyOn::Never
-        //         }
-        //     ]
-        // );
-
         let total_exit_amount = case
             .exit
             .iter()
             .fold(Uint128::zero(), |acc, coin| acc + coin.amount);
 
         // check if shares are updated
-        // let prev_shares = shares;
-        // let shares = transmuter
-        //     .get_shares((deps.as_ref(), mock_env()), "addr1".to_string())
-        //     .unwrap()
-        //     .shares;
         let prev_shares = shares;
         let GetSharesResponse { shares } = t
             .contract
@@ -472,12 +405,8 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
             case
         );
 
-        // // check if total shares are updated
+        // check if total shares are updated
         let prev_total_shares = total_shares;
-        // let total_shares = transmuter
-        //     .get_total_shares((deps.as_ref(), mock_env()))
-        //     .unwrap()
-        //     .total_shares;
         let GetTotalSharesResponse { total_shares } =
             t.contract.query(&QueryMsg::GetTotalShares {}).unwrap();
 
@@ -488,12 +417,8 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
             case
         );
 
-        // // check if pool liquidity is updated
+        // check if pool liquidity is updated
         let prev_pool_liquidity = total_pool_liquidity;
-        // let pool_liquidity: Vec<Coin> = transmuter
-        //     .get_total_pool_liquidity((deps.as_ref(), mock_env()))
-        //     .unwrap()
-        //     .total_pool_liquidity;
         let GetTotalPoolLiquidityResponse {
             total_pool_liquidity,
         } = t

@@ -252,7 +252,7 @@ impl<'a> TransmuterContract<'a> {
         signer: &SigningAccount,
     ) -> Result<Self, RunnerError> {
         let cp = CosmwasmPool::new(app);
-        let gov = GovWithAppAccess::new(&app);
+        let gov = GovWithAppAccess::new(app);
 
         let code_id = 1; // temporary solution
         gov.propose_and_execute(
@@ -326,13 +326,12 @@ impl<'a> TransmuterContract<'a> {
 pub fn assert_contract_err(expected: ContractError, actual: RunnerError) {
     match actual {
         RunnerError::ExecuteError { msg } => {
-            assert_eq!(
-                format!(
-                    "failed to execute message; message index: 0: {}: execute wasm contract failed",
-                    expected
-                ),
-                msg
-            )
+            if !msg.contains(&expected.to_string()) {
+                panic!(
+                    "assertion failed:\n\n  must contain \t: \"{}\",\n  actual \t: \"{}\"\n",
+                    expected, msg
+                )
+            }
         }
         _ => panic!("unexpected error, expect execute error but got: {}", actual),
     };
