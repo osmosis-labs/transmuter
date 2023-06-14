@@ -1,13 +1,11 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
-    contract::{ContractExecMsg, ContractQueryMsg, ExecMsg, InstantiateMsg, QueryMsg},
-    entry_points,
-    sudo::SudoMsg,
+    contract::{ExecMsg, InstantiateMsg, QueryMsg},
     ContractError,
 };
-use anyhow::{bail, Result as AnyResult};
-use cosmwasm_std::{from_slice, to_binary, Addr, Coin, Empty};
+
+use cosmwasm_std::{to_binary, Coin};
 use osmosis_std::types::osmosis::cosmwasmpool::v1beta1::{
     ContractInfoByPoolIdRequest, ContractInfoByPoolIdResponse, MsgCreateCosmWasmPool,
 };
@@ -17,7 +15,6 @@ use osmosis_test_tube::{
     GovWithAppAccess,
 };
 
-use cw_multi_test::{App, AppBuilder, Contract, Executor};
 use osmosis_test_tube::{
     cosmrs::proto::{
         cosmos::bank::v1beta1::QueryAllBalancesRequest,
@@ -28,87 +25,16 @@ use osmosis_test_tube::{
 };
 use serde::de::DeserializeOwned;
 
-use crate::contract::Transmuter;
-
 use super::modules::cosmwasm_pool::CosmwasmPool;
 
-impl Contract<Empty> for Transmuter<'_> {
-    fn execute(
-        &self,
-        deps: cosmwasm_std::DepsMut<Empty>,
-        env: cosmwasm_std::Env,
-        info: cosmwasm_std::MessageInfo,
-        msg: Vec<u8>,
-    ) -> AnyResult<cosmwasm_std::Response<Empty>> {
-        let msg = from_slice::<ContractExecMsg>(&msg)?;
-        entry_points::execute(deps, env, info, msg).map_err(Into::into)
-    }
-
-    fn instantiate(
-        &self,
-        deps: cosmwasm_std::DepsMut<Empty>,
-        env: cosmwasm_std::Env,
-        info: cosmwasm_std::MessageInfo,
-        msg: Vec<u8>,
-    ) -> AnyResult<cosmwasm_std::Response<Empty>> {
-        let msg = from_slice::<InstantiateMsg>(&msg)?;
-        entry_points::instantiate(deps, env, info, msg).map_err(Into::into)
-    }
-
-    fn query(
-        &self,
-        deps: cosmwasm_std::Deps<Empty>,
-        env: cosmwasm_std::Env,
-        msg: Vec<u8>,
-    ) -> AnyResult<cosmwasm_std::Binary> {
-        let msg = from_slice::<ContractQueryMsg>(&msg)?;
-        entry_points::query(deps, env, msg).map_err(Into::into)
-    }
-
-    fn sudo(
-        &self,
-        deps: cosmwasm_std::DepsMut<Empty>,
-        env: cosmwasm_std::Env,
-        msg: Vec<u8>,
-    ) -> AnyResult<cosmwasm_std::Response<Empty>> {
-        let msg = from_slice::<SudoMsg>(&msg)?;
-        entry_points::sudo(deps, env, msg).map_err(Into::into)
-    }
-
-    fn reply(
-        &self,
-        _deps: cosmwasm_std::DepsMut<Empty>,
-        _env: cosmwasm_std::Env,
-        _msg: cosmwasm_std::Reply,
-    ) -> AnyResult<cosmwasm_std::Response<Empty>> {
-        bail!("reply not implemented for contract")
-    }
-
-    fn migrate(
-        &self,
-        _deps: cosmwasm_std::DepsMut<Empty>,
-        _env: cosmwasm_std::Env,
-        _msg: Vec<u8>,
-    ) -> AnyResult<cosmwasm_std::Response<Empty>> {
-        bail!("migrate not implemented for contract")
-    }
-}
-
-pub struct TestEnv {
-    pub app: App,
-    pub creator: Addr,
-    pub contract: Addr,
-    pub accounts: HashMap<String, Addr>,
-}
-
-pub struct TestEnv2<'a> {
+pub struct TestEnv<'a> {
     pub app: &'a OsmosisTestApp,
     pub creator: SigningAccount,
     pub contract: TransmuterContract<'a>,
     pub accounts: HashMap<String, SigningAccount>,
 }
 
-impl<'a> TestEnv2<'a> {
+impl<'a> TestEnv<'a> {
     pub fn assert_account_balances(
         &self,
         account: &str,
@@ -168,43 +94,7 @@ impl TestEnvBuilder {
         self.account_balances.insert(account.to_string(), balance);
         self
     }
-
-    pub fn _build(self) -> TestEnv {
-        let mut app = AppBuilder::default().build(|router, _, storage| {
-            for (account, balance) in self.account_balances.clone() {
-                router
-                    .bank
-                    .init_balance(storage, &Addr::unchecked(account), balance)
-                    .unwrap();
-            }
-        });
-
-        let creator = Addr::unchecked("creator");
-        let code_id = app.store_code(Box::new(Transmuter::new()));
-        let contract = app
-            .instantiate_contract(
-                code_id,
-                creator.clone(),
-                &self.instantiate_msg.expect("instantiate msg not set"),
-                &[],
-                "transmuter",
-                None,
-            )
-            .unwrap();
-
-        TestEnv {
-            app,
-            creator,
-            contract,
-            accounts: self
-                .account_balances
-                .keys()
-                .map(|k| (k.clone(), Addr::unchecked(k.clone())))
-                .collect(),
-        }
-    }
-
-    pub fn build(self, app: &'_ OsmosisTestApp) -> TestEnv2<'_> {
+    pub fn build(self, app: &'_ OsmosisTestApp) -> TestEnv<'_> {
         let accounts: HashMap<_, _> = self
             .account_balances
             .into_iter()
@@ -229,7 +119,7 @@ impl TestEnvBuilder {
         )
         .unwrap();
 
-        TestEnv2 {
+        TestEnv {
             app,
             creator,
             contract,

@@ -7,8 +7,9 @@ use osmosis_test_tube::cosmrs::proto::cosmos::bank::v1beta1::QueryBalanceRequest
 use osmosis_test_tube::{Account, Bank, Module, OsmosisTestApp};
 
 use crate::contract::{ExecMsg, GetTotalPoolLiquidityResponse, GetTotalSharesResponse, QueryMsg};
-use crate::test::multitest::modules::cosmwasm_pool::CosmwasmPool;
-use crate::test::multitest::test_env::{assert_contract_err, TestEnv2, TestEnvBuilder};
+
+use crate::test::modules::cosmwasm_pool::CosmwasmPool;
+use crate::test::test_env::{assert_contract_err, TestEnv, TestEnvBuilder};
 use crate::ContractError;
 
 const SWAPPER: &str = "swapperaddr";
@@ -63,7 +64,7 @@ pub enum SwapMsg {
     },
 }
 
-fn assert_invariants(t: TestEnv2, act: impl FnOnce(&TestEnv2)) {
+fn assert_invariants(t: TestEnv, act: impl FnOnce(&TestEnv)) {
     // store previous shares and pool assets
     let prev_shares = t
         .contract
@@ -106,7 +107,7 @@ fn assert_invariants(t: TestEnv2, act: impl FnOnce(&TestEnv2)) {
     assert_eq!(sum_prev_pool_asset_amount, sum_updated_pool_asset_amount);
 }
 
-fn test_swap_success_case(t: TestEnv2, msg: SwapMsg, received: Coin) {
+fn test_swap_success_case(t: TestEnv, msg: SwapMsg, received: Coin) {
     assert_invariants(t, move |t| {
         let cp = CosmwasmPool::new(t.app);
         let bank = Bank::new(t.app);
@@ -180,7 +181,7 @@ fn test_swap_success_case(t: TestEnv2, msg: SwapMsg, received: Coin) {
     });
 }
 
-fn test_swap_failed_case(t: TestEnv2, msg: SwapMsg, err: ContractError) {
+fn test_swap_failed_case(t: TestEnv, msg: SwapMsg, err: ContractError) {
     assert_invariants(t, move |t| {
         let cp = CosmwasmPool::new(t.app);
 
@@ -227,7 +228,7 @@ fn test_swap_failed_case(t: TestEnv2, msg: SwapMsg, err: ContractError) {
     });
 }
 
-fn pool_with_single_lp(app: &'_ OsmosisTestApp, pool_assets: Vec<Coin>) -> TestEnv2<'_> {
+fn pool_with_single_lp(app: &'_ OsmosisTestApp, pool_assets: Vec<Coin>) -> TestEnv<'_> {
     let non_zero_pool_assets = pool_assets
         .clone()
         .into_iter()

@@ -8,7 +8,7 @@ use crate::{
         ExecMsg, GetShareDenomResponse, GetSharesResponse, GetTotalPoolLiquidityResponse,
         GetTotalSharesResponse, InstantiateMsg, QueryMsg,
     },
-    test::multitest::test_env::{assert_contract_err, TestEnvBuilder},
+    test::test_env::{assert_contract_err, TestEnvBuilder},
     ContractError,
 };
 

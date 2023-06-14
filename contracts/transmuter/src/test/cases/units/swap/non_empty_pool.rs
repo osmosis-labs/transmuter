@@ -3,7 +3,7 @@ use super::*;
 const REMAINING_DENOM0: u128 = 1_000_000_000_000;
 const REMAINING_DENOM1: u128 = 1_000_000_000_000;
 
-fn non_empty_pool(app: &'_ OsmosisTestApp) -> TestEnv2<'_> {
+fn non_empty_pool(app: &'_ OsmosisTestApp) -> TestEnv<'_> {
     pool_with_single_lp(
         app,
         vec![
