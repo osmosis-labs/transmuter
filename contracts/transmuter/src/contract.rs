@@ -117,7 +117,7 @@ impl Transmuter<'_> {
     }
 
     #[msg(query)]
-    pub fn query_admin(&self, ctx: (Deps, Env)) -> StdResult<AdminResponse> {
+    pub fn admin(&self, ctx: (Deps, Env)) -> StdResult<AdminResponse> {
         let (deps, _env) = ctx;
         self.admin.query_admin(deps)
     }

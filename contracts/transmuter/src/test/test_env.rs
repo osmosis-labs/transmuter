@@ -75,6 +75,7 @@ impl<'a> TestEnv<'a> {
 pub struct TestEnvBuilder {
     account_balances: HashMap<String, Vec<Coin>>,
     instantiate_msg: Option<InstantiateMsg>,
+    admin: Option<String>,
 }
 
 impl TestEnvBuilder {
@@ -82,11 +83,17 @@ impl TestEnvBuilder {
         Self {
             account_balances: HashMap::new(),
             instantiate_msg: None,
+            admin: None,
         }
     }
 
     pub fn with_instantiate_msg(mut self, msg: InstantiateMsg) -> Self {
         self.instantiate_msg = Some(msg);
+        self
+    }
+
+    pub fn with_admin(mut self, admin: &str) -> Self {
+        self.admin = Some(admin.to_string());
         self
     }
 
@@ -112,12 +119,13 @@ impl TestEnvBuilder {
             .init_account(&[Coin::new(1000000000000000u128, "uosmo")])
             .unwrap();
 
-        let contract = TransmuterContract::deploy(
-            app,
-            &self.instantiate_msg.expect("instantiate msg not set"),
-            &creator,
-        )
-        .unwrap();
+        let instantiate_msg = self.instantiate_msg.expect("instantiate msg not set");
+        let instantiate_msg = InstantiateMsg {
+            admin: accounts.get("admin").map(|admin| admin.address()),
+            ..instantiate_msg
+        };
+
+        let contract = TransmuterContract::deploy(app, &instantiate_msg, &creator).unwrap();
 
         TestEnv {
             app,
