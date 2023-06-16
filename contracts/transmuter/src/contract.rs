@@ -5,8 +5,11 @@ use cosmwasm_std::{
 };
 use cw_controllers::{Admin, AdminResponse};
 use cw_storage_plus::Item;
-use osmosis_std::types::osmosis::tokenfactory::v1beta1::{
-    MsgBurn, MsgCreateDenom, MsgCreateDenomResponse, MsgMint,
+use osmosis_std::types::{
+    cosmos::bank::v1beta1::Metadata,
+    osmosis::tokenfactory::v1beta1::{
+        MsgBurn, MsgCreateDenom, MsgCreateDenomResponse, MsgMint, MsgSetDenomMetadata,
+    },
 };
 use sylvia::contract;
 
@@ -117,6 +120,27 @@ impl Transmuter<'_> {
     pub fn query_admin(&self, ctx: (Deps, Env)) -> StdResult<AdminResponse> {
         let (deps, _env) = ctx;
         self.admin.query_admin(deps)
+    }
+
+    #[msg(exec)]
+    pub fn set_lp_denom_metadata(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        metadata: Metadata,
+    ) -> Result<Response, ContractError> {
+        let (deps, env, info) = ctx;
+
+        // ensure admin
+        self.admin.assert_admin(deps.as_ref(), &info.sender)?;
+
+        let msg_set_denom_metadata = MsgSetDenomMetadata {
+            sender: env.contract.address.to_string(),
+            metadata: Some(metadata),
+        };
+
+        Ok(Response::new()
+            .add_attribute("method", "set_lp_denom_metadata")
+            .add_message(msg_set_denom_metadata))
     }
 
     /// Join pool with tokens that exist in the pool.
