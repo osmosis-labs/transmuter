@@ -1,4 +1,4 @@
-mod comprehensive_flows;
+mod scenarios;
 
 #[macro_use]
 mod units;
