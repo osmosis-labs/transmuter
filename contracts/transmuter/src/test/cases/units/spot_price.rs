@@ -25,6 +25,7 @@ fn test_spot_price(liquidity: &[Coin]) {
         .instantiate(
             (deps.as_mut(), mock_env(), mock_info("creator", &[])),
             vec!["denom0".to_string(), "denom1".to_string()],
+            "transmuter/poolshare".to_string(),
         )
         .unwrap();
 

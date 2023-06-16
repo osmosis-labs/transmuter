@@ -42,6 +42,7 @@ impl Transmuter<'_> {
         &self,
         ctx: (DepsMut, Env, MessageInfo),
         pool_asset_denoms: Vec<String>,
+        lp_subdenom: String,
     ) -> Result<Response, ContractError> {
         let (deps, env, _info) = ctx;
 
@@ -59,7 +60,7 @@ impl Transmuter<'_> {
         let msg_create_lp_denom = SubMsg::reply_on_success(
             MsgCreateDenom {
                 sender: env.contract.address.to_string(),
-                subdenom: "transmuter/poolshare".to_owned(),
+                subdenom: lp_subdenom,
             },
             CREATE_LP_DENOM_REPLY_ID,
         );
