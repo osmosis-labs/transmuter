@@ -65,6 +65,7 @@ fn test_join_pool_with_single_lp_should_update_shares_and_liquidity_properly() {
             .with_instantiate_msg(crate::contract::InstantiateMsg {
                 pool_asset_denoms: vec!["denoma".to_string(), "denomb".to_string()],
                 lp_subdenom: "transmuter/poolshare".to_string(),
+                admin: None,
             })
             .build(&app);
 
@@ -179,6 +180,7 @@ fn test_join_pool_should_update_shares_and_liquidity_properly() {
             .with_instantiate_msg(InstantiateMsg {
                 pool_asset_denoms: vec!["denoma".to_string(), "denomb".to_string()],
                 lp_subdenom: "transmuter/poolshare".to_string(),
+                admin: None,
             })
             .build(&app);
 
@@ -291,6 +293,7 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
             .with_instantiate_msg(InstantiateMsg {
                 pool_asset_denoms: vec!["denoma".to_string(), "denomb".to_string()],
                 lp_subdenom: "transmuter/poolshare".to_string(),
+                admin: None,
             })
             .build(&app);
 
@@ -482,6 +485,7 @@ fn test_exit_pool_greater_than_their_shares_should_fail() {
             .with_instantiate_msg(InstantiateMsg {
                 pool_asset_denoms: vec!["denoma".to_string(), "denomb".to_string()],
                 lp_subdenom: "transmuter/poolshare".to_string(),
+                admin: None,
             })
             .build(&app);
 
@@ -528,6 +532,7 @@ fn test_exit_pool_within_shares_but_over_joined_denom_amount() {
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec!["denoma".to_string(), "denomb".to_string()],
             lp_subdenom: "transmuter/poolshare".to_string(),
+            admin: None,
         })
         .build(&app);
 

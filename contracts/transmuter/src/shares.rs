@@ -6,10 +6,10 @@ pub struct Shares<'a> {
     share_denom: Item<'a, String>,
 }
 
-impl Shares<'_> {
-    pub const fn new() -> Self {
+impl<'a> Shares<'a> {
+    pub const fn new(namespace: &'a str) -> Self {
         Self {
-            share_denom: Item::new("share_denom"),
+            share_denom: Item::new(namespace),
         }
     }
 

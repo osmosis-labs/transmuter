@@ -44,6 +44,7 @@ fn test_join_pool() {
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
             lp_subdenom: "transmuter/poolshare".to_string(),
+            admin: None,
         })
         .build(&app);
 
@@ -206,6 +207,7 @@ fn test_swap() {
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
             lp_subdenom: "transmuter/poolshare".to_string(),
+            admin: None,
         })
         .build(&app);
 
@@ -398,6 +400,7 @@ fn test_exit_pool() {
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
             lp_subdenom: "transmuter/poolshare".to_string(),
+            admin: None,
         })
         .build(&app);
 
@@ -605,6 +608,7 @@ fn test_3_pool_swap() {
                 COSMOS_USDC.to_string(),
             ],
             lp_subdenom: "transmuter/poolshare".to_string(),
+            admin: None,
         })
         .build(&app);
 
@@ -818,6 +822,7 @@ fn test_swap_lp_denom() {
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![AXL_ETH.to_string(), WH_ETH.to_string()],
             lp_subdenom: lp_subdenom.to_string(),
+            admin: None,
         })
         .build(&app);
 
