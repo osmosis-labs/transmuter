@@ -1,11 +1,15 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
     ensure, ensure_eq, BankMsg, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Reply, Response,
-    StdError, SubMsg, Uint128,
+    StdError, StdResult, SubMsg, Uint128,
 };
+use cw_controllers::{Admin, AdminResponse};
 use cw_storage_plus::Item;
-use osmosis_std::types::osmosis::tokenfactory::v1beta1::{
-    MsgBurn, MsgCreateDenom, MsgCreateDenomResponse, MsgMint,
+use osmosis_std::types::{
+    cosmos::bank::v1beta1::Metadata,
+    osmosis::tokenfactory::v1beta1::{
+        MsgBurn, MsgCreateDenom, MsgCreateDenomResponse, MsgMint, MsgSetDenomMetadata,
+    },
 };
 use sylvia::contract;
 
@@ -23,6 +27,7 @@ pub struct Transmuter<'a> {
     pub(crate) active_status: Item<'a, bool>,
     pub(crate) pool: Item<'a, TransmuterPool>,
     pub(crate) shares: Shares<'a>,
+    pub(crate) admin: Admin<'a>,
 }
 
 #[contract]
@@ -32,7 +37,8 @@ impl Transmuter<'_> {
         Self {
             active_status: Item::new("active_status"),
             pool: Item::new("pool"),
-            shares: Shares::new(),
+            shares: Shares::new("shares"),
+            admin: Admin::new("admin"),
         }
     }
 
@@ -42,6 +48,8 @@ impl Transmuter<'_> {
         &self,
         ctx: (DepsMut, Env, MessageInfo),
         pool_asset_denoms: Vec<String>,
+        lp_subdenom: String,
+        admin: Option<String>,
     ) -> Result<Response, ContractError> {
         let (deps, env, _info) = ctx;
 
@@ -59,10 +67,16 @@ impl Transmuter<'_> {
         let msg_create_lp_denom = SubMsg::reply_on_success(
             MsgCreateDenom {
                 sender: env.contract.address.to_string(),
-                subdenom: "transmuter/poolshare".to_owned(),
+                subdenom: lp_subdenom,
             },
             CREATE_LP_DENOM_REPLY_ID,
         );
+
+        // set admin if provided
+        if let Some(admin) = admin {
+            let admin = deps.api.addr_validate(&admin)?;
+            self.admin.set(deps, Some(admin))?;
+        }
 
         Ok(Response::new()
             .add_attribute("method", "instantiate")
@@ -85,6 +99,48 @@ impl Transmuter<'_> {
             }
             _ => Err(StdError::not_found(format!("No reply handler found for: {:?}", msg)).into()),
         }
+    }
+
+    #[msg(exec)]
+    pub fn update_admin(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        admin: Option<String>,
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+
+        let new_admin = admin.map(|a| deps.api.addr_validate(&a)).transpose()?;
+
+        self.admin
+            .execute_update_admin(deps, info, new_admin)
+            .map_err(Into::into)
+    }
+
+    #[msg(query)]
+    pub fn admin(&self, ctx: (Deps, Env)) -> StdResult<AdminResponse> {
+        let (deps, _env) = ctx;
+        self.admin.query_admin(deps)
+    }
+
+    #[msg(exec)]
+    pub fn set_lp_denom_metadata(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        metadata: Metadata,
+    ) -> Result<Response, ContractError> {
+        let (deps, env, info) = ctx;
+
+        // ensure admin
+        self.admin.assert_admin(deps.as_ref(), &info.sender)?;
+
+        let msg_set_denom_metadata = MsgSetDenomMetadata {
+            sender: env.contract.address.to_string(),
+            metadata: Some(metadata),
+        };
+
+        Ok(Response::new()
+            .add_attribute("method", "set_lp_denom_metadata")
+            .add_message(msg_set_denom_metadata))
     }
 
     /// Join pool with tokens that exist in the pool.
