@@ -5,11 +5,6 @@ name = "transmuter"
 [wasm]
 optimizer_version = "0.12.11"
 
-[networks.testnet]
-chain_id = 'osmo-test-4'
-grpc_endpoint = 'https://grpc-test.osmosis.zone:443'
-network_variant = 'Shared'
-rpc_endpoint = 'https://rpc-test.osmosis.zone:443'
 
 [console]
 account_namespace = false

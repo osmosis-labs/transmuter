@@ -46,11 +46,11 @@ cosmwasm-storage = "1.1.2"
 cw-controllers = "1.0.1"
 cw-storage-plus = "0.13.2"
 cw2 = "0.13.2"
+osmosis-std = "0.16.0-beta.0"
 schemars = "0.8.8"
 serde = {version = "1.0.137", default-features = false, features = ["derive"]}
 sylvia = "0.2.2"
 thiserror = {version = "1.0.31"}
 
 [dev-dependencies]
-anyhow = "1.0.68"
-cw-multi-test = "0.13.2"
+osmosis-test-tube = "16.0.0-beta.0"

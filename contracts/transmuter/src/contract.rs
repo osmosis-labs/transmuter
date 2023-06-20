@@ -1,23 +1,23 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_eq, to_binary, BankMsg, Coin, Decimal, Deps, DepsMut, Env, MessageInfo,
-    Response, Uint128,
+    ensure, ensure_eq, BankMsg, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Reply, Response,
+    StdError, SubMsg, Uint128,
 };
 use cw_storage_plus::Item;
+use osmosis_std::types::osmosis::tokenfactory::v1beta1::{
+    MsgBurn, MsgCreateDenom, MsgCreateDenomResponse, MsgMint,
+};
 use sylvia::contract;
 
-use crate::{
-    error::ContractError,
-    shares::Shares,
-    sudo::{SwapExactAmountInResponseData, SwapExactAmountOutResponseData},
-    transmuter_pool::TransmuterPool,
-};
+use crate::{error::ContractError, shares::Shares, transmuter_pool::TransmuterPool};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:transmuter";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const SWAP_FEE: Decimal = Decimal::zero();
+
+const CREATE_LP_DENOM_REPLY_ID: u64 = 1;
 
 pub struct Transmuter<'a> {
     pub(crate) active_status: Item<'a, bool>,
@@ -43,7 +43,7 @@ impl Transmuter<'_> {
         ctx: (DepsMut, Env, MessageInfo),
         pool_asset_denoms: Vec<String>,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, _info) = ctx;
+        let (deps, env, _info) = ctx;
 
         // store contract version for migration info
         cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
@@ -55,29 +55,49 @@ impl Transmuter<'_> {
         // set active status to true
         self.active_status.save(deps.storage, &true)?;
 
+        // create lp denom
+        let msg_create_lp_denom = SubMsg::reply_on_success(
+            MsgCreateDenom {
+                sender: env.contract.address.to_string(),
+                subdenom: "transmuter/poolshare".to_owned(),
+            },
+            CREATE_LP_DENOM_REPLY_ID,
+        );
+
         Ok(Response::new()
             .add_attribute("method", "instantiate")
             .add_attribute("contract_name", CONTRACT_NAME)
-            .add_attribute("contract_version", CONTRACT_VERSION))
+            .add_attribute("contract_version", CONTRACT_VERSION)
+            .add_submessage(msg_create_lp_denom))
+    }
+
+    pub fn reply(&self, ctx: (DepsMut, Env), msg: Reply) -> Result<Response, ContractError> {
+        let (deps, _env) = ctx;
+
+        match msg.id {
+            CREATE_LP_DENOM_REPLY_ID => {
+                // register created token denom
+                let MsgCreateDenomResponse { new_token_denom } = msg.result.try_into()?;
+                self.shares
+                    .set_share_denom(deps.storage, &new_token_denom)?;
+
+                Ok(Response::new().add_attribute("lp_denom", new_token_denom))
+            }
+            _ => Err(StdError::not_found(format!("No reply handler found for: {:?}", msg)).into()),
+        }
     }
 
     /// Join pool with tokens that exist in the pool.
     /// Token used to join pool is sent to the contract via `funds` in `MsgExecuteContract`.
     #[msg(exec)]
     pub fn join_pool(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
+        let (deps, env, info) = ctx;
 
         // ensure funds not empty
         ensure!(
             !info.funds.is_empty(),
             ContractError::AtLeastSingleTokenExpected {}
         );
-
-        let new_shares = Shares::calc_shares(&info.funds)?;
-
-        // update shares
-        self.shares
-            .add_share(deps.storage, &info.sender, new_shares)?;
 
         // update pool
         self.pool
@@ -86,7 +106,18 @@ impl Transmuter<'_> {
                 Ok(pool)
             })?;
 
-        Ok(Response::new().add_attribute("method", "join_pool"))
+        // mint lp tokens
+        let share_denom = self.shares.get_share_denom(deps.storage)?;
+        let new_shares = Shares::calc_shares(&info.funds)?;
+        let mint_msg = MsgMint {
+            sender: env.contract.address.to_string(),
+            amount: Some(Coin::new(new_shares.u128(), share_denom).into()),
+            mint_to_address: info.sender.to_string(),
+        };
+
+        Ok(Response::new()
+            .add_attribute("method", "join_pool")
+            .add_message(mint_msg))
     }
 
     /// Exit pool with `tokens_out` amount of tokens.
@@ -98,10 +129,10 @@ impl Transmuter<'_> {
         ctx: (DepsMut, Env, MessageInfo),
         tokens_out: Vec<Coin>,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
+        let (deps, env, info) = ctx;
 
         // check if sender's shares is enough
-        let sender_shares = self.shares.get_share(deps.as_ref().storage, &info.sender)?;
+        let sender_shares = self.shares.get_share(deps.as_ref(), &info.sender)?;
 
         let required_shares = Shares::calc_shares(&tokens_out)?;
 
@@ -112,10 +143,6 @@ impl Transmuter<'_> {
                 available: sender_shares
             }
         );
-
-        // update shares
-        self.shares
-            .sub_share(deps.storage, &info.sender, required_shares)?;
 
         // exit pool
         self.pool
@@ -129,154 +156,18 @@ impl Transmuter<'_> {
             amount: tokens_out,
         };
 
+        // burn lp tokens
+        let share_denom = self.shares.get_share_denom(deps.storage)?;
+        let burn_msg = MsgBurn {
+            sender: env.contract.address.to_string(),
+            amount: Some(Coin::new(required_shares.u128(), share_denom).into()),
+            burn_from_address: info.sender.to_string(),
+        };
+
         Ok(Response::new()
             .add_attribute("method", "exit_pool")
+            .add_message(burn_msg)
             .add_message(bank_send_msg))
-    }
-
-    /// SwapExactAmountIn swaps an exact amount of tokens in for as many tokens out as possible.
-    /// The amount of tokens out is determined by the current exchange rate and the swap fee.
-    /// The user specifies a minimum amount of tokens out, and the transaction will revert if that amount of tokens
-    /// is not received.
-    #[msg(exec)]
-    pub fn swap_exact_amount_in(
-        &self,
-        ctx: (DepsMut, Env, MessageInfo),
-        token_in: Coin,
-        token_out_denom: String,
-        token_out_min_amount: Uint128,
-    ) -> Result<Response, ContractError> {
-        self._swap_exact_amount_in(
-            ctx,
-            token_in,
-            token_out_denom,
-            token_out_min_amount,
-            SWAP_FEE,
-        )
-    }
-
-    /// This is a helper function for `swap_exact_amount_in`. As it will also be used by sudo endpoint.
-    pub(crate) fn _swap_exact_amount_in(
-        &self,
-        ctx: (DepsMut, Env, MessageInfo),
-        token_in: Coin,
-        token_out_denom: String,
-        token_out_min_amount: Uint128,
-        swap_fee: Decimal,
-    ) -> Result<Response, ContractError> {
-        let (deps, env, info) = ctx;
-
-        // ensure funds match token_in
-        ensure!(
-            info.funds.len() == 1 && info.funds[0] == token_in,
-            ContractError::FundsMismatchTokenIn {
-                funds: info.funds,
-                token_in
-            }
-        );
-
-        let (pool, token_out) =
-            self._calc_out_amt_given_in((deps.as_ref(), env), token_in, token_out_denom, swap_fee)?;
-
-        // ensure token_out amount is greater than or equal to token_out_min_amount
-        ensure!(
-            token_out.amount >= token_out_min_amount,
-            ContractError::InsufficientTokenOut {
-                required: token_out_min_amount,
-                available: token_out.amount
-            }
-        );
-
-        // save pool
-        self.pool.save(deps.storage, &pool)?;
-
-        let send_token_out_to_sender_msg = BankMsg::Send {
-            to_address: info.sender.to_string(),
-            amount: vec![token_out.clone()],
-        };
-
-        let swap_result = SwapExactAmountInResponseData {
-            token_out_amount: token_out.amount,
-        };
-
-        Ok(Response::new()
-            .add_attribute("method", "swap_exact_amount_in")
-            .add_message(send_token_out_to_sender_msg)
-            .set_data(to_binary(&swap_result)?))
-    }
-
-    /// SwapExactAmountOut swaps as many tokens in as possible for an exact amount of tokens out.
-    /// The amount of tokens in is determined by the current exchange rate and the swap fee.
-    /// The user specifies a maximum amount of tokens in, and the transaction will revert if that amount of tokens
-    /// is exceeded.
-    #[msg(exec)]
-    pub fn swap_exact_amount_out(
-        &self,
-        ctx: (DepsMut, Env, MessageInfo),
-        token_in_denom: String,
-        token_in_max_amount: Uint128,
-        token_out: Coin,
-    ) -> Result<Response, ContractError> {
-        self._swap_exact_amount_out(
-            ctx,
-            token_in_denom,
-            token_in_max_amount,
-            token_out,
-            SWAP_FEE,
-        )
-    }
-
-    fn _swap_exact_amount_out(
-        &self,
-        ctx: (DepsMut, Env, MessageInfo),
-        token_in_denom: String,
-        token_in_max_amount: Uint128,
-        token_out: Coin,
-        swap_fee: Decimal,
-    ) -> Result<Response, ContractError> {
-        let (deps, env, info) = ctx;
-
-        let (pool, token_in) = self._calc_in_amt_given_out(
-            (deps.as_ref(), env),
-            token_out.clone(),
-            token_in_denom,
-            swap_fee,
-        )?;
-
-        // ensure funds match token_in
-        ensure!(
-            info.funds.len() == 1 && info.funds[0] == token_in,
-            ContractError::FundsMismatchTokenIn {
-                funds: info.funds,
-                token_in
-            }
-        );
-
-        // ensure token_in amount is less than or equal to token_in_max_amount
-        ensure!(
-            token_in.amount <= token_in_max_amount,
-            ContractError::ExcessiveRequiredTokenIn {
-                limit: token_in_max_amount,
-                required: token_in.amount,
-            }
-        );
-
-        // save pool
-        self.pool.save(deps.storage, &pool)?;
-
-        let send_token_out_to_sender_msg = BankMsg::Send {
-            to_address: info.sender.to_string(),
-            amount: vec![token_out],
-        };
-
-        let swap_result = SwapExactAmountOutResponseData {
-            token_in_amount: token_in.amount,
-        };
-
-        Ok(Response::new()
-            .add_attribute("method", "swap_exact_amount_out")
-            .add_message(send_token_out_to_sender_msg)
-            .set_data(to_binary(&swap_result)?))
     }
 
     #[msg(query)]
@@ -289,7 +180,18 @@ impl Transmuter<'_> {
         Ok(GetSharesResponse {
             shares: self
                 .shares
-                .get_share(deps.storage, &deps.api.addr_validate(&address)?)?,
+                .get_share(deps, &deps.api.addr_validate(&address)?)?,
+        })
+    }
+
+    #[msg(query)]
+    pub(crate) fn get_share_denom(
+        &self,
+        ctx: (Deps, Env),
+    ) -> Result<GetShareDenomResponse, ContractError> {
+        let (deps, _env) = ctx;
+        Ok(GetShareDenomResponse {
+            share_denom: self.shares.get_share_denom(deps.storage)?,
         })
     }
 
@@ -315,7 +217,7 @@ impl Transmuter<'_> {
         ctx: (Deps, Env),
     ) -> Result<GetTotalSharesResponse, ContractError> {
         let (deps, _env) = ctx;
-        let total_shares = self.shares.get_total_shares(deps.storage)?;
+        let total_shares = self.shares.get_total_shares(deps)?;
         Ok(GetTotalSharesResponse { total_shares })
     }
 
@@ -512,6 +414,11 @@ impl Transmuter<'_> {
 #[cw_serde]
 pub struct GetSharesResponse {
     pub shares: Uint128,
+}
+
+#[cw_serde]
+pub struct GetShareDenomResponse {
+    pub share_denom: String,
 }
 
 #[cw_serde]

@@ -10,7 +10,9 @@ mod test;
 
 #[cfg(not(feature = "library"))]
 mod entry_points {
-    use cosmwasm_std::{ensure, entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response};
+    use cosmwasm_std::{
+        ensure, entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response,
+    };
 
     use crate::contract::{ContractExecMsg, ContractQueryMsg, InstantiateMsg, Transmuter};
     use crate::error::ContractError;
@@ -26,6 +28,11 @@ mod entry_points {
         msg: InstantiateMsg,
     ) -> Result<Response, ContractError> {
         msg.dispatch(&CONTRACT, (deps, env, info))
+    }
+
+    #[entry_point]
+    pub fn reply(deps: DepsMut, env: Env, msg: Reply) -> Result<Response, ContractError> {
+        CONTRACT.reply((deps, env), msg)
     }
 
     #[entry_point]

@@ -29,6 +29,14 @@ fn test_spot_price(liquidity: &[Coin]) {
         .unwrap();
 
     transmuter
+        .shares
+        .set_share_denom(
+            &mut deps.storage,
+            &"factory/contract_address/transmuter/poolshare".to_string(),
+        )
+        .unwrap();
+
+    transmuter
         .join_pool((deps.as_mut(), mock_env(), mock_info("creator", liquidity)))
         .unwrap();
 
