@@ -1,5 +1,6 @@
 pub mod contract;
 mod error;
+mod limit;
 mod shares;
 mod sudo;
 mod transmuter_pool;
