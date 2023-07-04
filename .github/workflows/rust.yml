@@ -12,12 +12,20 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v3
-      - name: Install wasm32-unknown-unknown target
-        run: rustup target add wasm32-unknown-unknown
+      - name: Checkout sources
+        uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: wasm32-unknown-unknown
+          profile: minimal
+          override: true
+          components: llvm-tools-preview
+
       - name: Build wasm
-        run: cargo wasm
+        run: RUSTFLAGS="-C link-arg=-s" cargo build --release --lib --target wasm32-unknown-unknown --locked
       - name: Run tests
         run: cargo test --verbose -- --test-threads 1 # disable parallelism due to issue with test-tube that cause flaky tests
