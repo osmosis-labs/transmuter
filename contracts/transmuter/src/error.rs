@@ -18,7 +18,7 @@ pub enum ContractError {
         expected_denom: Vec<String>,
     },
 
-    #[error("Unable to transmute token with denom: {denom}: expected one of: {expected_denom:?}")]
+    #[error("Unable to transmute token with denom: {denom}: expected one of: {expected_denom:?} or share token")]
     InvalidTransmuteDenom {
         denom: String,
         expected_denom: Vec<String>,
@@ -58,4 +58,7 @@ pub enum ContractError {
 
     #[error("The pool is currently inactive")]
     InactivePool {},
+
+    #[error("YUnexpected denom: expected: {expected}, actual: {actual}")]
+    UnexpectedDenom { expected: String, actual: String },
 }

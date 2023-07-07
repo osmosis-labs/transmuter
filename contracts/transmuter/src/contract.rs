@@ -91,6 +91,14 @@ impl Transmuter<'_> {
     /// Token used to join pool is sent to the contract via `funds` in `MsgExecuteContract`.
     #[msg(exec)]
     pub fn join_pool(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
+        self.swap_tokens_for_shares("join_pool", ctx)
+    }
+
+    pub fn swap_tokens_for_shares(
+        &self,
+        method: &str,
+        ctx: (DepsMut, Env, MessageInfo),
+    ) -> Result<Response, ContractError> {
         let (deps, env, info) = ctx;
 
         // ensure funds not empty
@@ -116,7 +124,7 @@ impl Transmuter<'_> {
         };
 
         Ok(Response::new()
-            .add_attribute("method", "join_pool")
+            .add_attribute("method", method)
             .add_message(mint_msg))
     }
 
@@ -129,11 +137,40 @@ impl Transmuter<'_> {
         ctx: (DepsMut, Env, MessageInfo),
         tokens_out: Vec<Coin>,
     ) -> Result<Response, ContractError> {
+        self.swap_shares_for_tokens("exit_pool", ctx, tokens_out)
+    }
+
+    pub fn swap_shares_for_tokens(
+        &self,
+        method: &str,
+        ctx: (DepsMut, Env, MessageInfo),
+        tokens_out: Vec<Coin>,
+    ) -> Result<Response, ContractError> {
         let (deps, env, info) = ctx;
 
-        // check if sender's shares is enough
-        let sender_shares = self.shares.get_share(deps.as_ref(), &info.sender)?;
+        let share_denom = self.shares.get_share_denom(deps.storage)?;
 
+        // if funds contains one coin and is share token, use that as sender's share
+        let (sender_shares, burn_from_address) = if info.funds.is_empty() {
+            let sender_shares = self.shares.get_share(deps.as_ref(), &info.sender)?;
+            let burn_from_address = info.sender.to_string();
+            (sender_shares, burn_from_address)
+        } else {
+            ensure!(info.funds.len() == 1, ContractError::SingleTokenExpected {});
+            ensure!(
+                info.funds[0].denom == share_denom,
+                ContractError::UnexpectedDenom {
+                    expected: info.funds[0].clone().denom,
+                    actual: share_denom
+                }
+            );
+
+            let sender_shares = info.funds[0].amount;
+            let burn_from_address = env.contract.address.to_string();
+            (sender_shares, burn_from_address)
+        };
+
+        // check if sender's shares is enough
         let required_shares = Shares::calc_shares(&tokens_out)?;
 
         ensure!(
@@ -161,11 +198,11 @@ impl Transmuter<'_> {
         let burn_msg = MsgBurn {
             sender: env.contract.address.to_string(),
             amount: Some(Coin::new(required_shares.u128(), share_denom).into()),
-            burn_from_address: info.sender.to_string(),
+            burn_from_address,
         };
 
         Ok(Response::new()
-            .add_attribute("method", "exit_pool")
+            .add_attribute("method", method)
             .add_message(burn_msg)
             .add_message(bank_send_msg))
     }
@@ -326,6 +363,7 @@ impl Transmuter<'_> {
         );
 
         let mut pool = self.pool.load(deps.storage)?;
+
         let token_out = pool.transmute(&token_in, &token_out_denom)?;
 
         Ok((pool, token_out))
