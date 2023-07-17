@@ -181,6 +181,10 @@ impl Transmuter<'_> {
             }
         );
 
+        deps.api.debug(&format!("sender_shares: {}", sender_shares));
+        deps.api
+            .debug(&format!("burn_from_address: {}", burn_from_address));
+
         // exit pool
         self.pool
             .update(deps.storage, |mut pool| -> Result<_, ContractError> {
@@ -377,34 +381,19 @@ impl Transmuter<'_> {
         token_in_denom: String,
         swap_fee: Decimal,
     ) -> Result<CalcInAmtGivenOutResponse, ContractError> {
-        let (deps, env) = ctx;
+        // TODO: handling this more thoughtfully
+        let share_denom = self.get_share_denom(ctx.clone())?.share_denom;
 
-        // ensure swap fee is the same as one from get_swap_fee which essentially is always 0
-        // in case where the swap fee mismatch, it can cause the pool to be imbalanced
-        let contract_swap_fee = self.get_swap_fee((deps, env))?.swap_fee;
-        ensure_eq!(
-            swap_fee,
-            contract_swap_fee,
-            ContractError::InvalidSwapFee {
-                expected: contract_swap_fee,
-                actual: swap_fee
-            }
-        );
+        let token_in = Coin::new(token_out.amount.u128(), token_in_denom.clone());
 
-        let token_in = Coin::new(token_out.amount.into(), token_in_denom);
+        if token_in_denom == share_denom || token_out.denom == share_denom {
+            return Ok(CalcInAmtGivenOutResponse { token_in });
+        }
 
-        let mut pool = self.pool.load(deps.storage)?;
-        let actual_token_out = pool.transmute(&token_in, &token_out.denom)?;
+        let (_pool, token_in) =
+            self._calc_in_amt_given_out(ctx, token_out, token_in_denom, swap_fee)?;
 
-        // ensure that actual_token_out is equal to token_out
-        ensure_eq!(
-            token_out,
-            actual_token_out,
-            ContractError::InvalidTokenOutAmount {
-                expected: token_out.amount,
-                actual: actual_token_out.amount
-            }
-        );
+        let token_in = Coin::new(token_in.amount.u128(), share_denom);
 
         Ok(CalcInAmtGivenOutResponse { token_in })
     }
