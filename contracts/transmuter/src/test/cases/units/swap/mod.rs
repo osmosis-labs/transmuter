@@ -1,9 +1,10 @@
 use cosmwasm_std::{Coin, Uint128};
 
+use osmosis_std::types::cosmos::bank::v1beta1::QueryBalanceRequest;
 use osmosis_std::types::osmosis::poolmanager::v1beta1::{
     MsgSwapExactAmountIn, MsgSwapExactAmountOut, SwapAmountInRoute, SwapAmountOutRoute,
 };
-use osmosis_test_tube::cosmrs::proto::cosmos::bank::v1beta1::QueryBalanceRequest;
+
 use osmosis_test_tube::{Account, Bank, Module, OsmosisTestApp};
 
 use crate::contract::{
@@ -183,7 +184,7 @@ fn test_swap_success_case(t: TestEnv, msg: SwapMsg, received: Coin) {
     });
 }
 
-pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, received: Coin) {
+pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin, received: Coin) {
     let cp = CosmwasmPool::new(t.app);
     let bank = Bank::new(t.app);
 
@@ -192,6 +193,15 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, received: C
         .query::<GetShareDenomResponse>(&QueryMsg::GetShareDenom {})
         .unwrap()
         .share_denom;
+
+    let prev_in_denom_balance = bank
+        .query_balance(&QueryBalanceRequest {
+            address: t.accounts[SWAPPER].address(),
+            denom: sent.denom.clone(),
+        })
+        .unwrap()
+        .balance
+        .unwrap();
 
     let prev_out_denom_balance = bank
         .query_balance(&QueryBalanceRequest {
@@ -282,6 +292,16 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, received: C
         .balance
         .unwrap();
 
+    // updated in denom balance
+    let updated_in_denom_balance = bank
+        .query_balance(&QueryBalanceRequest {
+            address: t.accounts[SWAPPER].address(),
+            denom: sent.denom.clone(),
+        })
+        .unwrap()
+        .balance
+        .unwrap();
+
     let updated_total_shares = t
         .contract
         .query::<GetTotalSharesResponse>(&QueryMsg::GetTotalShares {})
@@ -315,6 +335,11 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, received: C
             sum_prev_pool_asset_amount - received.amount
         );
     }
+
+    assert_eq!(
+        updated_in_denom_balance.amount.parse::<u128>().unwrap(),
+        prev_in_denom_balance.amount.parse::<u128>().unwrap() - sent.amount.u128()
+    );
 
     assert_eq!(
         received.amount.u128(),

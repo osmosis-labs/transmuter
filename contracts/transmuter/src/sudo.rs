@@ -146,7 +146,57 @@ impl SudoMsg {
                 token_out,
                 swap_fee,
             } => {
+                let method = "swap_exact_amount_out";
                 let (deps, env) = ctx;
+
+                let sender = deps.api.addr_validate(&sender)?;
+
+                let share_denom = transmuter.shares.get_share_denom(deps.storage)?;
+
+                // if token in is share denom, swap shares for tokens
+                if token_in_denom == share_denom {
+                    let token_in = Coin::new(token_out.amount.u128(), token_in_denom);
+                    let swap_result = to_binary(&SwapExactAmountOutResponseData {
+                        token_in_amount: token_in.amount,
+                    })?;
+
+                    return transmuter
+                        .swap_shares_for_tokens(
+                            method,
+                            (
+                                deps,
+                                env,
+                                MessageInfo {
+                                    sender,
+                                    funds: vec![token_in],
+                                },
+                            ),
+                            vec![token_out],
+                        )
+                        .map(|res| res.set_data(swap_result));
+                }
+
+                // if token out is share denom, swap token for shares
+                if token_out.denom == share_denom {
+                    let token_in = Coin::new(token_out.amount.u128(), token_in_denom);
+                    let swap_result = to_binary(&SwapExactAmountOutResponseData {
+                        token_in_amount: token_in.amount,
+                    })?;
+
+                    return transmuter
+                        .swap_tokens_for_shares(
+                            method,
+                            (
+                                deps,
+                                env,
+                                MessageInfo {
+                                    sender,
+                                    funds: vec![token_in],
+                                },
+                            ),
+                        )
+                        .map(|res| res.set_data(swap_result));
+                }
 
                 let (pool, token_in) = transmuter._calc_in_amt_given_out(
                     (deps.as_ref(), env),
@@ -167,7 +217,7 @@ impl SudoMsg {
                 transmuter.pool.save(deps.storage, &pool)?;
 
                 let send_token_out_to_sender_msg = BankMsg::Send {
-                    to_address: sender,
+                    to_address: sender.to_string(),
                     amount: vec![token_out],
                 };
 

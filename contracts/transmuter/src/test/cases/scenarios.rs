@@ -7,16 +7,17 @@ use crate::{
     },
     test::{
         modules::cosmwasm_pool::CosmwasmPool,
-        test_env::{assert_contract_err, to_proto_coin, TestEnvBuilder},
+        test_env::{assert_contract_err, TestEnvBuilder},
     },
     ContractError,
 };
 use cosmwasm_std::{Coin, Uint128};
 
-use osmosis_std::types::osmosis::poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute};
-use osmosis_test_tube::{
-    cosmrs::proto::cosmos::bank::v1beta1::MsgSend, Account, Bank, Module, OsmosisTestApp,
+use osmosis_std::types::{
+    cosmos::bank::v1beta1::MsgSend,
+    osmosis::poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute},
 };
+use osmosis_test_tube::{Account, Bank, Module, OsmosisTestApp};
 
 const AXL_USDC: &str = "ibc/AXLETHUSDC";
 const AXL_DAI: &str = "ibc/AXLETHDAI";
@@ -219,7 +220,7 @@ fn test_swap() {
         MsgSend {
             from_address: t.accounts["provider"].address(),
             to_address: t.contract.contract_addr.clone(),
-            amount: tokens_in.iter().map(to_proto_coin).collect(),
+            amount: tokens_in.clone().into_iter().map(Into::into).collect(),
         },
         &t.accounts["provider"],
     )
