@@ -364,8 +364,6 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
             .fold(Uint128::zero(), |acc, coin| acc + coin.amount)
             .u128();
 
-        // dbg!(res);
-
         let burn_attrs = res
             .events
             .into_iter()

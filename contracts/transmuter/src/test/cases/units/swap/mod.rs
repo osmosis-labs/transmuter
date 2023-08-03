@@ -1,12 +1,15 @@
 use cosmwasm_std::{Coin, Uint128};
 
+use osmosis_std::types::cosmos::bank::v1beta1::QueryBalanceRequest;
 use osmosis_std::types::osmosis::poolmanager::v1beta1::{
     MsgSwapExactAmountIn, MsgSwapExactAmountOut, SwapAmountInRoute, SwapAmountOutRoute,
 };
-use osmosis_test_tube::cosmrs::proto::cosmos::bank::v1beta1::QueryBalanceRequest;
+
 use osmosis_test_tube::{Account, Bank, Module, OsmosisTestApp};
 
-use crate::contract::{ExecMsg, GetTotalPoolLiquidityResponse, GetTotalSharesResponse, QueryMsg};
+use crate::contract::{
+    ExecMsg, GetShareDenomResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse, QueryMsg,
+};
 
 use crate::test::modules::cosmwasm_pool::CosmwasmPool;
 use crate::test::test_env::{assert_contract_err, TestEnv, TestEnvBuilder};
@@ -181,6 +184,170 @@ fn test_swap_success_case(t: TestEnv, msg: SwapMsg, received: Coin) {
     });
 }
 
+pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin, received: Coin) {
+    let cp = CosmwasmPool::new(t.app);
+    let bank = Bank::new(t.app);
+
+    let share_denom = t
+        .contract
+        .query::<GetShareDenomResponse>(&QueryMsg::GetShareDenom {})
+        .unwrap()
+        .share_denom;
+
+    let prev_in_denom_balance = bank
+        .query_balance(&QueryBalanceRequest {
+            address: t.accounts[SWAPPER].address(),
+            denom: sent.denom.clone(),
+        })
+        .unwrap()
+        .balance
+        .unwrap();
+
+    let prev_out_denom_balance = bank
+        .query_balance(&QueryBalanceRequest {
+            address: t.accounts[SWAPPER].address(),
+            denom: received.denom.clone(),
+        })
+        .unwrap()
+        .balance
+        .unwrap();
+
+    let prev_total_shares = t
+        .contract
+        .query::<GetTotalSharesResponse>(&QueryMsg::GetTotalShares {})
+        .unwrap()
+        .total_shares
+        .u128();
+
+    let prev_pool_assets = t
+        .contract
+        .query::<GetTotalPoolLiquidityResponse>(&QueryMsg::GetTotalPoolLiquidity {})
+        .unwrap()
+        .total_pool_liquidity;
+
+    let sum_prev_pool_asset_amount = prev_pool_assets
+        .iter()
+        .map(|c| c.amount)
+        .fold(Uint128::zero(), |acc, x| acc + x);
+
+    // swap
+    match msg {
+        SwapMsg::SwapExactAmountIn {
+            token_in,
+            token_out_denom,
+            token_out_min_amount,
+        } => {
+            cp.swap_exact_amount_in(
+                MsgSwapExactAmountIn {
+                    sender: t.accounts[SWAPPER].address(),
+                    routes: vec![SwapAmountInRoute {
+                        pool_id: 1,
+                        token_out_denom,
+                    }],
+                    token_in: Some(token_in.into()),
+                    token_out_min_amount: token_out_min_amount.to_string(),
+                },
+                &t.accounts[SWAPPER],
+            )
+            .unwrap();
+        }
+        SwapMsg::SwapExactAmountOut {
+            token_in_denom,
+            token_in_max_amount,
+            token_out,
+        } => {
+            cp.swap_exact_amount_out(
+                MsgSwapExactAmountOut {
+                    sender: t.accounts[SWAPPER].address(),
+                    routes: vec![SwapAmountOutRoute {
+                        pool_id: 1,
+                        token_in_denom,
+                    }],
+                    token_out: Some(token_out.into()),
+                    token_in_max_amount: token_in_max_amount.to_string(),
+                },
+                &t.accounts[SWAPPER],
+            )
+            .unwrap();
+        }
+    };
+
+    let updated_pool_assets = t
+        .contract
+        .query::<GetTotalPoolLiquidityResponse>(&QueryMsg::GetTotalPoolLiquidity {})
+        .unwrap()
+        .total_pool_liquidity;
+    let sum_updated_pool_asset_amount = updated_pool_assets
+        .iter()
+        .map(|c| c.amount)
+        .fold(Uint128::zero(), |acc, x| acc + x);
+
+    // updated out denom balance
+    let updated_out_denom_balance = bank
+        .query_balance(&QueryBalanceRequest {
+            address: t.accounts[SWAPPER].address(),
+            denom: received.denom.clone(),
+        })
+        .unwrap()
+        .balance
+        .unwrap();
+
+    // updated in denom balance
+    let updated_in_denom_balance = bank
+        .query_balance(&QueryBalanceRequest {
+            address: t.accounts[SWAPPER].address(),
+            denom: sent.denom.clone(),
+        })
+        .unwrap()
+        .balance
+        .unwrap();
+
+    let updated_total_shares = t
+        .contract
+        .query::<GetTotalSharesResponse>(&QueryMsg::GetTotalShares {})
+        .unwrap()
+        .total_shares
+        .u128();
+
+    // join pool equivalent
+    if received.denom == share_denom {
+        // -> minted new share tokens to swapper
+        assert_eq!(
+            updated_total_shares,
+            prev_total_shares + received.amount.u128()
+        );
+
+        assert_eq!(
+            sum_updated_pool_asset_amount,
+            sum_prev_pool_asset_amount + received.amount
+        );
+    } else {
+        // assume share denom is part of token in
+        // exit pool equivalent
+        // -> burned share tokens from swapper
+        assert_eq!(
+            updated_total_shares,
+            prev_total_shares - received.amount.u128()
+        );
+
+        assert_eq!(
+            sum_updated_pool_asset_amount,
+            sum_prev_pool_asset_amount - received.amount
+        );
+    }
+
+    assert_eq!(
+        updated_in_denom_balance.amount.parse::<u128>().unwrap(),
+        prev_in_denom_balance.amount.parse::<u128>().unwrap() - sent.amount.u128()
+    );
+
+    assert_eq!(
+        received.amount.u128(),
+        updated_out_denom_balance.amount.parse::<u128>().unwrap()
+            - prev_out_denom_balance.amount.parse::<u128>().unwrap()
+    );
+}
+
 fn test_swap_failed_case(t: TestEnv, msg: SwapMsg, err: ContractError) {
     assert_invariants(t, move |t| {
         let cp = CosmwasmPool::new(t.app);
@@ -265,3 +432,4 @@ fn pool_with_single_lp(app: &'_ OsmosisTestApp, pool_assets: Vec<Coin>) -> TestE
 
 mod client_error;
 mod non_empty_pool;
+mod swap_share_denom;
