@@ -1,12 +1,11 @@
 use cosmwasm_std::{Coin, Uint128};
 
 use osmosis_std::types::cosmos::bank::v1beta1::QueryBalanceRequest;
-use osmosis_std::types::osmosis::cosmwasmpool::v1beta1::CalcOutAmtGivenInRequest;
 use osmosis_std::types::osmosis::poolmanager::v1beta1::{
     MsgSwapExactAmountIn, MsgSwapExactAmountOut, SwapAmountInRoute, SwapAmountOutRoute,
 };
 
-use osmosis_test_tube::{Account, Bank, Module, OsmosisTestApp, Runner};
+use osmosis_test_tube::{Account, Bank, Module, OsmosisTestApp};
 
 use crate::contract::{
     ExecMsg, GetShareDenomResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse, QueryMsg,
