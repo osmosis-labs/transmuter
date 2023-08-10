@@ -37,7 +37,7 @@ impl Transmuter<'_> {
         Self {
             active_status: Item::new("active_status"),
             pool: Item::new("pool"),
-            shares: Shares::new("shares"),
+            shares: Shares::new("shares_denom"),
             admin: Admin::new("admin"),
         }
     }
