@@ -1,3 +1,4 @@
+use crate::{error::ContractError, shares::Shares, transmuter_pool::TransmuterPool};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
     ensure, ensure_eq, BankMsg, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Reply, Response,
@@ -12,8 +13,6 @@ use osmosis_std::types::{
     },
 };
 use sylvia::contract;
-
-use crate::{error::ContractError, shares::Shares, transmuter_pool::TransmuterPool};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:transmuter";
@@ -31,6 +30,7 @@ pub struct Transmuter<'a> {
 }
 
 #[contract]
+#[error(ContractError)]
 impl Transmuter<'_> {
     /// Create a Transmuter instance.
     pub const fn new() -> Self {

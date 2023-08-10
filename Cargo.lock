@@ -476,22 +476,11 @@ checksum = "d5d8edce4b78785f36413f67387e4be7d0cb7d032b5d4164bcc024f9c3f3f2ea"
 dependencies = [
  "cosmwasm-schema",
  "cosmwasm-std",
- "cw-storage-plus 1.1.0",
+ "cw-storage-plus",
  "cw-utils",
  "schemars",
  "serde",
  "thiserror",
-]
-
-[[package]]
-name = "cw-storage-plus"
-version = "0.13.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "648b1507290bbc03a8d88463d7cd9b04b1fa0155e5eef366c4fa052b9caaac7a"
-dependencies = [
- "cosmwasm-std",
- "schemars",
- "serde",
 ]
 
 [[package]]
@@ -513,23 +502,11 @@ checksum = "c80e93d1deccb8588db03945016a292c3c631e6325d349ebb35d2db6f4f946f7"
 dependencies = [
  "cosmwasm-schema",
  "cosmwasm-std",
- "cw2 1.1.0",
+ "cw2",
  "schemars",
  "semver",
  "serde",
  "thiserror",
-]
-
-[[package]]
-name = "cw2"
-version = "0.13.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04cf4639517490dd36b333bbd6c4fbd92e325fd0acf4683b41753bc5eb63bfc1"
-dependencies = [
- "cosmwasm-std",
- "cw-storage-plus 0.13.4",
- "schemars",
- "serde",
 ]
 
 [[package]]
@@ -540,7 +517,7 @@ checksum = "29ac2dc7a55ad64173ca1e0a46697c31b7a5c51342f55a1e84a724da4eb99908"
 dependencies = [
  "cosmwasm-schema",
  "cosmwasm-std",
- "cw-storage-plus 1.1.0",
+ "cw-storage-plus",
  "schemars",
  "serde",
  "thiserror",
@@ -1989,9 +1966,9 @@ dependencies = [
 
 [[package]]
 name = "sylvia"
-version = "0.2.2"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ce3114ce22c8388de231a8a8775c52ec011b4f3bd6dac61c0ec28490c58fc40"
+checksum = "f358d505f46900e55154f028f18811961ebb58f7a92954ec03086ffb2b26cf51"
 dependencies = [
  "cosmwasm-schema",
  "cosmwasm-std",
@@ -1999,14 +1976,15 @@ dependencies = [
  "schemars",
  "serde",
  "serde-cw-value",
+ "serde-json-wasm",
  "sylvia-derive",
 ]
 
 [[package]]
 name = "sylvia-derive"
-version = "0.2.2"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a0772f73f499387afd9b57151e4b8f4440c3ea8d8e451e6780118543aad1c6e"
+checksum = "bed182fb775d756fdfe7e87174a4e43f1c446c8f9aff1de38a2165dd04b7d805"
 dependencies = [
  "convert_case",
  "proc-macro-crate",
@@ -2330,8 +2308,8 @@ dependencies = [
  "cosmwasm-std",
  "cosmwasm-storage",
  "cw-controllers",
- "cw-storage-plus 0.13.4",
- "cw2 0.13.4",
+ "cw-storage-plus",
+ "cw2",
  "osmosis-std",
  "osmosis-test-tube",
  "schemars",

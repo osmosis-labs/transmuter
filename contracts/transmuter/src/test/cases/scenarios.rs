@@ -315,7 +315,7 @@ fn test_swap() {
             "/osmosis.poolmanager.v1beta1.Query/EstimateSwapExactAmountIn",
             &EstimateSwapExactAmountInRequest {
                 pool_id: t.contract.pool_id,
-                token_in: format!("1500{ETH_USDC}"),
+                token_in: format!("1500{AXL_USDC}"),
                 routes: routes.clone(),
             },
         )

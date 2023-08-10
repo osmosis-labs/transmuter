@@ -13,6 +13,8 @@ fn test_create_pool() {
     let t = TestEnvBuilder::new()
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec!["denom1".to_string(), "denom2".to_string()],
+            admin: None,
+            lp_subdenom: "denomx".to_string(),
         })
         .build(&app);
 
@@ -22,7 +24,7 @@ fn test_create_pool() {
 
     assert_eq!(
         share_denom,
-        format!("factory/{}/transmuter/poolshare", t.contract.contract_addr)
+        format!("factory/{}/denomx", t.contract.contract_addr)
     );
 
     // get pool assets
