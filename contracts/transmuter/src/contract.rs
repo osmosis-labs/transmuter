@@ -81,7 +81,7 @@ impl Transmuter<'_> {
                 self.shares
                     .set_share_denom(deps.storage, &new_token_denom)?;
 
-                Ok(Response::new().add_attribute("lp_denom", new_token_denom))
+                Ok(Response::new().add_attribute("pool_share_denom", new_token_denom))
             }
             _ => Err(StdError::not_found(format!("No reply handler found for: {:?}", msg)).into()),
         }
