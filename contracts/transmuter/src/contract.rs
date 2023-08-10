@@ -32,7 +32,7 @@ impl Transmuter<'_> {
         Self {
             active_status: Item::new("active_status"),
             pool: Item::new("pool"),
-            shares: Shares::new(),
+            shares: Shares::new("share_denom"),
         }
     }
 
