@@ -15,9 +15,12 @@ use cosmwasm_std::{Coin, Uint128};
 
 use osmosis_std::types::{
     cosmos::bank::v1beta1::MsgSend,
-    osmosis::poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute},
+    osmosis::poolmanager::v1beta1::{
+        EstimateSwapExactAmountInRequest, EstimateSwapExactAmountInResponse, MsgSwapExactAmountIn,
+        SwapAmountInRoute,
+    },
 };
-use osmosis_test_tube::{Account, Bank, Module, OsmosisTestApp};
+use osmosis_test_tube::{Account, Bank, Module, OsmosisTestApp, Runner};
 
 const AXL_USDC: &str = "ibc/AXLETHUSDC";
 const AXL_DAI: &str = "ibc/AXLETHDAI";
@@ -301,16 +304,32 @@ fn test_swap() {
         err,
     );
 
+    let routes = vec![SwapAmountInRoute {
+        pool_id: t.contract.pool_id,
+        token_out_denom: COSMOS_USDC.to_string(),
+    }];
+
+    let EstimateSwapExactAmountInResponse { token_out_amount } = t
+        .app
+        .query(
+            "/osmosis.poolmanager.v1beta1.Query/EstimateSwapExactAmountIn",
+            &EstimateSwapExactAmountInRequest {
+                pool_id: t.contract.pool_id,
+                token_in: format!("1500{ETH_USDC}"),
+                routes: routes.clone(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(token_out_amount, "1500");
+
     // swap with correct token_in should succeed this time
     let token_in = Coin::new(1_500, AXL_USDC);
     cp.swap_exact_amount_in(
         MsgSwapExactAmountIn {
             sender: t.accounts["alice"].address(),
             token_in: Some(token_in.into()),
-            routes: vec![SwapAmountInRoute {
-                pool_id: t.contract.pool_id,
-                token_out_denom: COSMOS_USDC.to_string(),
-            }],
+            routes,
             token_out_min_amount: Uint128::from(1_500u128).to_string(),
         },
         &t.accounts["alice"],
