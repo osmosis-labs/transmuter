@@ -58,4 +58,7 @@ pub enum ContractError {
 
     #[error("The pool is currently inactive")]
     InactivePool {},
+
+    #[error("Unauthorized")]
+    Unauthorized {},
 }

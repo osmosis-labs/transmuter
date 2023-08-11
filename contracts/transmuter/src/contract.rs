@@ -1,4 +1,7 @@
-use crate::{error::ContractError, shares::Shares, transmuter_pool::TransmuterPool};
+use crate::{
+    admin::Admin, ensure_admin_authority, error::ContractError, shares::Shares,
+    transmuter_pool::TransmuterPool,
+};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
     ensure, ensure_eq, BankMsg, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Reply, Response,
@@ -23,6 +26,7 @@ pub struct Transmuter<'a> {
     pub(crate) active_status: Item<'a, bool>,
     pub(crate) pool: Item<'a, TransmuterPool>,
     pub(crate) shares: Shares<'a>,
+    pub(crate) admin: Admin<'a>,
 }
 
 #[contract]
@@ -34,6 +38,7 @@ impl Transmuter<'_> {
             active_status: Item::new("active_status"),
             pool: Item::new("pool"),
             shares: Shares::new("share_denom"),
+            admin: Admin::new("admin"),
         }
     }
 
@@ -43,6 +48,7 @@ impl Transmuter<'_> {
         &self,
         ctx: (DepsMut, Env, MessageInfo),
         pool_asset_denoms: Vec<String>,
+        // TODO: accept admin address
     ) -> Result<Response, ContractError> {
         let (deps, env, _info) = ctx;
 
@@ -86,6 +92,25 @@ impl Transmuter<'_> {
             }
             _ => Err(StdError::not_found(format!("No reply handler found for: {:?}", msg)).into()),
         }
+    }
+
+    #[msg(exec)]
+    fn set_active_status(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        active: bool,
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+
+        // only admin can set active status
+        ensure_admin_authority!(info.sender, self.admin, deps.as_ref());
+
+        // set active status
+        self.active_status.save(deps.storage, &active)?;
+
+        Ok(Response::new()
+            .add_attribute("method", "set_active_status")
+            .add_attribute("active", active.to_string()))
     }
 
     /// Join pool with tokens that exist in the pool.

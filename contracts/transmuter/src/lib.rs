@@ -1,3 +1,4 @@
+mod admin;
 pub mod contract;
 mod error;
 mod shares;
