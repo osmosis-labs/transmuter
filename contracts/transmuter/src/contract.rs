@@ -10,10 +10,11 @@ use osmosis_std::types::osmosis::tokenfactory::v1beta1::{
 };
 use sylvia::contract;
 
-// version info for migration info
+/// version info for migration
 const CONTRACT_NAME: &str = "crates.io:transmuter";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Swap fee is hardcoded to zero intentionally.
 const SWAP_FEE: Decimal = Decimal::zero();
 
 const CREATE_LP_DENOM_REPLY_ID: u64 = 1;
