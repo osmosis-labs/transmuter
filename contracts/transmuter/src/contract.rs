@@ -1,10 +1,13 @@
-use crate::{error::ContractError, shares::Shares, transmuter_pool::TransmuterPool};
+use crate::{
+    admin::Admin, ensure_admin_authority, error::ContractError, shares::Shares,
+    transmuter_pool::TransmuterPool,
+};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
     ensure, ensure_eq, BankMsg, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Reply, Response,
-    StdError, StdResult, SubMsg, Uint128,
+    StdError, SubMsg, Uint128,
 };
-use cw_controllers::{Admin, AdminResponse};
+
 use cw_storage_plus::Item;
 use osmosis_std::types::{
     cosmos::bank::v1beta1::Metadata,
@@ -38,7 +41,7 @@ impl Transmuter<'_> {
         Self {
             active_status: Item::new("active_status"),
             pool: Item::new("pool"),
-            shares: Shares::new("shares_denom"),
+            shares: Shares::new("share_denom"),
             admin: Admin::new("admin"),
         }
     }
@@ -76,7 +79,7 @@ impl Transmuter<'_> {
         // set admin if provided
         if let Some(admin) = admin {
             let admin = deps.api.addr_validate(&admin)?;
-            self.admin.set(deps, Some(admin))?;
+            self.admin.init(deps, admin)?;
         }
 
         Ok(Response::new()
@@ -103,27 +106,6 @@ impl Transmuter<'_> {
     }
 
     #[msg(exec)]
-    pub fn update_admin(
-        &self,
-        ctx: (DepsMut, Env, MessageInfo),
-        admin: Option<String>,
-    ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
-
-        let new_admin = admin.map(|a| deps.api.addr_validate(&a)).transpose()?;
-
-        self.admin
-            .execute_update_admin(deps, info, new_admin)
-            .map_err(Into::into)
-    }
-
-    #[msg(query)]
-    pub fn admin(&self, ctx: (Deps, Env)) -> StdResult<AdminResponse> {
-        let (deps, _env) = ctx;
-        self.admin.query_admin(deps)
-    }
-
-    #[msg(exec)]
     pub fn set_lp_denom_metadata(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
@@ -131,8 +113,8 @@ impl Transmuter<'_> {
     ) -> Result<Response, ContractError> {
         let (deps, env, info) = ctx;
 
-        // ensure admin
-        self.admin.assert_admin(deps.as_ref(), &info.sender)?;
+        // only admin can set denom metadata
+        ensure_admin_authority!(info.sender, self.admin, deps.as_ref());
 
         let msg_set_denom_metadata = MsgSetDenomMetadata {
             sender: env.contract.address.to_string(),
@@ -142,6 +124,25 @@ impl Transmuter<'_> {
         Ok(Response::new()
             .add_attribute("method", "set_lp_denom_metadata")
             .add_message(msg_set_denom_metadata))
+    }
+
+    #[msg(exec)]
+    fn set_active_status(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        active: bool,
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+
+        // only admin can set active status
+        ensure_admin_authority!(info.sender, self.admin, deps.as_ref());
+
+        // set active status
+        self.active_status.save(deps.storage, &active)?;
+
+        Ok(Response::new()
+            .add_attribute("method", "set_active_status")
+            .add_attribute("active", active.to_string()))
     }
 
     /// Join pool with tokens that exist in the pool.

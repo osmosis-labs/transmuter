@@ -1,14 +1,10 @@
 use cosmwasm_std::{Coin, Decimal, StdError, Uint128};
-use cw_controllers::AdminError;
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq)]
 pub enum ContractError {
     #[error("{0}")]
     Std(#[from] StdError),
-
-    #[error("{0}")]
-    Admin(#[from] AdminError),
 
     #[error("Funds must contain exactly one token")]
     SingleTokenExpected {},
@@ -65,4 +61,7 @@ pub enum ContractError {
 
     #[error("YUnexpected denom: expected: {expected}, actual: {actual}")]
     UnexpectedDenom { expected: String, actual: String },
+
+    #[error("Unauthorized")]
+    Unauthorized {},
 }
