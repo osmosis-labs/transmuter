@@ -44,6 +44,7 @@ fn test_join_pool() {
         )
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
+            admin: None,
         })
         .build(&app);
 
@@ -205,6 +206,7 @@ fn test_swap() {
         .with_account("provider", vec![Coin::new(200_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
+            admin: None,
         })
         .build(&app);
 
@@ -412,6 +414,7 @@ fn test_exit_pool() {
         .with_account("provider_2", vec![Coin::new(100_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
+            admin: None,
         })
         .build(&app);
 
@@ -618,6 +621,7 @@ fn test_3_pool_swap() {
                 ETH_DAI.to_string(),
                 COSMOS_USDC.to_string(),
             ],
+            admin: None,
         })
         .build(&app);
 

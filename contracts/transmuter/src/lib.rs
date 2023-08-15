@@ -15,11 +15,27 @@ mod entry_points {
         ensure, entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response,
     };
 
-    use crate::contract::{ContractExecMsg, ContractQueryMsg, InstantiateMsg, Transmuter};
+    use crate::contract::{ContractExecMsg, ContractQueryMsg, ExecMsg, InstantiateMsg, Transmuter};
     use crate::error::ContractError;
     use crate::sudo::SudoMsg;
 
     const CONTRACT: Transmuter = Transmuter::new();
+
+    macro_rules! ensure_active_status {
+        ($msg:expr, $deps:expr, $env:expr, except: $pattern:pat) => {
+            match $msg {
+                $pattern => (),
+                _ => {
+                    ensure!(
+                        CONTRACT
+                            .is_active(($deps.as_ref(), $env.clone()))?
+                            .is_active,
+                        ContractError::InactivePool {}
+                    );
+                }
+            }
+        };
+    }
 
     #[entry_point]
     pub fn instantiate(
@@ -43,9 +59,11 @@ mod entry_points {
         info: MessageInfo,
         msg: ContractExecMsg,
     ) -> Result<Response, ContractError> {
-        ensure!(
-            CONTRACT.is_active((deps.as_ref(), env.clone()))?.is_active,
-            ContractError::InactivePool {}
+        ensure_active_status!(
+            msg,
+            deps,
+            env,
+            except: ContractExecMsg::Transmuter(ExecMsg::SetActiveStatus { .. })
         );
 
         msg.dispatch(&CONTRACT, (deps, env, info))
@@ -58,20 +76,14 @@ mod entry_points {
 
     #[entry_point]
     pub fn sudo(deps: DepsMut, env: Env, msg: SudoMsg) -> Result<Response, ContractError> {
-        match msg {
-            // allow setting active/inactive state without being active
-            SudoMsg::SetActive { .. } => msg.dispatch(&CONTRACT, (deps, env)),
+        ensure_active_status!(
+            msg,
+            deps,
+            env,
+            except: SudoMsg::SetActive { .. }
+        );
 
-            // the rest of the sudo messages require the contract to be active
-            _ => {
-                ensure!(
-                    CONTRACT.is_active((deps.as_ref(), env.clone()))?.is_active,
-                    ContractError::InactivePool {}
-                );
-
-                msg.dispatch(&CONTRACT, (deps, env))
-            }
-        }
+        msg.dispatch(&CONTRACT, (deps, env))
     }
 }
 

@@ -13,6 +13,7 @@ fn test_create_pool() {
     let t = TestEnvBuilder::new()
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec!["denom1".to_string(), "denom2".to_string()],
+            admin: None,
         })
         .build(&app);
 

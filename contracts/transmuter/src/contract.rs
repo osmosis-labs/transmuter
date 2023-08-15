@@ -48,12 +48,18 @@ impl Transmuter<'_> {
         &self,
         ctx: (DepsMut, Env, MessageInfo),
         pool_asset_denoms: Vec<String>,
-        // TODO: accept admin address
+        admin: Option<String>,
     ) -> Result<Response, ContractError> {
         let (deps, env, _info) = ctx;
 
         // store contract version for migration info
         cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+
+        // set admin if exists
+        if let Some(admin) = admin {
+            self.admin
+                .init(deps.storage, deps.api.addr_validate(&admin)?)?;
+        }
 
         // store pool
         self.pool
@@ -480,4 +486,163 @@ pub struct CalcOutAmtGivenInResponse {
 #[cw_serde]
 pub struct CalcInAmtGivenOutResponse {
     pub token_in: Coin,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract::*;
+    use crate::sudo::SudoMsg;
+    use crate::*;
+    use cosmwasm_std::from_binary;
+    use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
+
+    #[test]
+    fn test_set_active_status() {
+        let mut deps = mock_dependencies();
+
+        let admin = "admin";
+        let init_msg = InstantiateMsg {
+            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            admin: Some(admin.to_string()),
+        };
+        let env = mock_env();
+        let info = mock_info(admin, &[]);
+
+        // Instantiate the contract.
+        instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap();
+
+        // Manually set share denom
+        let share_denom = "uosmo".to_string();
+
+        let transmuter = Transmuter::new();
+        transmuter
+            .shares
+            .set_share_denom(&mut deps.storage, &share_denom)
+            .unwrap();
+
+        // Check the initial active status.
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::IsActive {}),
+        )
+        .unwrap();
+        let active_status: IsActiveResponse = from_binary(&res).unwrap();
+        assert!(active_status.is_active);
+
+        // Attempt to set the active status by a non-admin user.
+        let non_admin_info = mock_info("non_admin", &[]);
+        let non_admin_msg = ContractExecMsg::Transmuter(ExecMsg::SetActiveStatus { active: false });
+        let err = execute(deps.as_mut(), env.clone(), non_admin_info, non_admin_msg).unwrap_err();
+
+        assert_eq!(err, ContractError::Unauthorized {});
+
+        // Set the active status to false.
+        let msg = ContractExecMsg::Transmuter(ExecMsg::SetActiveStatus { active: false });
+        execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+
+        // Check the active status again.
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::IsActive {}),
+        )
+        .unwrap();
+        let active_status: IsActiveResponse = from_binary(&res).unwrap();
+        assert!(!active_status.is_active);
+
+        // Test that JoinPool is blocked when active status is false
+        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info("user", &[Coin::new(1000, "uion"), Coin::new(1000, "uosmo")]),
+            join_pool_msg,
+        )
+        .unwrap_err();
+        assert_eq!(err, ContractError::InactivePool {});
+
+        // Test that SwapExactAmountIn is blocked when active status is false
+        let swap_exact_amount_in_msg = SudoMsg::SwapExactAmountIn {
+            token_in: Coin::new(1000, "uion"),
+            swap_fee: Decimal::zero(),
+            sender: "mock_sender".to_string(),
+            token_out_denom: "uosmo".to_string(),
+            token_out_min_amount: Uint128::new(500),
+        };
+        let err = sudo(deps.as_mut(), env.clone(), swap_exact_amount_in_msg).unwrap_err();
+        assert_eq!(err, ContractError::InactivePool {});
+
+        // Test that SwapExactAmountOut is blocked when active status is false
+        let swap_exact_amount_out_msg = SudoMsg::SwapExactAmountOut {
+            sender: "mock_sender".to_string(),
+            token_out: Coin::new(500, "uosmo"),
+            swap_fee: Decimal::zero(),
+            token_in_denom: "uion".to_string(),
+            token_in_max_amount: Uint128::new(1000),
+        };
+        let err = sudo(deps.as_mut(), env.clone(), swap_exact_amount_out_msg).unwrap_err();
+        assert_eq!(err, ContractError::InactivePool {});
+
+        // Test that ExitPool is blocked when active status is false
+        let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
+            tokens_out: vec![Coin::new(1000, "uion"), Coin::new(1000, "uosmo")],
+        });
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info("user", &[Coin::new(1000, "uion"), Coin::new(1000, "uosmo")]),
+            exit_pool_msg,
+        )
+        .unwrap_err();
+        assert_eq!(err, ContractError::InactivePool {});
+
+        // Set the active status back to true
+        let msg = ContractExecMsg::Transmuter(ExecMsg::SetActiveStatus { active: true });
+        execute(deps.as_mut(), env.clone(), mock_info(admin, &[]), msg).unwrap();
+
+        // Check the active status again.
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::IsActive {}),
+        )
+        .unwrap();
+        let active_status: IsActiveResponse = from_binary(&res).unwrap();
+        assert!(active_status.is_active);
+
+        // Test that JoinPool is active when active status is true
+        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info("user", &[Coin::new(1000, "uion"), Coin::new(1000, "uosmo")]),
+            join_pool_msg,
+        );
+        assert!(res.is_ok());
+
+        // Test that SwapExactAmountIn is active when active status is true
+        let swap_exact_amount_in_msg = SudoMsg::SwapExactAmountIn {
+            token_in: Coin::new(100, "uion"),
+            swap_fee: Decimal::zero(),
+            sender: "mock_sender".to_string(),
+            token_out_denom: "uosmo".to_string(),
+            token_out_min_amount: Uint128::new(100),
+        };
+        let res = sudo(deps.as_mut(), env.clone(), swap_exact_amount_in_msg);
+        assert!(res.is_ok());
+
+        // Test that SwapExactAmountOut is active when active status is true
+        let swap_exact_amount_out_msg = SudoMsg::SwapExactAmountOut {
+            sender: "mock_sender".to_string(),
+            token_out: Coin::new(100, "uosmo"),
+            swap_fee: Decimal::zero(),
+            token_in_denom: "uion".to_string(),
+            token_in_max_amount: Uint128::new(100),
+        };
+        let res = sudo(deps.as_mut(), env, swap_exact_amount_out_msg);
+
+        assert!(res.is_ok());
+    }
 }

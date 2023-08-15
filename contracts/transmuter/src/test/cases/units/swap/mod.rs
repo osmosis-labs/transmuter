@@ -248,6 +248,7 @@ fn pool_with_single_lp(app: &'_ OsmosisTestApp, pool_assets: Vec<Coin>) -> TestE
         )
         .with_instantiate_msg(crate::contract::InstantiateMsg {
             pool_asset_denoms: pool_assets.iter().map(|c| c.denom.clone()).collect(),
+            admin: None,
         })
         .build(app);
 
