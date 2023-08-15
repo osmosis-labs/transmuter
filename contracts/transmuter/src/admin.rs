@@ -57,7 +57,7 @@ impl<'a> Admin<'a> {
 
     /// Transfer admin rights to a new candidate
     pub fn transfer(
-        &mut self,
+        &self,
         deps: DepsMut,
         sender: Addr,
         candidate: Addr,
@@ -79,7 +79,7 @@ impl<'a> Admin<'a> {
     }
 
     /// Claim admin rights
-    pub fn claim(&mut self, deps: DepsMut, sender: Addr) -> Result<(), ContractError> {
+    pub fn claim(&self, deps: DepsMut, sender: Addr) -> Result<(), ContractError> {
         // Make sure that the sender is the candidate
         let candidate = self
             .candidate(deps.as_ref())?
@@ -128,7 +128,7 @@ mod tests {
     fn test_admin() {
         let mut deps = mock_dependencies();
 
-        let mut admin = Admin::new("admin");
+        let admin = Admin::new("admin");
         let admin_addr = Addr::unchecked("admin");
         let random_addr = Addr::unchecked("random");
         let candidate_addr = Addr::unchecked("candidate");

@@ -4,8 +4,8 @@ use crate::{
 };
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_eq, BankMsg, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Reply, Response,
-    StdError, SubMsg, Uint128,
+    ensure, ensure_eq, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Reply,
+    Response, StdError, SubMsg, Uint128,
 };
 
 use cw_storage_plus::Item;
@@ -494,6 +494,56 @@ impl Transmuter<'_> {
 
         Ok((pool, token_in))
     }
+
+    // --- admin ---
+
+    #[msg(exec)]
+    pub fn transfer_admin(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        candidate: String,
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+
+        let candidate_addr = deps.api.addr_validate(&candidate)?;
+        self.admin.transfer(deps, info.sender, candidate_addr)?;
+
+        Ok(Response::new()
+            .add_attribute("method", "transfer_admin")
+            .add_attribute("andidate", candidate))
+    }
+
+    #[msg(exec)]
+    pub fn claim_admin(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+        let sender_string = info.sender.to_string();
+        self.admin.claim(deps, info.sender)?;
+
+        Ok(Response::new()
+            .add_attribute("method", "claim_admin")
+            .add_attribute("new_admin", sender_string))
+    }
+
+    #[msg(query)]
+    fn get_admin(&self, ctx: (Deps, Env)) -> Result<GetAdminResponse, ContractError> {
+        let (deps, _env) = ctx;
+
+        Ok(GetAdminResponse {
+            admin: self.admin.current(deps)?,
+        })
+    }
+
+    #[msg(query)]
+    fn get_admin_candidate(
+        &self,
+        ctx: (Deps, Env),
+    ) -> Result<GetAdminCandidateResponse, ContractError> {
+        let (deps, _env) = ctx;
+
+        Ok(GetAdminCandidateResponse {
+            admin_candidate: self.admin.candidate(deps)?,
+        })
+    }
 }
 
 #[cw_serde]
@@ -541,10 +591,19 @@ pub struct CalcInAmtGivenOutResponse {
     pub token_in: Coin,
 }
 
+#[cw_serde]
+pub struct GetAdminResponse {
+    pub admin: Addr,
+}
+
+#[cw_serde]
+pub struct GetAdminCandidateResponse {
+    pub admin_candidate: Option<Addr>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::*;
     use crate::sudo::SudoMsg;
     use crate::*;
     use cosmwasm_std::from_binary;
@@ -698,5 +757,58 @@ mod tests {
         let res = sudo(deps.as_mut(), env, swap_exact_amount_out_msg);
 
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_transfer_and_claim_admin() {
+        let mut deps = mock_dependencies();
+
+        let admin = "admin";
+        let candidate = "candidate";
+        let init_msg = InstantiateMsg {
+            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            admin: Some(admin.to_string()),
+        };
+        let env = mock_env();
+        let info = mock_info(admin, &[]);
+
+        // Instantiate the contract.
+        instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap();
+
+        // Transfer admin rights to the candidate
+        let transfer_admin_msg = ContractExecMsg::Transmuter(ExecMsg::TransferAdmin {
+            candidate: candidate.to_string(),
+        });
+        execute(deps.as_mut(), env.clone(), info, transfer_admin_msg).unwrap();
+
+        // Check the admin candidate
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetAdminCandidate {}),
+        )
+        .unwrap();
+        let admin_candidate: GetAdminCandidateResponse = from_binary(&res).unwrap();
+        assert_eq!(admin_candidate.admin_candidate.unwrap().as_str(), candidate);
+
+        // Claim admin rights by the candidate
+        let claim_admin_msg = ContractExecMsg::Transmuter(ExecMsg::ClaimAdmin {});
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(candidate, &[]),
+            claim_admin_msg,
+        )
+        .unwrap();
+
+        // Check the current admin
+        let res = query(
+            deps.as_ref(),
+            env,
+            ContractQueryMsg::Transmuter(QueryMsg::GetAdmin {}),
+        )
+        .unwrap();
+        let admin: GetAdminResponse = from_binary(&res).unwrap();
+        assert_eq!(admin.admin.as_str(), candidate);
     }
 }
