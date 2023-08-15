@@ -1,5 +1,5 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{ensure, Addr, Deps, DepsMut};
+use cosmwasm_std::{ensure, Addr, Deps, DepsMut, StdError, Storage};
 use cw_storage_plus::Item;
 
 use crate::ContractError;
@@ -23,15 +23,20 @@ impl<'a> Admin<'a> {
     }
 
     /// Initialize the admin state
-    pub fn init(&self, deps: DepsMut, address: Addr) -> Result<(), ContractError> {
+    pub fn init(&self, storage: &mut dyn Storage, address: Addr) -> Result<(), ContractError> {
         self.state
-            .save(deps.storage, &AdminState::Claimed(address))
+            .save(storage, &AdminState::Claimed(address))
             .map_err(Into::into)
     }
 
     /// Get current admin address
     pub fn current(&self, deps: Deps) -> Result<Addr, ContractError> {
-        match self.state.load(deps.storage)? {
+        let admin = self
+            .state
+            .may_load(deps.storage)?
+            .ok_or(StdError::not_found("admin"))?;
+
+        match admin {
             AdminState::Claimed(address) => Ok(address),
             AdminState::Transferring { current, .. } => Ok(current),
         }
@@ -39,7 +44,12 @@ impl<'a> Admin<'a> {
 
     /// Get candidate admin address. Returns None if there is no candidate.
     pub fn candidate(&self, deps: Deps) -> Result<Option<Addr>, ContractError> {
-        match self.state.load(deps.storage)? {
+        let admin = self
+            .state
+            .may_load(deps.storage)?
+            .ok_or(StdError::not_found("admin"))?;
+
+        match admin {
             AdminState::Claimed(_) => Ok(None),
             AdminState::Transferring { candidate, .. } => Ok(Some(candidate)),
         }
@@ -88,6 +98,17 @@ impl<'a> Admin<'a> {
 ///
 /// This macro ensures that the sender is the current admin. It is used to protect
 /// sensitive operations that should only be performed by the admin.
+///
+/// Example usage:
+/// ```ignore
+/// fn some_function(sender_address: Addr, admin: Admin, deps: Deps) -> Result<(), ContractError> {
+///     ensure_admin_authority!(sender_address, admin, deps);
+///     // Rest of the function
+///     Ok(())
+/// }
+/// ```
+/// In this example, if the `sender_address` is not the current admin, the macro will
+/// return an `Err(ContractError::Unauthorized {})`.
 #[macro_export]
 macro_rules! ensure_admin_authority {
     ($sender:expr, $admin: expr, $deps:expr) => {
@@ -113,7 +134,10 @@ mod tests {
         let candidate_addr = Addr::unchecked("candidate");
 
         // Initialize admin
-        assert_eq!(admin.init(deps.as_mut(), admin_addr.clone()), Ok(()));
+        assert_eq!(
+            admin.init(deps.as_mut().storage, admin_addr.clone()),
+            Ok(())
+        );
 
         // Initial state
         assert_eq!(admin.current(deps.as_ref()), Ok(admin_addr.clone()));
@@ -157,7 +181,7 @@ mod tests {
         assert_eq!(admin.claim(deps.as_mut(), candidate_addr.clone()), Ok(()));
 
         // New state
-        assert_eq!(admin.current(deps.as_ref()), Ok(candidate_addr.clone()));
+        assert_eq!(admin.current(deps.as_ref()), Ok(candidate_addr));
         assert_eq!(admin.candidate(deps.as_ref()), Ok(None));
     }
 }
