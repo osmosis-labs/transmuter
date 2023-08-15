@@ -2,124 +2,67 @@
 
 ![CI](https://github.com/osmosis-labs/transmuter/actions/workflows/rust.yml/badge.svg)
 
-A CosmWasm contract to enable 1-direction 1:1 conversion of one asset to another.
+A CosmWasm contract for 1:1 swap between two tokens with no fees.
 
-For more information about the contract, please refer to [this document](./contracts/transmuter/README.md).
+## Overview
 
-## Interacting with the contract via beaker console on testnet
+`transmuter` is designed to be used as [`cosmwasmpool`](https://github.com/osmosis-labs/osmosis/tree/main/x/cosmwasmpool), which is a module that allows users to create a pool of CosmWasm contracts that can be used to swap tokens.
 
-First, make sure [beaker](https://github.com/osmosis-labs/beaker#installation) is installed.
+Since the contract is designed to be used as a `cosmwasmpool`, the code needs to be upload through [`UploadCosmWasmPoolCodeAndWhiteListProposal`](https://github.com/osmosis-labs/osmosis/blob/b94dbe643ff37d93a639f49ee9b81208dbc3ba8c/proto/osmosis/cosmwasmpool/v1beta1/gov.proto#L8-L21) or [`MigratePoolContractsProposal`](https://github.com/osmosis-labs/osmosis/blob/b94dbe643ff37d93a639f49ee9b81208dbc3ba8c/proto/osmosis/cosmwasmpool/v1beta1/gov.proto#L23-L74) in case of migration instead of the usual `StoreCodeProposal`.
 
-Current testnet contract is deployed via the following command:
+To crate a pool, it requires sending [`MsgCreateCosmWasmPool`](https://github.com/osmosis-labs/osmosis/blob/b94dbe643ff37d93a639f49ee9b81208dbc3ba8c/proto/osmosis/cosmwasmpool/v1beta1/model/tx.proto#L14-L20) which includes `code_id` and `instantiation_msg` for the contract, `cosmwasmpool` module will instantiate the contract under the hood and register the pool.
 
-```sh
-# no need to run this to play along with the rest of the guide
-# since it has already been deployed
-beaker wasm deploy transmuter --signer-account test1 --network testnet
+## Instantiate msg
+
+```rs
+struct InstantiateMsg {
+    /// The denom of pool assets that can be swapped.
+    pub pool_asset_denoms: Vec<String>,
+
+    /// Admin of the contract.
+    pub admin: Option<String>,
+}
 ```
 
-You can connect beaker console to testnet with the following command:
+## Join and Exit pool
 
-```sh
-beaker console --network testnet
+To join the pool, user needs to the execute the contract with the following message:
+
+```json
+{ "join_pool": {} }
 ```
 
-This will connect with the contract that is deployed on testnet. The reference to the contract address and code id can be found in [.beaker/state.json](.beaker/state.json).
-Instantiate message can be found [here](contracts/transmuter/instantiate-msgs/default.json).
+And attach funds along with the message with the denom that is registered in the pool.
 
-### Setup
+To exit the pool, user needs to the execute the contract with the following message:
 
-```js
-osmo_denom = "uosmo";
-xosmo_denom = "factory/osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks/uxosmo";
-provider = test1;
-user = test2;
-
-transmuter_provider = transmuter.signer(provider);
-transmuter_user = transmuter.signer(user);
+```json
+{
+    "exit_pool": {
+    "tokens_out": [
+      { "denom": "uaaa", "amount": "1000000" },
+      { "denom": "ubbb", "amount": "1000000" }
+    ]
+  }
+}
 ```
 
-### Checking the contract state
+## Swap
 
-checking pool liquidity
+The swap can be performed through [`poolmanager`'s msgs](https://github.com/osmosis-labs/osmosis/tree/main/x/poolmanager#swaps) which will get routed to the contract's sudo entrypoint.
 
-```js
-await transmuter.getTotalPoolLiquidity()
+## Administration
+
+As for now, `cosmwasmpool` module still haven't route pool deactivation to the contract. So for now the only way to deactivate the pool is to have an admin who can deactivate the pool.
+
+Admin address can be set on instantiation of the contract. The admin can be changed by sending:
+
+```json
+{ "transfer_admin": { "candidate": "osmo1..." } }
 ```
 
-checking shares for each address
+Only candidate can claim the admin role by sending:
 
-```js
-await transmuter.getShares({ address: provider.address });
-await transmuter.getShares({ address: user.address });
+```json
+{ "claim_admin": {} }
 ```
-
-checking total shares
-
-```js
-await transmuter.getTotalShares();
-```
-
-### Join pool
-
-```js
-await transmuter_provider.joinPool(
-  "auto", // gas
-  undefined, // memo
-  [{ amount: "1000000", denom: xosmo_denom }] // funds
-);
-```
-
-### Transmute
-
-Transmutation is a 1-direction 1:1 conversion of one asset to another.
-
-For this, we keep the interface for transmute to follow the same convention with `swapExactAmountIn` and `swapExactAmountOut` from `poolmanager` module as we will integrate this contract with `poolmanager` module in the future. (see [future work](#future-work))
-
-```js
-await transmuter_user.swapExactAmountIn(
-  {
-    tokenIn: { amount: "200000", denom: osmo_denom },
-    tokenOutDenom: xosmo_denom,
-    tokenOutMinAmount: "200000",
-  }, // argument
-  "auto", // gas
-  undefined, // memo
-  [{ amount: "200000", denom: osmo_denom }] // funds
-);
-```
-
-or equivalently
-
-```js
-await transmuter_user.swapExactAmountOut(
-  {
-    tokenInDenom: osmo_denom,
-    tokenInMaxAmount: "200000",
-    tokenOut: { amount: "200000", denom: xosmo_denom }
-  },
-  "auto", // gas
-  undefined, // memo
-  [{ amount: "200000", denom: osmo_denom }] // funds
-)
-```
-
-### Exit pool
-
-Exit pool
-
-```js
-await transmuter_provider.exitPool({
-  tokensOut: [
-    { amount: "100000", denom: xosmo_denom },
-    { amount: "100000", denom: osmo_denom },
-  ],
-});
-```
-
-## Future work
-
-This contract is intended to be able to plug into Osmosis as a CosmWasm pool type and abstract parts of it's interaction through [`poolmanager` module](https://github.com/osmosis-labs/osmosis/tree/main/x/poolmanager).
-To transmute, it will go through `poolmanager`'s `MsgSwapExactAmountIn` and `MsgSwapExactAmountOut` messages and will route the calls through sudo endpoint of the contract.
-
-This is still a work in progress.
