@@ -5,12 +5,13 @@
 */
 import { CosmWasmClient, SigningCosmWasmClient, ExecuteResult } from "@cosmjs/cosmwasm-stargate";
 import { StdFee } from "@cosmjs/amino";
-import { Uint128, Coin, Decimal, CalcInAmtGivenOutResponse, CalcOutAmtGivenInResponse, GetSharesResponse, GetSwapFeeResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse, IsActiveResponse, SpotPriceResponse } from "./Transmuter.types";
+import { Coin, Decimal, CalcInAmtGivenOutResponse, CalcOutAmtGivenInResponse, GetAdminCandidateResponse, GetAdminResponse, GetShareDenomResponse, GetSharesResponse, GetSwapFeeResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse, IsActiveResponse, SpotPriceResponse } from "./Transmuter.types";
 export interface TransmuterReadOnlyInterface {
     contractAddress: string;
     getShares: ({ address }: {
         address: string;
     }) => Promise<GetSharesResponse>;
+    getShareDenom: () => Promise<GetShareDenomResponse>;
     getSwapFee: () => Promise<GetSwapFeeResponse>;
     isActive: () => Promise<IsActiveResponse>;
     getTotalShares: () => Promise<GetTotalSharesResponse>;
@@ -29,6 +30,8 @@ export interface TransmuterReadOnlyInterface {
         tokenInDenom: string;
         tokenOut: Coin;
     }) => Promise<CalcInAmtGivenOutResponse>;
+    getAdmin: () => Promise<GetAdminResponse>;
+    getAdminCandidate: () => Promise<GetAdminCandidateResponse>;
 }
 export declare class TransmuterQueryClient implements TransmuterReadOnlyInterface {
     client: CosmWasmClient;
@@ -37,6 +40,7 @@ export declare class TransmuterQueryClient implements TransmuterReadOnlyInterfac
     getShares: ({ address }: {
         address: string;
     }) => Promise<GetSharesResponse>;
+    getShareDenom: () => Promise<GetShareDenomResponse>;
     getSwapFee: () => Promise<GetSwapFeeResponse>;
     isActive: () => Promise<IsActiveResponse>;
     getTotalShares: () => Promise<GetTotalSharesResponse>;
@@ -55,43 +59,39 @@ export declare class TransmuterQueryClient implements TransmuterReadOnlyInterfac
         tokenInDenom: string;
         tokenOut: Coin;
     }) => Promise<CalcInAmtGivenOutResponse>;
+    getAdmin: () => Promise<GetAdminResponse>;
+    getAdminCandidate: () => Promise<GetAdminCandidateResponse>;
 }
 export interface TransmuterInterface extends TransmuterReadOnlyInterface {
     contractAddress: string;
     sender: string;
+    setActiveStatus: ({ active }: {
+        active: boolean;
+    }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
     joinPool: (fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
     exitPool: ({ tokensOut }: {
         tokensOut: Coin[];
     }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
-    swapExactAmountIn: ({ tokenIn, tokenOutDenom, tokenOutMinAmount }: {
-        tokenIn: Coin;
-        tokenOutDenom: string;
-        tokenOutMinAmount: Uint128;
+    transferAdmin: ({ candidate }: {
+        candidate: string;
     }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
-    swapExactAmountOut: ({ tokenInDenom, tokenInMaxAmount, tokenOut }: {
-        tokenInDenom: string;
-        tokenInMaxAmount: Uint128;
-        tokenOut: Coin;
-    }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
+    claimAdmin: (fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
 }
 export declare class TransmuterClient extends TransmuterQueryClient implements TransmuterInterface {
     client: SigningCosmWasmClient;
     sender: string;
     contractAddress: string;
     constructor(client: SigningCosmWasmClient, sender: string, contractAddress: string);
+    setActiveStatus: ({ active }: {
+        active: boolean;
+    }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
     joinPool: (fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
     exitPool: ({ tokensOut }: {
         tokensOut: Coin[];
     }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
-    swapExactAmountIn: ({ tokenIn, tokenOutDenom, tokenOutMinAmount }: {
-        tokenIn: Coin;
-        tokenOutDenom: string;
-        tokenOutMinAmount: Uint128;
+    transferAdmin: ({ candidate }: {
+        candidate: string;
     }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
-    swapExactAmountOut: ({ tokenInDenom, tokenInMaxAmount, tokenOut }: {
-        tokenInDenom: string;
-        tokenInMaxAmount: Uint128;
-        tokenOut: Coin;
-    }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
+    claimAdmin: (fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
 }
 //# sourceMappingURL=Transmuter.client.d.ts.map
