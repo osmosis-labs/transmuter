@@ -6,7 +6,7 @@
 
 import { CosmWasmClient, SigningCosmWasmClient, ExecuteResult } from "@cosmjs/cosmwasm-stargate";
 import { StdFee } from "@cosmjs/amino";
-import { ExecuteMsg, Uint128, Coin, InstantiateMsg, QueryMsg, Decimal, AdminResponse, CalcInAmtGivenOutResponse, CalcOutAmtGivenInResponse, GetSharesResponse, GetSwapFeeResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse, IsActiveResponse, PoolResponse, TransmuterPool, SharesResponse, SpotPriceResponse } from "./Transmuter.types";
+import { ExecuteMsg, Uint128, Coin, InstantiateMsg, QueryMsg, Decimal, CalcInAmtGivenOutResponse, CalcOutAmtGivenInResponse, Addr, GetAdminCandidateResponse, GetAdminResponse, GetShareDenomResponse, GetSharesResponse, GetSwapFeeResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse, IsActiveResponse, SpotPriceResponse } from "./Transmuter.types";
 export interface TransmuterReadOnlyInterface {
   contractAddress: string;
   getShares: ({
@@ -14,6 +14,7 @@ export interface TransmuterReadOnlyInterface {
   }: {
     address: string;
   }) => Promise<GetSharesResponse>;
+  getShareDenom: () => Promise<GetShareDenomResponse>;
   getSwapFee: () => Promise<GetSwapFeeResponse>;
   isActive: () => Promise<IsActiveResponse>;
   getTotalShares: () => Promise<GetTotalSharesResponse>;
@@ -43,6 +44,8 @@ export interface TransmuterReadOnlyInterface {
     tokenInDenom: string;
     tokenOut: Coin;
   }) => Promise<CalcInAmtGivenOutResponse>;
+  getAdmin: () => Promise<GetAdminResponse>;
+  getAdminCandidate: () => Promise<GetAdminCandidateResponse>;
 }
 export class TransmuterQueryClient implements TransmuterReadOnlyInterface {
   client: CosmWasmClient;
@@ -52,6 +55,7 @@ export class TransmuterQueryClient implements TransmuterReadOnlyInterface {
     this.client = client;
     this.contractAddress = contractAddress;
     this.getShares = this.getShares.bind(this);
+    this.getShareDenom = this.getShareDenom.bind(this);
     this.getSwapFee = this.getSwapFee.bind(this);
     this.isActive = this.isActive.bind(this);
     this.getTotalShares = this.getTotalShares.bind(this);
@@ -59,6 +63,8 @@ export class TransmuterQueryClient implements TransmuterReadOnlyInterface {
     this.spotPrice = this.spotPrice.bind(this);
     this.calcOutAmtGivenIn = this.calcOutAmtGivenIn.bind(this);
     this.calcInAmtGivenOut = this.calcInAmtGivenOut.bind(this);
+    this.getAdmin = this.getAdmin.bind(this);
+    this.getAdminCandidate = this.getAdminCandidate.bind(this);
   }
 
   getShares = async ({
@@ -70,6 +76,11 @@ export class TransmuterQueryClient implements TransmuterReadOnlyInterface {
       get_shares: {
         address
       }
+    });
+  };
+  getShareDenom = async (): Promise<GetShareDenomResponse> => {
+    return this.client.queryContractSmart(this.contractAddress, {
+      get_share_denom: {}
     });
   };
   getSwapFee = async (): Promise<GetSwapFeeResponse> => {
@@ -140,34 +151,37 @@ export class TransmuterQueryClient implements TransmuterReadOnlyInterface {
       }
     });
   };
+  getAdmin = async (): Promise<GetAdminResponse> => {
+    return this.client.queryContractSmart(this.contractAddress, {
+      get_admin: {}
+    });
+  };
+  getAdminCandidate = async (): Promise<GetAdminCandidateResponse> => {
+    return this.client.queryContractSmart(this.contractAddress, {
+      get_admin_candidate: {}
+    });
+  };
 }
 export interface TransmuterInterface extends TransmuterReadOnlyInterface {
   contractAddress: string;
   sender: string;
+  setActiveStatus: ({
+    active
+  }: {
+    active: boolean;
+  }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
   joinPool: (fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
   exitPool: ({
     tokensOut
   }: {
     tokensOut: Coin[];
   }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
-  swapExactAmountIn: ({
-    tokenIn,
-    tokenOutDenom,
-    tokenOutMinAmount
+  transferAdmin: ({
+    candidate
   }: {
-    tokenIn: Coin;
-    tokenOutDenom: string;
-    tokenOutMinAmount: Uint128;
+    candidate: string;
   }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
-  swapExactAmountOut: ({
-    tokenInDenom,
-    tokenInMaxAmount,
-    tokenOut
-  }: {
-    tokenInDenom: string;
-    tokenInMaxAmount: Uint128;
-    tokenOut: Coin;
-  }, fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
+  claimAdmin: (fee?: number | StdFee | "auto", memo?: string, funds?: Coin[]) => Promise<ExecuteResult>;
 }
 export class TransmuterClient extends TransmuterQueryClient implements TransmuterInterface {
   client: SigningCosmWasmClient;
@@ -179,12 +193,24 @@ export class TransmuterClient extends TransmuterQueryClient implements Transmute
     this.client = client;
     this.sender = sender;
     this.contractAddress = contractAddress;
+    this.setActiveStatus = this.setActiveStatus.bind(this);
     this.joinPool = this.joinPool.bind(this);
     this.exitPool = this.exitPool.bind(this);
-    this.swapExactAmountIn = this.swapExactAmountIn.bind(this);
-    this.swapExactAmountOut = this.swapExactAmountOut.bind(this);
+    this.transferAdmin = this.transferAdmin.bind(this);
+    this.claimAdmin = this.claimAdmin.bind(this);
   }
 
+  setActiveStatus = async ({
+    active
+  }: {
+    active: boolean;
+  }, fee: number | StdFee | "auto" = "auto", memo?: string, funds?: Coin[]): Promise<ExecuteResult> => {
+    return await this.client.execute(this.sender, this.contractAddress, {
+      set_active_status: {
+        active
+      }
+    }, fee, memo, funds);
+  };
   joinPool = async (fee: number | StdFee | "auto" = "auto", memo?: string, funds?: Coin[]): Promise<ExecuteResult> => {
     return await this.client.execute(this.sender, this.contractAddress, {
       join_pool: {}
@@ -201,38 +227,20 @@ export class TransmuterClient extends TransmuterQueryClient implements Transmute
       }
     }, fee, memo, funds);
   };
-  swapExactAmountIn = async ({
-    tokenIn,
-    tokenOutDenom,
-    tokenOutMinAmount
+  transferAdmin = async ({
+    candidate
   }: {
-    tokenIn: Coin;
-    tokenOutDenom: string;
-    tokenOutMinAmount: Uint128;
+    candidate: string;
   }, fee: number | StdFee | "auto" = "auto", memo?: string, funds?: Coin[]): Promise<ExecuteResult> => {
     return await this.client.execute(this.sender, this.contractAddress, {
-      swap_exact_amount_in: {
-        token_in: tokenIn,
-        token_out_denom: tokenOutDenom,
-        token_out_min_amount: tokenOutMinAmount
+      transfer_admin: {
+        candidate
       }
     }, fee, memo, funds);
   };
-  swapExactAmountOut = async ({
-    tokenInDenom,
-    tokenInMaxAmount,
-    tokenOut
-  }: {
-    tokenInDenom: string;
-    tokenInMaxAmount: Uint128;
-    tokenOut: Coin;
-  }, fee: number | StdFee | "auto" = "auto", memo?: string, funds?: Coin[]): Promise<ExecuteResult> => {
+  claimAdmin = async (fee: number | StdFee | "auto" = "auto", memo?: string, funds?: Coin[]): Promise<ExecuteResult> => {
     return await this.client.execute(this.sender, this.contractAddress, {
-      swap_exact_amount_out: {
-        token_in_denom: tokenInDenom,
-        token_in_max_amount: tokenInMaxAmount,
-        token_out: tokenOut
-      }
+      claim_admin: {}
     }, fee, memo, funds);
   };
 }
