@@ -1,3 +1,5 @@
+#![cfg(not(tarpaulin_include))]
+
 use cosmwasm_schema::write_api;
 
 use transmuter::contract::{ExecMsg, InstantiateMsg, QueryMsg};
