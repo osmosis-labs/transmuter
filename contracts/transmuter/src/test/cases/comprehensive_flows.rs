@@ -17,7 +17,7 @@ use osmosis_std::types::{
     cosmos::bank::v1beta1::MsgSend,
     osmosis::poolmanager::v1beta1::{
         EstimateSwapExactAmountInRequest, EstimateSwapExactAmountInResponse, MsgSwapExactAmountIn,
-        SwapAmountInRoute,
+        MsgSwapExactAmountOut, SwapAmountInRoute, SwapAmountOutRoute,
     },
 };
 use osmosis_test_tube::{Account, Bank, Module, OsmosisTestApp, Runner};
@@ -401,6 +401,53 @@ fn test_swap() {
     );
 
     t.assert_account_balances("bob", vec![Coin::new(29_902, COSMOS_USDC)], vec!["uosmo"]);
+
+    // swap back with `SwapExactAmountOut`
+    let token_out = Coin::new(1_500, ETH_USDC);
+
+    cp.swap_exact_amount_out(
+        MsgSwapExactAmountOut {
+            sender: t.accounts["bob"].address(),
+            token_out: Some(token_out.into()),
+            routes: vec![SwapAmountOutRoute {
+                pool_id: t.contract.pool_id,
+                token_in_denom: COSMOS_USDC.to_string(),
+            }],
+            token_in_max_amount: Uint128::from(1_500u128).to_string(),
+        },
+        &t.accounts["bob"],
+    )
+    .unwrap();
+
+    let GetTotalPoolLiquidityResponse {
+        total_pool_liquidity,
+    } = t
+        .contract
+        .query(&QueryMsg::GetTotalPoolLiquidity {})
+        .unwrap();
+
+    assert_eq!(
+        total_pool_liquidity,
+        vec![
+            Coin::new(29_902, ETH_USDC),
+            Coin::new(100_000 - 29_902, COSMOS_USDC),
+        ]
+    );
+
+    // check balances
+    t.assert_contract_balances(&[
+        Coin::new(29_902, ETH_USDC),
+        Coin::new(100_000 + 100_000 - 29_902, COSMOS_USDC),
+    ]);
+
+    t.assert_account_balances(
+        "bob",
+        vec![
+            Coin::new(1_500, ETH_USDC),
+            Coin::new(29_902 - 1_500, COSMOS_USDC), // +100_000 due to bank send
+        ],
+        vec!["uosmo"],
+    );
 }
 
 #[test]
