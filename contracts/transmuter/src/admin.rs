@@ -99,15 +99,7 @@ impl<'a> Admin<'a> {
 /// This macro ensures that the sender is the current admin. It is used to protect
 /// sensitive operations that should only be performed by the admin.
 ///
-/// Example usage:
-/// ```ignore
-/// fn some_function(sender_address: Addr, admin: Admin, deps: Deps) -> Result<(), ContractError> {
-///     ensure_admin_authority!(sender_address, admin, deps);
-///     // Rest of the function
-///     Ok(())
-/// }
-/// ```
-/// In this example, if the `sender_address` is not the current admin, the macro will
+/// If the `sender_address` is not the current admin, the macro will
 /// return an `Err(ContractError::Unauthorized {})`.
 #[macro_export]
 macro_rules! ensure_admin_authority {

@@ -239,10 +239,6 @@ impl Transmuter<'_> {
             }
         );
 
-        deps.api.debug(&format!("sender_shares: {}", sender_shares));
-        deps.api
-            .debug(&format!("burn_from_address: {}", burn_from_address));
-
         // exit pool
         self.pool
             .update(deps.storage, |mut pool| -> Result<_, ContractError> {

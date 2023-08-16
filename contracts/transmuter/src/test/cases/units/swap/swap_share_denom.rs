@@ -48,7 +48,6 @@ fn test_swap_exact_amount_in_with_share_denom() {
 }
 
 #[test]
-#[ignore = "requires osmosis v17"]
 fn test_swap_exact_amount_out_with_share_denom() {
     let app = osmosis_test_tube::OsmosisTestApp::new();
     let t = pool_with_single_lp(
@@ -90,7 +89,6 @@ fn test_swap_exact_amount_out_with_share_denom() {
 }
 
 #[test]
-#[ignore = "requires osmosis v17"]
 fn test_swap_exact_amount_out_with_share_denom_where_token_in_max_is_exceeding_expectation() {
     let app = osmosis_test_tube::OsmosisTestApp::new();
     let t = pool_with_single_lp(
