@@ -55,6 +55,12 @@ The swap can be performed through [`poolmanager`'s msgs](https://github.com/osmo
 
 As for now, `cosmwasmpool` module still haven't route pool deactivation to the contract. So for now the only way to deactivate the pool is to have an admin who can deactivate the pool.
 
+Admin is set on instantiate and can send the following msg:
+
+```json
+{ "set_active_status": true }
+```
+
 Admin address can be set on instantiation of the contract. The admin can be changed by sending:
 
 ```json
