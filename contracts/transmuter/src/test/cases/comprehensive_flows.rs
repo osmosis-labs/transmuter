@@ -15,9 +15,13 @@ use cosmwasm_std::{Coin, Uint128};
 
 use osmosis_std::types::{
     cosmos::bank::v1beta1::MsgSend,
-    osmosis::poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute},
+    osmosis::poolmanager::v1beta1::{
+        EstimateSwapExactAmountInRequest, EstimateSwapExactAmountInResponse, MsgSwapExactAmountIn,
+        MsgSwapExactAmountOut, SwapAmountInRoute, SwapAmountOutRoute,
+    },
 };
-use osmosis_test_tube::{Account, Bank, Module, OsmosisTestApp};
+
+use osmosis_test_tube::{Account, Bank, Module, OsmosisTestApp, Runner};
 
 const ETH_USDC: &str = "ibc/AXLETHUSDC";
 const ETH_DAI: &str = "ibc/AXLETHDAI";
@@ -41,6 +45,7 @@ fn test_join_pool() {
         )
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
+            admin: None,
         })
         .build(&app);
 
@@ -202,6 +207,7 @@ fn test_swap() {
         .with_account("provider", vec![Coin::new(200_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
+            admin: None,
         })
         .build(&app);
 
@@ -294,16 +300,32 @@ fn test_swap() {
         err,
     );
 
+    let routes = vec![SwapAmountInRoute {
+        pool_id: t.contract.pool_id,
+        token_out_denom: COSMOS_USDC.to_string(),
+    }];
+
+    let EstimateSwapExactAmountInResponse { token_out_amount } = t
+        .app
+        .query(
+            "/osmosis.poolmanager.v1beta1.Query/EstimateSwapExactAmountIn",
+            &EstimateSwapExactAmountInRequest {
+                pool_id: t.contract.pool_id,
+                token_in: format!("1500{ETH_USDC}"),
+                routes: routes.clone(),
+            },
+        )
+        .unwrap();
+
+    assert_eq!(token_out_amount, "1500");
+
     // swap with correct token_in should succeed this time
     let token_in = Coin::new(1_500, ETH_USDC);
     cp.swap_exact_amount_in(
         MsgSwapExactAmountIn {
             sender: t.accounts["alice"].address(),
             token_in: Some(token_in.into()),
-            routes: vec![SwapAmountInRoute {
-                pool_id: t.contract.pool_id,
-                token_out_denom: COSMOS_USDC.to_string(),
-            }],
+            routes,
             token_out_min_amount: Uint128::from(1_500u128).to_string(),
         },
         &t.accounts["alice"],
@@ -380,6 +402,53 @@ fn test_swap() {
     );
 
     t.assert_account_balances("bob", vec![Coin::new(29_902, COSMOS_USDC)], vec!["uosmo"]);
+
+    // swap back with `SwapExactAmountOut`
+    let token_out = Coin::new(1_500, ETH_USDC);
+
+    cp.swap_exact_amount_out(
+        MsgSwapExactAmountOut {
+            sender: t.accounts["bob"].address(),
+            token_out: Some(token_out.into()),
+            routes: vec![SwapAmountOutRoute {
+                pool_id: t.contract.pool_id,
+                token_in_denom: COSMOS_USDC.to_string(),
+            }],
+            token_in_max_amount: Uint128::from(1_500u128).to_string(),
+        },
+        &t.accounts["bob"],
+    )
+    .unwrap();
+
+    let GetTotalPoolLiquidityResponse {
+        total_pool_liquidity,
+    } = t
+        .contract
+        .query(&QueryMsg::GetTotalPoolLiquidity {})
+        .unwrap();
+
+    assert_eq!(
+        total_pool_liquidity,
+        vec![
+            Coin::new(29_902, ETH_USDC),
+            Coin::new(100_000 - 29_902, COSMOS_USDC),
+        ]
+    );
+
+    // check balances
+    t.assert_contract_balances(&[
+        Coin::new(29_902, ETH_USDC),
+        Coin::new(100_000 + 100_000 - 29_902, COSMOS_USDC),
+    ]);
+
+    t.assert_account_balances(
+        "bob",
+        vec![
+            Coin::new(1_500, ETH_USDC),
+            Coin::new(29_902 - 1_500, COSMOS_USDC), // +100_000 due to bank send
+        ],
+        vec!["uosmo"],
+    );
 }
 
 #[test]
@@ -393,6 +462,7 @@ fn test_exit_pool() {
         .with_account("provider_2", vec![Coin::new(100_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()],
+            admin: None,
         })
         .build(&app);
 
@@ -599,6 +669,7 @@ fn test_3_pool_swap() {
                 ETH_DAI.to_string(),
                 COSMOS_USDC.to_string(),
             ],
+            admin: None,
         })
         .build(&app);
 

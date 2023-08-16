@@ -20,33 +20,30 @@ impl TransmuterPool {
                 .find(|pool_asset| pool_asset.denom == denom)
         };
 
-        let token_in_pool_asset = pool_asset_by_denom(&token_in.denom);
-        let token_out_pool_asset = pool_asset_by_denom(token_out_denom);
-
-        let pool_asset_denoms = self
+        // get all pool asset denoms
+        let pool_asset_denoms: Vec<String> = self
             .pool_assets
             .iter()
             .map(|pool_asset| pool_asset.denom.clone())
             .collect();
 
-        ensure!(
-            token_in_pool_asset.is_some(),
+        // check if token_in is in pool_assets
+        let _token_in_pool_asset = pool_asset_by_denom(&token_in.denom).ok_or_else(|| {
             ContractError::InvalidTransmuteDenom {
                 denom: token_in.denom.clone(),
-                expected_denom: pool_asset_denoms
+                expected_denom: pool_asset_denoms.clone(),
             }
-        );
+        })?;
 
-        ensure!(
-            token_out_pool_asset.is_some(),
+        // check if token_out_denom is in pool_assets
+        let token_out_pool_asset = pool_asset_by_denom(token_out_denom).ok_or_else(|| {
             ContractError::InvalidTransmuteDenom {
                 denom: token_out_denom.to_string(),
-                expected_denom: pool_asset_denoms
+                expected_denom: pool_asset_denoms,
             }
-        );
+        })?;
 
         // ensure there is enough token_out_denom in the pool
-        let token_out_pool_asset = token_out_pool_asset.expect("already ensured it exists");
         ensure!(
             token_out_pool_asset.amount >= token_in.amount,
             ContractError::InsufficientPoolAsset {

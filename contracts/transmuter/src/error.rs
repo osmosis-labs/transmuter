@@ -59,6 +59,9 @@ pub enum ContractError {
     #[error("The pool is currently inactive")]
     InactivePool {},
 
-    #[error("YUnexpected denom: expected: {expected}, actual: {actual}")]
+    #[error("Unexpected denom: expected: {expected}, actual: {actual}")]
     UnexpectedDenom { expected: String, actual: String },
+
+    #[error("Unauthorized")]
+    Unauthorized {},
 }
