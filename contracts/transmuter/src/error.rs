@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use cosmwasm_std::{Coin, Decimal, StdError, Uint128};
 use thiserror::Error;
 
@@ -64,4 +66,15 @@ pub enum ContractError {
 
     #[error("Unauthorized")]
     Unauthorized {},
+
+    #[error("Calculation error: {reason}")]
+    CalculationError { reason: String },
+}
+
+impl ContractError {
+    pub fn calculation_error(error: impl Display) -> Self {
+        ContractError::CalculationError {
+            reason: error.to_string(),
+        }
+    }
 }
