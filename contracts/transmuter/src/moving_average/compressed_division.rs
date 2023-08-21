@@ -135,44 +135,70 @@ mod v2 {
             })
         }
 
+        // weighted average
+        // cumsum_elasped_time = updated_at - started_at
+        // latest_value_elasped_time = block_time - updated_at
+        // total_elasped_time = block_time - started_at
+        // ((cumsum * cumsum_elasped_time) + (latest_value * latest_value_elasped_time)) / total_elasped_time
+
+        // [Assumption] divisions are sorted by started_at and last division's updated_at is less than block_time
         pub fn average(
             mut divisions: impl Iterator<Item = Self>,
             division_size: Uint64,
             window_size: Uint64,
             block_time: Timestamp,
         ) -> Result<Decimal, ContractError> {
-            match divisions.next() {
+            // Track start time since first div
+            let (first_div_stared_at, mut cumsum) = match divisions.next() {
                 Some(CompressedDivision {
                     started_at,
                     updated_at,
                     latest_value,
                     cumsum,
                 }) => {
-                    // weighted average
-                    // cumsum_elasped_time = updated_at - started_at
-                    // latest_value_elasped_time = block_time - updated_at
-                    // total_elasped_time = block_time - started_at
-                    // ((cumsum * cumsum_elasped_time) + (latest_value * latest_value_elasped_time)) / total_elasped_time
+                    let latest_value_elapsed_time = if Uint64::from(block_time.nanos())
+                        > Uint64::from(started_at.nanos()).checked_add(division_size)?
+                    {
+                        Uint64::from(started_at.nanos())
+                            .checked_add(division_size)?
+                            .checked_sub(updated_at.nanos().into())?
+                    } else {
+                        Uint64::from(block_time.nanos()).checked_sub(updated_at.nanos().into())?
+                    };
 
-                    let cumsum_elasped_time =
-                        Uint64::from(updated_at.nanos()).checked_sub(started_at.nanos().into())?;
+                    let cumsum = cumsum.checked_add(latest_value.checked_mul(
+                        Decimal::checked_from_ratio(latest_value_elapsed_time, 1u128)?,
+                    )?)?;
 
-                    let latest_value_elasped_time =
-                        Uint64::from(block_time.nanos()).checked_sub(updated_at.nanos().into())?;
+                    dbg!(cumsum);
 
-                    let total_elasped_time =
-                        Uint64::from(block_time.nanos()).checked_sub(started_at.nanos().into())?;
-
-                    cumsum
-                        .checked_add(latest_value.checked_mul(Decimal::checked_from_ratio(
-                            latest_value_elasped_time,
-                            1u128,
-                        )?)?)?
-                        .checked_div(Decimal::checked_from_ratio(total_elasped_time, 1u128)?)
-                        .map_err(Into::into)
+                    (started_at, cumsum)
                 }
-                None => Err(StdError::not_found("division").into()),
+                None => return Err(StdError::not_found("division").into()),
+            };
+
+            // Process remaining divisions
+            for division in divisions {
+                let latest_value_elapsed_time = Uint64::from(block_time.nanos())
+                    .checked_sub(division.updated_at.nanos().into())?;
+
+                let weighted_latest_value =
+                    division
+                        .latest_value
+                        .checked_mul(Decimal::checked_from_ratio(
+                            latest_value_elapsed_time,
+                            1u128,
+                        )?)?;
+
+                cumsum = cumsum.checked_add(division.cumsum.checked_add(weighted_latest_value)?)?;
             }
+
+            let total_elapsed_time =
+                Uint64::from(block_time.nanos()).checked_sub(first_div_stared_at.nanos().into())?;
+
+            cumsum
+                .checked_div(Decimal::checked_from_ratio(total_elapsed_time, 1u128)?)
+                .map_err(Into::into)
         }
     }
 
@@ -248,7 +274,7 @@ mod v2 {
         }
 
         #[test]
-        fn test_average_single_elem_iter() {
+        fn test_average_single_div() {
             let started_at = Timestamp::from_nanos(100);
             let updated_at = Timestamp::from_nanos(110);
             let value = Decimal::percent(20);
@@ -349,6 +375,103 @@ mod v2 {
                     + (updated_value * Decimal::from_ratio(50u128, 1u128)))
                     / Decimal::from_ratio(100u128, 1u128)
             );
+        }
+
+        #[test]
+        fn test_average_double_divs() {
+            let division_size = Uint64::from(100u64);
+            let window_size = Uint64::from(1000u64);
+
+            let divisions = vec![
+                {
+                    let started_at = Timestamp::from_nanos(100);
+                    let updated_at = Timestamp::from_nanos(110);
+                    let value = Decimal::percent(20);
+                    let prev_value = Decimal::percent(10);
+                    CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                },
+                {
+                    let started_at = Timestamp::from_nanos(200);
+                    let updated_at = Timestamp::from_nanos(260);
+                    let value = Decimal::percent(30);
+                    let prev_value = Decimal::percent(20);
+                    CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                },
+            ];
+
+            let block_time = Timestamp::from_nanos(270);
+            let average = CompressedDivision::average(
+                divisions.into_iter(),
+                division_size,
+                window_size,
+                block_time,
+            )
+            .unwrap();
+
+            assert_eq!(
+                average,
+                ((Decimal::percent(10) * Decimal::from_ratio(10u128, 1u128))
+                    + (Decimal::percent(20) * Decimal::from_ratio(90u128, 1u128))
+                    + (Decimal::percent(20) * Decimal::from_ratio(60u128, 1u128))
+                    + (Decimal::percent(30) * Decimal::from_ratio(10u128, 1u128)))
+                    / Decimal::from_ratio(170u128, 1u128)
+            );
+        }
+
+        #[test]
+        fn test_average_tripple_divs() {
+            let division_size = Uint64::from(100u64);
+            let window_size = Uint64::from(1000u64);
+
+            let divisions = vec![
+                {
+                    let started_at = Timestamp::from_nanos(100);
+                    let updated_at = Timestamp::from_nanos(110);
+                    let value = Decimal::percent(20);
+                    let prev_value = Decimal::percent(10);
+                    CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                },
+                {
+                    let started_at = Timestamp::from_nanos(200);
+                    let updated_at = Timestamp::from_nanos(260);
+                    let value = Decimal::percent(30);
+                    let prev_value = Decimal::percent(20);
+                    CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                },
+                {
+                    let started_at = Timestamp::from_nanos(300);
+                    let updated_at = Timestamp::from_nanos(340);
+                    let value = Decimal::percent(40);
+                    let prev_value = Decimal::percent(30);
+                    CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                },
+            ];
+
+            let block_time = Timestamp::from_nanos(370);
+
+            let average = CompressedDivision::average(
+                divisions.clone().into_iter(),
+                division_size,
+                window_size,
+                block_time,
+            )
+            .unwrap();
+
+            assert_eq!(
+                average,
+                ((Decimal::percent(10) * Decimal::from_ratio(10u128, 1u128))
+                    + (Decimal::percent(20) * Decimal::from_ratio(90u128, 1u128))
+                    + (Decimal::percent(20) * Decimal::from_ratio(60u128, 1u128))
+                    + (Decimal::percent(30) * Decimal::from_ratio(90u128, 1u128))
+                    + (Decimal::percent(30) * Decimal::from_ratio(40u128, 1u128))
+                    + (Decimal::percent(40) * Decimal::from_ratio(30u128, 1u128)))
+                    / Decimal::from_ratio(220u128, 1u128)
+            );
+
+            #[test]
+            fn test_average_when_div_is_in_overlapping_window() {
+                todo!()
+            }
         }
     }
 }
