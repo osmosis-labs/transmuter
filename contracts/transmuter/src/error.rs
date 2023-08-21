@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use cosmwasm_std::{Coin, Decimal, StdError, Uint128};
+use cosmwasm_std::{CheckedFromRatioError, Coin, Decimal, OverflowError, StdError, Uint128};
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq)]
@@ -69,6 +69,12 @@ pub enum ContractError {
 
     #[error("Calculation error: {reason}")]
     CalculationError { reason: String },
+
+    #[error("{0}")]
+    OverflowError(#[from] OverflowError),
+
+    #[error("{0}")]
+    CheckedFromRatioError(#[from] CheckedFromRatioError),
 }
 
 impl ContractError {
