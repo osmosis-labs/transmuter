@@ -286,9 +286,10 @@ mod v2 {
                     / Decimal::from_ratio(15u128, 1u128)
             );
 
+            // half way to the division size
             let block_time = Timestamp::from_nanos(150);
             let average = CompressedDivision::average(
-                divisions.into_iter(),
+                divisions.clone().into_iter(),
                 division_size,
                 window_size,
                 block_time,
@@ -300,6 +301,53 @@ mod v2 {
                 ((prev_value * Decimal::from_ratio(10u128, 1u128))
                     + (value * Decimal::from_ratio(40u128, 1u128)))
                     / Decimal::from_ratio(50u128, 1u128)
+            );
+
+            // at the division edge
+            let block_time = Timestamp::from_nanos(200);
+            let average = CompressedDivision::average(
+                divisions.clone().into_iter(),
+                division_size,
+                window_size,
+                block_time,
+            )
+            .unwrap();
+
+            assert_eq!(
+                average,
+                ((prev_value * Decimal::from_ratio(10u128, 1u128))
+                    + (value * Decimal::from_ratio(90u128, 1u128)))
+                    / Decimal::from_ratio(100u128, 1u128)
+            );
+
+            // at the division edge but there is some update before
+            let update_time = Timestamp::from_nanos(150);
+            let updated_value = Decimal::percent(30);
+
+            let updated_division = divisions
+                .into_iter()
+                .next()
+                .unwrap()
+                .update(update_time, updated_value)
+                .unwrap();
+
+            let divisions = vec![updated_division];
+
+            let block_time = Timestamp::from_nanos(200);
+            let average = CompressedDivision::average(
+                divisions.into_iter(),
+                division_size,
+                window_size,
+                block_time,
+            )
+            .unwrap();
+
+            assert_eq!(
+                average,
+                ((prev_value * Decimal::from_ratio(10u128, 1u128))
+                    + (value * Decimal::from_ratio(40u128, 1u128))
+                    + (updated_value * Decimal::from_ratio(50u128, 1u128)))
+                    / Decimal::from_ratio(100u128, 1u128)
             );
         }
     }
