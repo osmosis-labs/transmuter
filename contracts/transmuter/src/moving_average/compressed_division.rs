@@ -142,13 +142,21 @@ mod v2 {
             })
         }
 
-        // weighted average
-        // cumsum_elasped_time = updated_at - started_at
-        // latest_value_elasped_time = block_time - updated_at
-        // total_elasped_time = block_time - started_at
-        // ((cumsum * cumsum_elasped_time) + (latest_value * latest_value_elasped_time)) / total_elasped_time
-
-        // [Assumption] divisions are sorted by started_at and last division's updated_at is less than block_time
+        /// This function calculates the average of the divisions in a specified window
+        /// The window is defined by the `window_size` and `block_time`
+        ///
+        /// The calculation is done by accumulating the sum of (value * elapsed_time)
+        /// then divide by the total elapsed time
+        ///
+        /// As this is `CompressionDivision`, not all the data points in the window is stored for gas optimization
+        /// When the window covers portion of the first division, it needs to readjust the cumsum
+        /// based on how far the window start time eats in to the first division proportionally.
+        ///
+        /// ## Assumptions
+        /// - Divisions are sorted by started_at
+        /// - Last division's updated_at is less than block_time
+        /// - All divisions are within the window or at least overlap with the window
+        /// - All divisions are of the same size
         pub fn average(
             mut divisions: impl Iterator<Item = Self>,
             division_size: Uint64,
@@ -157,7 +165,9 @@ mod v2 {
         ) -> Result<Decimal, ContractError> {
             let window_started_at = Uint64::from(block_time.nanos()).checked_sub(window_size)?;
 
-            // Process first division
+            // process first division
+            // this needs to be handled differently because the first division's cumsum needs to be recalibrated
+            // based on how far window start time eats in to the first division
             let (first_div_stared_at, mut cumsum) = match divisions.next() {
                 Some(division) => {
                     let division_started_at = Uint64::from(division.started_at.nanos());
@@ -169,53 +179,43 @@ mod v2 {
                     let latest_value_elapsed_time =
                         division.latest_value_elapsed_time(division_size, block_time)?;
 
-                    if remaining_division_size > latest_value_elapsed_time {
-                        let current_cumsum_weight = Uint64::from(division.updated_at.nanos())
-                            .checked_sub(division.started_at.nanos().into())?;
+                    let cumsum = if remaining_division_size > latest_value_elapsed_time {
+                        // readjust cumsum if window start after first division
+                        // if the window start before the first division, then the first division's cumsum can be used as is
+                        let window_started_after_first_division =
+                            window_started_at > division_started_at;
 
-                        // recalculate cumsum if window start after first division
-                        let cumsum = if window_started_at > division_started_at {
-                            let new_cumsum_weight =
-                                remaining_division_size.checked_sub(latest_value_elapsed_time)?;
-
-                            let division_average_before_latest_update =
-                                division.cumsum.checked_div(Decimal::checked_from_ratio(
-                                    current_cumsum_weight,
-                                    1u128,
-                                )?)?;
-
-                            division_average_before_latest_update.checked_mul(
-                                Decimal::checked_from_ratio(new_cumsum_weight, 1u128)?,
+                        let cumsum = if window_started_after_first_division {
+                            division.adjusted_cumsum(
+                                remaining_division_size,
+                                latest_value_elapsed_time,
                             )?
                         } else {
                             division.cumsum
                         };
 
-                        (
-                            division.started_at,
-                            cumsum.checked_add(
-                                division.weighted_latest_value(division_size, block_time)?,
-                            )?,
-                        )
+                        cumsum.checked_add(
+                            division.weighted_latest_value(division_size, block_time)?,
+                        )?
                     } else {
-                        (
-                            division.started_at,
-                            division
-                                .latest_value
-                                .checked_mul(Decimal::checked_from_ratio(
-                                    remaining_division_size,
-                                    1u128,
-                                )?)?,
-                        )
-                    }
+                        division
+                            .latest_value
+                            .checked_mul(Decimal::checked_from_ratio(
+                                remaining_division_size,
+                                1u128,
+                            )?)?
+                    };
+
+                    (division.started_at, cumsum)
                 }
                 None => return Err(StdError::not_found("division").into()),
             };
 
-            // Accumulate divisions until the last division's updated_at is less than block_time
+            // accumulate cumsum from the rest of divisions
             for division in divisions {
                 cumsum = cumsum
-                    .checked_add(division.cumsum_at_block_time(division_size, block_time)?)?;
+                    .checked_add(division.cumsum)?
+                    .checked_add(division.weighted_latest_value(division_size, block_time)?)?;
             }
 
             let started_at = window_started_at.max(first_div_stared_at.nanos().into());
@@ -226,13 +226,23 @@ mod v2 {
                 .map_err(Into::into)
         }
 
-        fn cumsum_at_block_time(
+        fn adjusted_cumsum(
             &self,
-            division_size: Uint64,
-            block_time: Timestamp,
+            remaining_division_size: Uint64,
+            latest_value_elapsed_time: Uint64,
         ) -> Result<Decimal, ContractError> {
-            self.cumsum
-                .checked_add(self.weighted_latest_value(division_size, block_time)?)
+            let current_cumsum_weight = Uint64::from(self.updated_at.nanos())
+                .checked_sub(self.started_at.nanos().into())?;
+
+            let new_cumsum_weight =
+                remaining_division_size.checked_sub(latest_value_elapsed_time)?;
+
+            let division_average_before_latest_update = self
+                .cumsum
+                .checked_div(Decimal::checked_from_ratio(current_cumsum_weight, 1u128)?)?;
+
+            division_average_before_latest_update
+                .checked_mul(Decimal::checked_from_ratio(new_cumsum_weight, 1u128)?)
                 .map_err(Into::into)
         }
 
