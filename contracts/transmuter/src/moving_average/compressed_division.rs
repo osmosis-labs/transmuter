@@ -155,55 +155,19 @@ mod v2 {
             window_size: Uint64,
             block_time: Timestamp,
         ) -> Result<Decimal, ContractError> {
-            // Track start time since first div
+            // Process first division
             let (first_div_stared_at, mut cumsum) = match divisions.next() {
-                Some(CompressedDivision {
-                    started_at,
-                    updated_at,
-                    latest_value,
-                    cumsum,
-                }) => {
-                    let latest_value_elapsed_time = if Uint64::from(block_time.nanos())
-                        > Uint64::from(started_at.nanos()).checked_add(division_size)?
-                    {
-                        Uint64::from(started_at.nanos())
-                            .checked_add(division_size)?
-                            .checked_sub(updated_at.nanos().into())?
-                    } else {
-                        Uint64::from(block_time.nanos()).checked_sub(updated_at.nanos().into())?
-                    };
-
-                    let cumsum = cumsum.checked_add(latest_value.checked_mul(
-                        Decimal::checked_from_ratio(latest_value_elapsed_time, 1u128)?,
-                    )?)?;
-
-                    (started_at, cumsum)
-                }
+                Some(division) => (
+                    division.started_at,
+                    division.cumsum_at_block_time(division_size, block_time)?,
+                ),
                 None => return Err(StdError::not_found("division").into()),
             };
 
-            // Process remaining divisions
+            // Accumulate divisions until the last division's updated_at is less than block_time
             for division in divisions {
-                let latest_value_elapsed_time = if Uint64::from(block_time.nanos())
-                    > Uint64::from(division.started_at.nanos()).checked_add(division_size)?
-                {
-                    Uint64::from(division.started_at.nanos())
-                        .checked_add(division_size)?
-                        .checked_sub(division.updated_at.nanos().into())?
-                } else {
-                    Uint64::from(block_time.nanos())
-                        .checked_sub(division.updated_at.nanos().into())?
-                };
-
-                let weighted_latest_value =
-                    division
-                        .latest_value
-                        .checked_mul(Decimal::checked_from_ratio(
-                            latest_value_elapsed_time,
-                            1u128,
-                        )?)?;
-
-                cumsum = cumsum.checked_add(division.cumsum.checked_add(weighted_latest_value)?)?;
+                cumsum = cumsum
+                    .checked_add(division.cumsum_at_block_time(division_size, block_time)?)?;
             }
 
             let total_elapsed_time =
@@ -211,6 +175,44 @@ mod v2 {
 
             cumsum
                 .checked_div(Decimal::checked_from_ratio(total_elapsed_time, 1u128)?)
+                .map_err(Into::into)
+        }
+
+        fn cumsum_at_block_time(
+            &self,
+            division_size: Uint64,
+            block_time: Timestamp,
+        ) -> Result<Decimal, ContractError> {
+            self.cumsum
+                .checked_add(self.weighted_latest_value(division_size, block_time)?)
+                .map_err(Into::into)
+        }
+
+        fn latest_value_elapsed_time(
+            &self,
+            division_size: Uint64,
+            block_time: Timestamp,
+        ) -> Result<Uint64, ContractError> {
+            if Uint64::from(block_time.nanos())
+                > Uint64::from(self.started_at.nanos()).checked_add(division_size)?
+            {
+                Uint64::from(self.started_at.nanos())
+                    .checked_add(division_size)?
+                    .checked_sub(self.updated_at.nanos().into())
+            } else {
+                Uint64::from(block_time.nanos()).checked_sub(self.updated_at.nanos().into())
+            }
+            .map_err(Into::into)
+        }
+
+        fn weighted_latest_value(
+            &self,
+            division_size: Uint64,
+            block_time: Timestamp,
+        ) -> Result<Decimal, ContractError> {
+            let elapsed_time = self.latest_value_elapsed_time(division_size, block_time)?;
+            self.latest_value
+                .checked_mul(Decimal::checked_from_ratio(elapsed_time, 1u128)?)
                 .map_err(Into::into)
         }
     }
