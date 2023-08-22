@@ -155,12 +155,60 @@ mod v2 {
             window_size: Uint64,
             block_time: Timestamp,
         ) -> Result<Decimal, ContractError> {
+            let window_started_at = Uint64::from(block_time.nanos()).checked_sub(window_size)?;
+
             // Process first division
             let (first_div_stared_at, mut cumsum) = match divisions.next() {
-                Some(division) => (
-                    division.started_at,
-                    division.cumsum_at_block_time(division_size, block_time)?,
-                ),
+                Some(division) => {
+                    let division_started_at = Uint64::from(division.started_at.nanos());
+                    let remaining_division_size = division_started_at
+                        .checked_add(division_size)?
+                        .checked_sub(window_started_at)?
+                        .min(division_size);
+
+                    let latest_value_elapsed_time =
+                        division.latest_value_elapsed_time(division_size, block_time)?;
+
+                    if remaining_division_size > latest_value_elapsed_time {
+                        let current_cumsum_weight = Uint64::from(division.updated_at.nanos())
+                            .checked_sub(division.started_at.nanos().into())?;
+
+                        // recalculate cumsum if window start after first division
+                        let cumsum = if window_started_at > division_started_at {
+                            let new_cumsum_weight =
+                                remaining_division_size.checked_sub(latest_value_elapsed_time)?;
+
+                            let division_average_before_latest_update =
+                                division.cumsum.checked_div(Decimal::checked_from_ratio(
+                                    current_cumsum_weight,
+                                    1u128,
+                                )?)?;
+
+                            division_average_before_latest_update.checked_mul(
+                                Decimal::checked_from_ratio(new_cumsum_weight, 1u128)?,
+                            )?
+                        } else {
+                            division.cumsum
+                        };
+
+                        (
+                            division.started_at,
+                            cumsum.checked_add(
+                                division.weighted_latest_value(division_size, block_time)?,
+                            )?,
+                        )
+                    } else {
+                        (
+                            division.started_at,
+                            division
+                                .latest_value
+                                .checked_mul(Decimal::checked_from_ratio(
+                                    remaining_division_size,
+                                    1u128,
+                                )?)?,
+                        )
+                    }
+                }
                 None => return Err(StdError::not_found("division").into()),
             };
 
@@ -170,8 +218,8 @@ mod v2 {
                     .checked_add(division.cumsum_at_block_time(division_size, block_time)?)?;
             }
 
-            let total_elapsed_time =
-                Uint64::from(block_time.nanos()).checked_sub(first_div_stared_at.nanos().into())?;
+            let started_at = window_started_at.max(first_div_stared_at.nanos().into());
+            let total_elapsed_time = Uint64::from(block_time.nanos()).checked_sub(started_at)?;
 
             cumsum
                 .checked_div(Decimal::checked_from_ratio(total_elapsed_time, 1u128)?)
@@ -193,14 +241,12 @@ mod v2 {
             division_size: Uint64,
             block_time: Timestamp,
         ) -> Result<Uint64, ContractError> {
-            if Uint64::from(block_time.nanos())
-                > Uint64::from(self.started_at.nanos()).checked_add(division_size)?
-            {
-                Uint64::from(self.started_at.nanos())
-                    .checked_add(division_size)?
-                    .checked_sub(self.updated_at.nanos().into())
+            let ended_at = Uint64::from(self.started_at.nanos()).checked_add(division_size)?;
+            let block_time = Uint64::from(block_time.nanos());
+            if block_time > ended_at {
+                ended_at.checked_sub(self.updated_at.nanos().into())
             } else {
-                Uint64::from(block_time.nanos()).checked_sub(self.updated_at.nanos().into())
+                block_time.checked_sub(self.updated_at.nanos().into())
             }
             .map_err(Into::into)
         }
@@ -306,7 +352,7 @@ mod v2 {
             let divisions = vec![];
             let division_size = Uint64::from(100u64);
             let window_size = Uint64::from(1000u64);
-            let block_time = Timestamp::from_nanos(100);
+            let block_time = Timestamp::from_nanos(1100);
             let average = CompressedDivision::average(
                 divisions.into_iter(),
                 division_size,
@@ -322,8 +368,8 @@ mod v2 {
 
         #[test]
         fn test_average_single_div() {
-            let started_at = Timestamp::from_nanos(100);
-            let updated_at = Timestamp::from_nanos(110);
+            let started_at = Timestamp::from_nanos(1100);
+            let updated_at = Timestamp::from_nanos(1110);
             let value = Decimal::percent(20);
             let prev_value = Decimal::percent(10);
             let compressed_division =
@@ -332,7 +378,7 @@ mod v2 {
             let divisions = vec![compressed_division];
             let division_size = Uint64::from(100u64);
             let window_size = Uint64::from(1000u64);
-            let block_time = Timestamp::from_nanos(110);
+            let block_time = Timestamp::from_nanos(1110);
             let average = CompressedDivision::average(
                 divisions.clone().into_iter(),
                 division_size,
@@ -341,9 +387,11 @@ mod v2 {
             )
             .unwrap();
 
+            // used to be x 10 / 10
+            // but now it is x 100 / 10
             assert_eq!(average, prev_value);
 
-            let block_time = Timestamp::from_nanos(115);
+            let block_time = Timestamp::from_nanos(1115);
             let average = CompressedDivision::average(
                 divisions.clone().into_iter(),
                 division_size,
@@ -360,7 +408,7 @@ mod v2 {
             );
 
             // half way to the division size
-            let block_time = Timestamp::from_nanos(150);
+            let block_time = Timestamp::from_nanos(1150);
             let average = CompressedDivision::average(
                 divisions.clone().into_iter(),
                 division_size,
@@ -377,7 +425,7 @@ mod v2 {
             );
 
             // at the division edge
-            let block_time = Timestamp::from_nanos(200);
+            let block_time = Timestamp::from_nanos(1200);
             let average = CompressedDivision::average(
                 divisions.clone().into_iter(),
                 division_size,
@@ -394,7 +442,7 @@ mod v2 {
             );
 
             // at the division edge but there is some update before
-            let update_time = Timestamp::from_nanos(150);
+            let update_time = Timestamp::from_nanos(1150);
             let updated_value = Decimal::percent(30);
 
             let updated_division = divisions
@@ -406,7 +454,7 @@ mod v2 {
 
             let divisions = vec![updated_division];
 
-            let block_time = Timestamp::from_nanos(200);
+            let block_time = Timestamp::from_nanos(1200);
             let average = CompressedDivision::average(
                 divisions.into_iter(),
                 division_size,
@@ -431,22 +479,22 @@ mod v2 {
 
             let divisions = vec![
                 {
-                    let started_at = Timestamp::from_nanos(100);
-                    let updated_at = Timestamp::from_nanos(110);
+                    let started_at = Timestamp::from_nanos(1100);
+                    let updated_at = Timestamp::from_nanos(1110);
                     let value = Decimal::percent(20);
                     let prev_value = Decimal::percent(10);
                     CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
                 },
                 {
-                    let started_at = Timestamp::from_nanos(200);
-                    let updated_at = Timestamp::from_nanos(260);
+                    let started_at = Timestamp::from_nanos(1200);
+                    let updated_at = Timestamp::from_nanos(1260);
                     let value = Decimal::percent(30);
                     let prev_value = Decimal::percent(20);
                     CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
                 },
             ];
 
-            let block_time = Timestamp::from_nanos(270);
+            let block_time = Timestamp::from_nanos(1270);
             let average = CompressedDivision::average(
                 divisions.into_iter(),
                 division_size,
@@ -472,32 +520,32 @@ mod v2 {
 
             let divisions = vec![
                 {
-                    let started_at = Timestamp::from_nanos(100);
-                    let updated_at = Timestamp::from_nanos(110);
+                    let started_at = Timestamp::from_nanos(1100);
+                    let updated_at = Timestamp::from_nanos(1110);
                     let value = Decimal::percent(20);
                     let prev_value = Decimal::percent(10);
                     CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
                 },
                 {
-                    let started_at = Timestamp::from_nanos(200);
-                    let updated_at = Timestamp::from_nanos(260);
+                    let started_at = Timestamp::from_nanos(1200);
+                    let updated_at = Timestamp::from_nanos(1260);
                     let value = Decimal::percent(30);
                     let prev_value = Decimal::percent(20);
                     CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
                 },
                 {
-                    let started_at = Timestamp::from_nanos(300);
-                    let updated_at = Timestamp::from_nanos(340);
+                    let started_at = Timestamp::from_nanos(1300);
+                    let updated_at = Timestamp::from_nanos(1340);
                     let value = Decimal::percent(40);
                     let prev_value = Decimal::percent(30);
                     CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
                 },
             ];
 
-            let block_time = Timestamp::from_nanos(370);
+            let block_time = Timestamp::from_nanos(1370);
 
             let average = CompressedDivision::average(
-                divisions.clone().into_iter(),
+                divisions.into_iter(),
                 division_size,
                 window_size,
                 block_time,
@@ -514,9 +562,183 @@ mod v2 {
                     + (Decimal::percent(40) * Decimal::from_ratio(30u128, 1u128)))
                     / Decimal::from_ratio(270u128, 1u128)
             );
+        }
 
-            #[test]
-            fn test_average_when_div_is_in_overlapping_window() {}
+        #[test]
+        fn test_average_when_div_is_in_overlapping_window() {
+            let division_size = Uint64::from(200u64);
+            let window_size = Uint64::from(600u64);
+
+            let divisions = vec![
+                {
+                    let started_at = Timestamp::from_nanos(1100);
+                    let updated_at = Timestamp::from_nanos(1110);
+                    let value = Decimal::percent(20);
+                    let prev_value = Decimal::percent(10);
+                    CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                },
+                {
+                    let started_at = Timestamp::from_nanos(1300);
+                    let updated_at = Timestamp::from_nanos(1360);
+                    let value = Decimal::percent(30);
+                    let prev_value = Decimal::percent(20);
+                    CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                },
+                {
+                    let started_at = Timestamp::from_nanos(1500);
+                    let updated_at = Timestamp::from_nanos(1640);
+                    let value = Decimal::percent(40);
+                    let prev_value = Decimal::percent(30);
+                    CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                },
+            ];
+
+            let block_time = Timestamp::from_nanos(1700);
+
+            let average = CompressedDivision::average(
+                divisions.clone().into_iter(),
+                division_size,
+                window_size,
+                block_time,
+            )
+            .unwrap();
+
+            assert_eq!(
+                average,
+                ((Decimal::percent(10) * Decimal::from_ratio(10u128, 1u128))
+                    + (Decimal::percent(20) * Decimal::from_ratio(190u128, 1u128))
+                    + (Decimal::percent(20) * Decimal::from_ratio(60u128, 1u128))
+                    + (Decimal::percent(30) * Decimal::from_ratio(140u128, 1u128))
+                    + (Decimal::percent(30) * Decimal::from_ratio(140u128, 1u128))
+                    + (Decimal::percent(40) * Decimal::from_ratio(60u128, 1u128)))
+                    / Decimal::from_ratio(600u128, 1u128)
+            );
+
+            let base_divisions = divisions;
+
+            let divisions = vec![
+                base_divisions.clone(),
+                vec![{
+                    let started_at = Timestamp::from_nanos(1700);
+                    let updated_at = Timestamp::from_nanos(1700);
+                    let value = Decimal::percent(50);
+                    let prev_value = Decimal::percent(40);
+                    CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                }],
+            ]
+            .concat();
+
+            let block_time = Timestamp::from_nanos(1705);
+
+            let average = CompressedDivision::average(
+                divisions.into_iter(),
+                division_size,
+                window_size,
+                block_time,
+            )
+            .unwrap();
+
+            assert_eq!(
+                average,
+                ((Decimal::percent(10) * Decimal::from_ratio(5u128, 1u128))
+                    + (Decimal::percent(20) * Decimal::from_ratio(190u128, 1u128))
+                    + (Decimal::percent(20) * Decimal::from_ratio(60u128, 1u128))
+                    + (Decimal::percent(30) * Decimal::from_ratio(140u128, 1u128))
+                    + (Decimal::percent(30) * Decimal::from_ratio(140u128, 1u128))
+                    + (Decimal::percent(40) * Decimal::from_ratio(60u128, 1u128))
+                    + (Decimal::percent(50) * Decimal::from_ratio(5u128, 1u128)))
+                    / Decimal::from_ratio(600u128, 1u128)
+            );
+
+            let divisions = vec![
+                base_divisions.clone(),
+                vec![{
+                    let started_at = Timestamp::from_nanos(1700);
+                    let updated_at = Timestamp::from_nanos(1701);
+                    let value = Decimal::percent(50);
+                    let prev_value = Decimal::percent(40);
+                    CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                }],
+            ]
+            .concat();
+
+            let block_time = Timestamp::from_nanos(1705);
+
+            let average = CompressedDivision::average(
+                divisions.into_iter(),
+                division_size,
+                window_size,
+                block_time,
+            )
+            .unwrap();
+
+            assert_eq!(
+                average,
+                ((Decimal::percent(10) * Decimal::from_ratio(5u128, 1u128))
+                    + (Decimal::percent(20) * Decimal::from_ratio(190u128, 1u128))
+                    + (Decimal::percent(20) * Decimal::from_ratio(60u128, 1u128))
+                    + (Decimal::percent(30) * Decimal::from_ratio(140u128, 1u128))
+                    + (Decimal::percent(30) * Decimal::from_ratio(140u128, 1u128))
+                    + (Decimal::percent(40) * Decimal::from_ratio(60u128, 1u128))
+                    + (Decimal::percent(40) * Decimal::from_ratio(1u128, 1u128))
+                    + (Decimal::percent(50) * Decimal::from_ratio(4u128, 1u128)))
+                    / Decimal::from_ratio(600u128, 1u128)
+            );
+
+            let divisions = vec![
+                base_divisions,
+                vec![{
+                    let started_at = Timestamp::from_nanos(1700);
+                    let updated_at = Timestamp::from_nanos(1740);
+                    let value = Decimal::percent(50);
+                    let prev_value = Decimal::percent(40);
+                    CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                }],
+            ]
+            .concat();
+
+            let block_time = Timestamp::from_nanos(1740);
+
+            let average = CompressedDivision::average(
+                divisions.clone().into_iter(),
+                division_size,
+                window_size,
+                block_time,
+            )
+            .unwrap();
+
+            assert_eq!(
+                average,
+                ((Decimal::percent(20) * Decimal::from_ratio(160u128, 1u128)) // 32
+                    + (Decimal::percent(20) * Decimal::from_ratio(60u128, 1u128)) // 32 + 12 = 44
+                    + (Decimal::percent(30) * Decimal::from_ratio(140u128, 1u128)) // 44 + 42 = 86
+                    + (Decimal::percent(30) * Decimal::from_ratio(140u128, 1u128)) // 86 + 42 = 128
+                    + (Decimal::percent(40) * Decimal::from_ratio(60u128, 1u128)) // 128 + 24 = 152
+                    + (Decimal::percent(40) * Decimal::from_ratio(40u128, 1u128))) // 152 + 16 = 168
+                    / Decimal::from_ratio(600u128, 1u128)
+            );
+
+            let block_time = Timestamp::from_nanos(1899);
+
+            let average = CompressedDivision::average(
+                divisions.into_iter(),
+                division_size,
+                window_size,
+                block_time,
+            )
+            .unwrap();
+
+            assert_eq!(
+                average,
+                ((Decimal::percent(20) * Decimal::from_ratio(1u128, 1u128))
+                    + (Decimal::percent(20) * Decimal::from_ratio(60u128, 1u128))
+                    + (Decimal::percent(30) * Decimal::from_ratio(140u128, 1u128))
+                    + (Decimal::percent(30) * Decimal::from_ratio(140u128, 1u128))
+                    + (Decimal::percent(40) * Decimal::from_ratio(60u128, 1u128))
+                    + (Decimal::percent(40) * Decimal::from_ratio(40u128, 1u128))
+                    + (Decimal::percent(50) * Decimal::from_ratio(159u128, 1u128)))
+                    / Decimal::from_ratio(600u128, 1u128)
+            );
         }
     }
 }
