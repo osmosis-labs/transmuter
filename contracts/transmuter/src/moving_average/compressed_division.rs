@@ -82,7 +82,7 @@ mod tests {
 
 mod v2 {
     use cosmwasm_schema::cw_serde;
-    use cosmwasm_std::{Decimal, StdError, Timestamp, Uint64};
+    use cosmwasm_std::{ensure, Decimal, StdError, Timestamp, Uint64};
 
     use crate::ContractError;
 
@@ -110,6 +110,13 @@ mod v2 {
             value: Decimal,
             prev_value: Decimal,
         ) -> Result<Self, ContractError> {
+            ensure!(
+                updated_at >= started_at,
+                ContractError::change_limit_error(
+                    "`updated_at` must be greater than or equal to `started_at`"
+                )
+            );
+
             let elapsed_time =
                 Uint64::from(updated_at.nanos()).checked_sub(started_at.nanos().into())?;
             Ok(Self {
@@ -170,8 +177,6 @@ mod v2 {
                         Decimal::checked_from_ratio(latest_value_elapsed_time, 1u128)?,
                     )?)?;
 
-                    dbg!(cumsum);
-
                     (started_at, cumsum)
                 }
                 None => return Err(StdError::not_found("division").into()),
@@ -179,8 +184,16 @@ mod v2 {
 
             // Process remaining divisions
             for division in divisions {
-                let latest_value_elapsed_time = Uint64::from(block_time.nanos())
-                    .checked_sub(division.updated_at.nanos().into())?;
+                let latest_value_elapsed_time = if Uint64::from(block_time.nanos())
+                    > Uint64::from(division.started_at.nanos()).checked_add(division_size)?
+                {
+                    Uint64::from(division.started_at.nanos())
+                        .checked_add(division_size)?
+                        .checked_sub(division.updated_at.nanos().into())?
+                } else {
+                    Uint64::from(block_time.nanos())
+                        .checked_sub(division.updated_at.nanos().into())?
+                };
 
                 let weighted_latest_value =
                     division
@@ -210,6 +223,7 @@ mod v2 {
 
         #[test]
         fn test_new_compressed_division() {
+            // started_at < updated_at
             let started_at = Timestamp::from_nanos(90);
             let updated_at = Timestamp::from_nanos(100);
             let value = Decimal::percent(10);
@@ -225,6 +239,37 @@ mod v2 {
                     latest_value: value,
                     cumsum: Decimal::percent(10) * Decimal::from_ratio(10u128, 1u128)
                 }
+            );
+
+            // started_at == updated_at
+            let started_at = Timestamp::from_nanos(90);
+            let updated_at = Timestamp::from_nanos(90);
+
+            let compressed_division =
+                CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap();
+
+            assert_eq!(
+                compressed_division,
+                CompressedDivision {
+                    started_at,
+                    updated_at,
+                    latest_value: value,
+                    cumsum: Decimal::zero()
+                }
+            );
+
+            // started_at > updated_at
+            let started_at = Timestamp::from_nanos(90);
+            let updated_at = Timestamp::from_nanos(89);
+
+            let err =
+                CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::change_limit_error(
+                    "`updated_at` must be greater than or equal to `started_at`"
+                )
             );
         }
 
@@ -462,16 +507,14 @@ mod v2 {
                 ((Decimal::percent(10) * Decimal::from_ratio(10u128, 1u128))
                     + (Decimal::percent(20) * Decimal::from_ratio(90u128, 1u128))
                     + (Decimal::percent(20) * Decimal::from_ratio(60u128, 1u128))
-                    + (Decimal::percent(30) * Decimal::from_ratio(90u128, 1u128))
+                    + (Decimal::percent(30) * Decimal::from_ratio(40u128, 1u128))
                     + (Decimal::percent(30) * Decimal::from_ratio(40u128, 1u128))
                     + (Decimal::percent(40) * Decimal::from_ratio(30u128, 1u128)))
-                    / Decimal::from_ratio(220u128, 1u128)
+                    / Decimal::from_ratio(270u128, 1u128)
             );
 
             #[test]
-            fn test_average_when_div_is_in_overlapping_window() {
-                todo!()
-            }
+            fn test_average_when_div_is_in_overlapping_window() {}
         }
     }
 }

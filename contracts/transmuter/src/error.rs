@@ -67,6 +67,9 @@ pub enum ContractError {
     #[error("Unauthorized")]
     Unauthorized {},
 
+    #[error("Change limit error: {reason}")]
+    ChangeLimitError { reason: String },
+
     #[error("Calculation error: {reason}")]
     CalculationError { reason: String },
 
@@ -80,6 +83,12 @@ pub enum ContractError {
 impl ContractError {
     pub fn calculation_error(error: impl Display) -> Self {
         ContractError::CalculationError {
+            reason: error.to_string(),
+        }
+    }
+
+    pub fn change_limit_error(error: impl Display) -> Self {
+        ContractError::ChangeLimitError {
             reason: error.to_string(),
         }
     }
