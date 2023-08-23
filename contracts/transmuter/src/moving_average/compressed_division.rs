@@ -85,7 +85,7 @@ impl CompressedDivision {
     /// - Last division's updated_at is less than block_time
     /// - All divisions are within the window or at least overlap with the window
     /// - All divisions are of the same size
-    pub fn average(
+    pub fn compressed_moving_average(
         mut divisions: impl Iterator<Item = Self>,
         division_size: Uint64,
         window_size: Uint64,
@@ -282,7 +282,7 @@ mod tests {
         let division_size = Uint64::from(100u64);
         let window_size = Uint64::from(1000u64);
         let block_time = Timestamp::from_nanos(1100);
-        let average = CompressedDivision::average(
+        let average = CompressedDivision::compressed_moving_average(
             divisions.into_iter(),
             division_size,
             window_size,
@@ -308,7 +308,7 @@ mod tests {
         let division_size = Uint64::from(100u64);
         let window_size = Uint64::from(1000u64);
         let block_time = Timestamp::from_nanos(1110);
-        let average = CompressedDivision::average(
+        let average = CompressedDivision::compressed_moving_average(
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(average, prev_value);
 
         let block_time = Timestamp::from_nanos(1115);
-        let average = CompressedDivision::average(
+        let average = CompressedDivision::compressed_moving_average(
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -338,7 +338,7 @@ mod tests {
 
         // half way to the division size
         let block_time = Timestamp::from_nanos(1150);
-        let average = CompressedDivision::average(
+        let average = CompressedDivision::compressed_moving_average(
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -355,7 +355,7 @@ mod tests {
 
         // at the division edge
         let block_time = Timestamp::from_nanos(1200);
-        let average = CompressedDivision::average(
+        let average = CompressedDivision::compressed_moving_average(
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -384,7 +384,7 @@ mod tests {
         let divisions = vec![updated_division];
 
         let block_time = Timestamp::from_nanos(1200);
-        let average = CompressedDivision::average(
+        let average = CompressedDivision::compressed_moving_average(
             divisions.into_iter(),
             division_size,
             window_size,
@@ -424,7 +424,7 @@ mod tests {
         ];
 
         let block_time = Timestamp::from_nanos(1270);
-        let average = CompressedDivision::average(
+        let average = CompressedDivision::compressed_moving_average(
             divisions.into_iter(),
             division_size,
             window_size,
@@ -473,7 +473,7 @@ mod tests {
 
         let block_time = Timestamp::from_nanos(1370);
 
-        let average = CompressedDivision::average(
+        let average = CompressedDivision::compressed_moving_average(
             divisions.into_iter(),
             division_size,
             window_size,
@@ -524,7 +524,7 @@ mod tests {
 
         let block_time = Timestamp::from_nanos(1700);
 
-        let average = CompressedDivision::average(
+        let average = CompressedDivision::compressed_moving_average(
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -559,7 +559,7 @@ mod tests {
 
         let block_time = Timestamp::from_nanos(1705);
 
-        let average = CompressedDivision::average(
+        let average = CompressedDivision::compressed_moving_average(
             divisions.into_iter(),
             division_size,
             window_size,
@@ -593,7 +593,7 @@ mod tests {
 
         let block_time = Timestamp::from_nanos(1705);
 
-        let average = CompressedDivision::average(
+        let average = CompressedDivision::compressed_moving_average(
             divisions.into_iter(),
             division_size,
             window_size,
@@ -628,7 +628,7 @@ mod tests {
 
         let block_time = Timestamp::from_nanos(1740);
 
-        let average = CompressedDivision::average(
+        let average = CompressedDivision::compressed_moving_average(
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -649,7 +649,7 @@ mod tests {
 
         let block_time = Timestamp::from_nanos(1899);
 
-        let average = CompressedDivision::average(
+        let average = CompressedDivision::compressed_moving_average(
             divisions.into_iter(),
             division_size,
             window_size,
