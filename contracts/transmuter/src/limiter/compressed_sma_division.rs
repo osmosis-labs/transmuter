@@ -6,7 +6,7 @@ use crate::ContractError;
 /// CompressedDivision is a compressed representation of a compressed sliding window
 /// for calculating approximated moving average.
 #[cw_serde]
-pub struct CompressedDivision {
+pub struct CompressedSMADivision {
     /// Time where the division is mark as started
     started_at: Timestamp,
 
@@ -20,7 +20,7 @@ pub struct CompressedDivision {
     cumsum: Decimal,
 }
 
-impl CompressedDivision {
+impl CompressedSMADivision {
     pub fn new(
         started_at: Timestamp,
         updated_at: Timestamp,
@@ -208,11 +208,11 @@ mod tests {
         let value = Decimal::percent(10);
         let prev_value = Decimal::percent(10);
         let compressed_division =
-            CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap();
+            CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap();
 
         assert_eq!(
             compressed_division,
-            CompressedDivision {
+            CompressedSMADivision {
                 started_at,
                 updated_at,
                 latest_value: value,
@@ -225,11 +225,11 @@ mod tests {
         let updated_at = Timestamp::from_nanos(90);
 
         let compressed_division =
-            CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap();
+            CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap();
 
         assert_eq!(
             compressed_division,
-            CompressedDivision {
+            CompressedSMADivision {
                 started_at,
                 updated_at,
                 latest_value: value,
@@ -241,7 +241,8 @@ mod tests {
         let started_at = Timestamp::from_nanos(90);
         let updated_at = Timestamp::from_nanos(89);
 
-        let err = CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap_err();
+        let err =
+            CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap_err();
 
         assert_eq!(
             err,
@@ -258,7 +259,7 @@ mod tests {
         let value = Decimal::percent(20);
         let prev_value = Decimal::percent(10);
         let compressed_division =
-            CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap();
+            CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap();
 
         let updated_at = Timestamp::from_nanos(120);
         let value = Decimal::percent(20);
@@ -266,7 +267,7 @@ mod tests {
 
         assert_eq!(
             updated_compressed_division,
-            CompressedDivision {
+            CompressedSMADivision {
                 started_at,
                 updated_at,
                 latest_value: value,
@@ -282,7 +283,7 @@ mod tests {
         let division_size = Uint64::from(100u64);
         let window_size = Uint64::from(1000u64);
         let block_time = Timestamp::from_nanos(1100);
-        let average = CompressedDivision::compressed_moving_average(
+        let average = CompressedSMADivision::compressed_moving_average(
             divisions.into_iter(),
             division_size,
             window_size,
@@ -302,13 +303,13 @@ mod tests {
         let value = Decimal::percent(20);
         let prev_value = Decimal::percent(10);
         let compressed_division =
-            CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap();
+            CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap();
 
         let divisions = vec![compressed_division];
         let division_size = Uint64::from(100u64);
         let window_size = Uint64::from(1000u64);
         let block_time = Timestamp::from_nanos(1110);
-        let average = CompressedDivision::compressed_moving_average(
+        let average = CompressedSMADivision::compressed_moving_average(
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -321,7 +322,7 @@ mod tests {
         assert_eq!(average, prev_value);
 
         let block_time = Timestamp::from_nanos(1115);
-        let average = CompressedDivision::compressed_moving_average(
+        let average = CompressedSMADivision::compressed_moving_average(
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -338,7 +339,7 @@ mod tests {
 
         // half way to the division size
         let block_time = Timestamp::from_nanos(1150);
-        let average = CompressedDivision::compressed_moving_average(
+        let average = CompressedSMADivision::compressed_moving_average(
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -355,7 +356,7 @@ mod tests {
 
         // at the division edge
         let block_time = Timestamp::from_nanos(1200);
-        let average = CompressedDivision::compressed_moving_average(
+        let average = CompressedSMADivision::compressed_moving_average(
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -384,7 +385,7 @@ mod tests {
         let divisions = vec![updated_division];
 
         let block_time = Timestamp::from_nanos(1200);
-        let average = CompressedDivision::compressed_moving_average(
+        let average = CompressedSMADivision::compressed_moving_average(
             divisions.into_iter(),
             division_size,
             window_size,
@@ -412,19 +413,19 @@ mod tests {
                 let updated_at = Timestamp::from_nanos(1110);
                 let value = Decimal::percent(20);
                 let prev_value = Decimal::percent(10);
-                CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap()
             },
             {
                 let started_at = Timestamp::from_nanos(1200);
                 let updated_at = Timestamp::from_nanos(1260);
                 let value = Decimal::percent(30);
                 let prev_value = Decimal::percent(20);
-                CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap()
             },
         ];
 
         let block_time = Timestamp::from_nanos(1270);
-        let average = CompressedDivision::compressed_moving_average(
+        let average = CompressedSMADivision::compressed_moving_average(
             divisions.into_iter(),
             division_size,
             window_size,
@@ -453,27 +454,27 @@ mod tests {
                 let updated_at = Timestamp::from_nanos(1110);
                 let value = Decimal::percent(20);
                 let prev_value = Decimal::percent(10);
-                CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap()
             },
             {
                 let started_at = Timestamp::from_nanos(1200);
                 let updated_at = Timestamp::from_nanos(1260);
                 let value = Decimal::percent(30);
                 let prev_value = Decimal::percent(20);
-                CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap()
             },
             {
                 let started_at = Timestamp::from_nanos(1300);
                 let updated_at = Timestamp::from_nanos(1340);
                 let value = Decimal::percent(40);
                 let prev_value = Decimal::percent(30);
-                CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap()
             },
         ];
 
         let block_time = Timestamp::from_nanos(1370);
 
-        let average = CompressedDivision::compressed_moving_average(
+        let average = CompressedSMADivision::compressed_moving_average(
             divisions.into_iter(),
             division_size,
             window_size,
@@ -504,27 +505,27 @@ mod tests {
                 let updated_at = Timestamp::from_nanos(1110);
                 let value = Decimal::percent(20);
                 let prev_value = Decimal::percent(10);
-                CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap()
             },
             {
                 let started_at = Timestamp::from_nanos(1300);
                 let updated_at = Timestamp::from_nanos(1360);
                 let value = Decimal::percent(30);
                 let prev_value = Decimal::percent(20);
-                CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap()
             },
             {
                 let started_at = Timestamp::from_nanos(1500);
                 let updated_at = Timestamp::from_nanos(1640);
                 let value = Decimal::percent(40);
                 let prev_value = Decimal::percent(30);
-                CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap()
             },
         ];
 
         let block_time = Timestamp::from_nanos(1700);
 
-        let average = CompressedDivision::compressed_moving_average(
+        let average = CompressedSMADivision::compressed_moving_average(
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -552,14 +553,14 @@ mod tests {
                 let updated_at = Timestamp::from_nanos(1700);
                 let value = Decimal::percent(50);
                 let prev_value = Decimal::percent(40);
-                CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap()
             }],
         ]
         .concat();
 
         let block_time = Timestamp::from_nanos(1705);
 
-        let average = CompressedDivision::compressed_moving_average(
+        let average = CompressedSMADivision::compressed_moving_average(
             divisions.into_iter(),
             division_size,
             window_size,
@@ -586,14 +587,14 @@ mod tests {
                 let updated_at = Timestamp::from_nanos(1701);
                 let value = Decimal::percent(50);
                 let prev_value = Decimal::percent(40);
-                CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap()
             }],
         ]
         .concat();
 
         let block_time = Timestamp::from_nanos(1705);
 
-        let average = CompressedDivision::compressed_moving_average(
+        let average = CompressedSMADivision::compressed_moving_average(
             divisions.into_iter(),
             division_size,
             window_size,
@@ -621,14 +622,14 @@ mod tests {
                 let updated_at = Timestamp::from_nanos(1740);
                 let value = Decimal::percent(50);
                 let prev_value = Decimal::percent(40);
-                CompressedDivision::new(started_at, updated_at, value, prev_value).unwrap()
+                CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap()
             }],
         ]
         .concat();
 
         let block_time = Timestamp::from_nanos(1740);
 
-        let average = CompressedDivision::compressed_moving_average(
+        let average = CompressedSMADivision::compressed_moving_average(
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -649,7 +650,7 @@ mod tests {
 
         let block_time = Timestamp::from_nanos(1899);
 
-        let average = CompressedDivision::compressed_moving_average(
+        let average = CompressedSMADivision::compressed_moving_average(
             divisions.into_iter(),
             division_size,
             window_size,
@@ -672,7 +673,7 @@ mod tests {
 
     #[test]
     fn test_out_of_window() {
-        let division = CompressedDivision {
+        let division = CompressedSMADivision {
             started_at: Timestamp::from_nanos(1000000000),
             updated_at: Timestamp::from_nanos(1000000022),
             latest_value: Decimal::percent(10),

@@ -4,7 +4,7 @@ use cw_storage_plus::{Deque, Item};
 
 use crate::ContractError;
 
-use super::compressed_division::CompressedDivision;
+use super::compressed_sma_division::CompressedSMADivision;
 
 #[cw_serde]
 pub struct ApproximatedSMAConfig {
@@ -21,7 +21,7 @@ impl ApproximatedSMAConfig {
 }
 pub struct ApproximatedSMA<'a> {
     pub config: Item<'a, ApproximatedSMAConfig>,
-    pub divisions: Deque<'a, CompressedDivision>,
+    pub divisions: Deque<'a, CompressedSMADivision>,
     pub latest_value: Item<'a, Decimal>,
 }
 
@@ -42,8 +42,12 @@ impl<'a> ApproximatedSMA<'a> {
         &self,
         storage: &mut dyn Storage,
         config: &ApproximatedSMAConfig,
-    ) -> StdResult<()> {
-        self.config.save(storage, config)
+    ) -> Result<(), ContractError> {
+        if config.window_size.checked_rem(config.division_count)? != Uint64::zero() {
+            return Err(ContractError::UnevenWindowDivision {});
+        }
+
+        self.config.save(storage, config).map_err(Into::into)
     }
 
     pub fn clean_up_expired_div(
@@ -118,12 +122,90 @@ impl<'a> ApproximatedSMA<'a> {
 
 #[cfg(test)]
 mod tests {
+    use cosmwasm_std::testing::mock_dependencies;
+
     use super::*;
+
+    mod set_config {
+        use cosmwasm_std::DivideByZeroError;
+
+        use super::*;
+
+        #[test]
+        fn test_fail_due_to_div_count_does_not_evenly_divide_the_window() {
+            let mut deps = mock_dependencies();
+
+            let approximated_sma = ApproximatedSMA::new("config", "divisions", "latest_value");
+
+            let err = approximated_sma
+                .set_config(
+                    &mut deps.storage,
+                    &ApproximatedSMAConfig {
+                        window_size: Uint64::from(604_800_000_000u64),
+                        division_count: Uint64::from(13u64),
+                    },
+                )
+                .unwrap_err();
+
+            assert_eq!(err, ContractError::UnevenWindowDivision {});
+        }
+
+        #[test]
+        fn test_fail_due_to_div_size_is_zero() {
+            let mut deps = mock_dependencies();
+
+            let approximated_sma = ApproximatedSMA::new("config", "divisions", "latest_value");
+
+            let err = approximated_sma
+                .set_config(
+                    &mut deps.storage,
+                    &ApproximatedSMAConfig {
+                        window_size: Uint64::from(604_800_000_000u64),
+                        division_count: Uint64::from(0u64),
+                    },
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::DivideByZeroError(DivideByZeroError::new(Uint64::from(
+                    604_800_000_000u64
+                )))
+            );
+        }
+
+        #[test]
+        fn test_successful() {
+            let mut deps = mock_dependencies();
+
+            let approximated_sma = ApproximatedSMA::new("config", "divisions", "latest_value");
+
+            approximated_sma
+                .set_config(
+                    &mut deps.storage,
+                    &ApproximatedSMAConfig {
+                        window_size: Uint64::from(604_800_000_000u64),
+                        division_count: Uint64::from(12u64),
+                    },
+                )
+                .unwrap();
+
+            let config = approximated_sma.config.load(&deps.storage).unwrap();
+
+            assert_eq!(
+                config,
+                ApproximatedSMAConfig {
+                    window_size: Uint64::from(604_800_000_000u64),
+                    division_count: Uint64::from(12u64),
+                }
+            );
+        }
+    }
 
     fn list_divs(
         approximated_sma: &ApproximatedSMA,
         storage: &dyn Storage,
-    ) -> Vec<CompressedDivision> {
+    ) -> Vec<CompressedSMADivision> {
         approximated_sma
             .divisions
             .iter(storage)

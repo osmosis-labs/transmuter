@@ -1,7 +1,7 @@
 mod admin;
 pub mod contract;
 mod error;
-mod moving_average;
+mod limiter;
 mod shares;
 mod sudo;
 mod transmuter_pool;

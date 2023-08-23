@@ -1,6 +1,8 @@
 use std::fmt::Display;
 
-use cosmwasm_std::{CheckedFromRatioError, Coin, Decimal, OverflowError, StdError, Uint128};
+use cosmwasm_std::{
+    CheckedFromRatioError, Coin, Decimal, DivideByZeroError, OverflowError, StdError, Uint128,
+};
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq)]
@@ -67,6 +69,9 @@ pub enum ContractError {
     #[error("Unauthorized")]
     Unauthorized {},
 
+    #[error("Window must be evenly divisible by division size")]
+    UnevenWindowDivision {},
+
     #[error("Change limit error: {reason}")]
     ChangeLimitError { reason: String },
 
@@ -75,6 +80,9 @@ pub enum ContractError {
 
     #[error("{0}")]
     OverflowError(#[from] OverflowError),
+
+    #[error("{0}")]
+    DivideByZeroError(#[from] DivideByZeroError),
 
     #[error("{0}")]
     CheckedFromRatioError(#[from] CheckedFromRatioError),
