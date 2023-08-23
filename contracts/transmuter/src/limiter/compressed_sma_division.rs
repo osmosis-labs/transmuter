@@ -58,7 +58,7 @@ impl CompressedSMADivision {
         })
     }
 
-    pub fn is_out_of_window(
+    pub fn is_outdated(
         &self,
         block_time: Timestamp,
         window_size: Uint64,
@@ -672,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn test_out_of_window() {
+    fn test_outdated() {
         let division = CompressedSMADivision {
             started_at: Timestamp::from_nanos(1000000000),
             updated_at: Timestamp::from_nanos(1000000022),
@@ -686,38 +686,38 @@ mod tests {
 
         // with window
         assert!(!division
-            .is_out_of_window(block_time, window_size, division_size)
+            .is_outdated(block_time, window_size, division_size)
             .unwrap());
 
         let block_time = Timestamp::from_nanos(1000000999);
         assert!(!division
-            .is_out_of_window(block_time, window_size, division_size)
+            .is_outdated(block_time, window_size, division_size)
             .unwrap());
 
         let block_time = Timestamp::from_nanos(1000001000);
         assert!(!division
-            .is_out_of_window(block_time, window_size, division_size)
+            .is_outdated(block_time, window_size, division_size)
             .unwrap());
 
         let block_time = Timestamp::from_nanos(1000001099);
         assert!(!division
-            .is_out_of_window(block_time, window_size, division_size)
+            .is_outdated(block_time, window_size, division_size)
             .unwrap());
 
         // out of window
         let block_time = Timestamp::from_nanos(1000001100);
         assert!(division
-            .is_out_of_window(block_time, window_size, division_size)
+            .is_outdated(block_time, window_size, division_size)
             .unwrap());
 
         let block_time = Timestamp::from_nanos(1000001101);
         assert!(division
-            .is_out_of_window(block_time, window_size, division_size)
+            .is_outdated(block_time, window_size, division_size)
             .unwrap());
 
         let block_time = Timestamp::from_nanos(1000001200);
         assert!(division
-            .is_out_of_window(block_time, window_size, division_size)
+            .is_outdated(block_time, window_size, division_size)
             .unwrap());
     }
 }
