@@ -142,6 +142,19 @@ mod v2 {
             })
         }
 
+        pub fn is_out_of_window(
+            &self,
+            block_time: Timestamp,
+            window_size: Uint64,
+            division_size: Uint64,
+        ) -> Result<bool, ContractError> {
+            let window_started_at = Uint64::from(block_time.nanos()).checked_sub(window_size)?;
+            let division_ended_at =
+                Uint64::from(self.started_at.nanos()).checked_add(division_size)?;
+
+            Ok(window_started_at >= division_ended_at)
+        }
+
         /// This function calculates the average of the divisions in a specified window
         /// The window is defined by the `window_size` and `block_time`
         ///
@@ -749,6 +762,56 @@ mod v2 {
                     + (Decimal::percent(50) * Decimal::from_ratio(159u128, 1u128)))
                     / Decimal::from_ratio(600u128, 1u128)
             );
+        }
+
+        #[test]
+        fn test_out_of_window() {
+            let division = CompressedDivision {
+                started_at: Timestamp::from_nanos(1000000000),
+                updated_at: Timestamp::from_nanos(1000000022),
+                latest_value: Decimal::percent(10),
+                cumsum: Decimal::percent(22),
+            };
+            let window_size = Uint64::from(1000u64);
+            let division_size = Uint64::from(100u64);
+
+            let block_time = Timestamp::from_nanos(1000000022);
+
+            // with window
+            assert!(!division
+                .is_out_of_window(block_time, window_size, division_size)
+                .unwrap());
+
+            let block_time = Timestamp::from_nanos(1000000999);
+            assert!(!division
+                .is_out_of_window(block_time, window_size, division_size)
+                .unwrap());
+
+            let block_time = Timestamp::from_nanos(1000001000);
+            assert!(!division
+                .is_out_of_window(block_time, window_size, division_size)
+                .unwrap());
+
+            let block_time = Timestamp::from_nanos(1000001099);
+            assert!(!division
+                .is_out_of_window(block_time, window_size, division_size)
+                .unwrap());
+
+            // out of window
+            let block_time = Timestamp::from_nanos(1000001100);
+            assert!(division
+                .is_out_of_window(block_time, window_size, division_size)
+                .unwrap());
+
+            let block_time = Timestamp::from_nanos(1000001101);
+            assert!(division
+                .is_out_of_window(block_time, window_size, division_size)
+                .unwrap());
+
+            let block_time = Timestamp::from_nanos(1000001200);
+            assert!(division
+                .is_out_of_window(block_time, window_size, division_size)
+                .unwrap());
         }
     }
 }
