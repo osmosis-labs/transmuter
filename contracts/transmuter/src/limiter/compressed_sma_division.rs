@@ -70,6 +70,14 @@ impl CompressedSMADivision {
         Ok(window_started_at >= division_ended_at)
     }
 
+    pub fn elapsed_time(&self, block_time: Timestamp) -> Result<Uint64, ContractError> {
+        let block_time = Uint64::from(block_time.nanos());
+
+        block_time
+            .checked_sub(Uint64::from(self.started_at.nanos()))
+            .map_err(Into::into)
+    }
+
     /// This function calculates the average of the divisions in a specified window
     /// The window is defined by the `window_size` and `block_time`
     ///
@@ -86,11 +94,12 @@ impl CompressedSMADivision {
     /// - All divisions are within the window or at least overlap with the window
     /// - All divisions are of the same size
     pub fn compressed_moving_average(
-        mut divisions: impl Iterator<Item = Self>,
+        divisions: impl IntoIterator<Item = Self>,
         division_size: Uint64,
         window_size: Uint64,
         block_time: Timestamp,
     ) -> Result<Decimal, ContractError> {
+        let mut divisions = divisions.into_iter();
         let window_started_at = Uint64::from(block_time.nanos()).checked_sub(window_size)?;
 
         // process first division

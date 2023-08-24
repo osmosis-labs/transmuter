@@ -75,6 +75,15 @@ pub enum ContractError {
     #[error("Change limit error: {reason}")]
     ChangeLimitError { reason: String },
 
+    #[error(
+        "Change upper limit exceeded for `{denom}`, upper limit is {upper_limit}, but the resulted ratio is {value}"
+    )]
+    ChangeUpperLimitExceeded {
+        denom: String,
+        upper_limit: Decimal,
+        value: Decimal,
+    },
+
     #[error("Calculation error: {reason}")]
     CalculationError { reason: String },
 
