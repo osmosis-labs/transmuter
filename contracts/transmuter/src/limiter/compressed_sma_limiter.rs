@@ -101,13 +101,16 @@ impl<'a> CompressedSMALimiter<'a> {
         // skip the checks if there is no division
         if latest_division.is_some() {
             let avg = CompressedSMADivision::compressed_moving_average(
-                self.divisions
+                dbg!(self
+                    .divisions
                     .iter(storage)?
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .collect::<Result<Vec<_>, _>>()?),
                 config.division_size()?,
                 config.window_size,
                 block_time,
             )?;
+
+            dbg!(avg);
 
             // using saturating_add/sub since the overflowed value can't be exceeded anyway
             let upper_limit = avg.saturating_add(self.boundary_offset.load(storage)?);
@@ -130,8 +133,11 @@ impl<'a> CompressedSMALimiter<'a> {
             Some(division) => {
                 // If the division is over, create a new division
                 if division.elapsed_time(block_time)? >= config.division_size()? {
+                    let started_at =
+                        division.next_started_at(config.division_size()?, block_time)?;
+
                     let new_division =
-                        CompressedSMADivision::new(block_time, block_time, value, prev_value)?;
+                        CompressedSMADivision::new(started_at, block_time, value, prev_value)?;
                     self.divisions.push_back(storage, &new_division)?;
                 }
                 // else update the current division
@@ -745,7 +751,43 @@ mod tests {
                 }
             );
 
-            // test case that time passed is more than current division size
+            // pass the first division
+            let block_time = block_time.plus_minutes(15); // -> + 40 mins
+            let value = Decimal::from_str("0.587500000000000001").unwrap();
+
+            let err = limiter
+                .check_and_update(&mut deps.storage, block_time, value)
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::ChangeUpperLimitExceeded {
+                    denom: "denoma".to_string(),
+                    upper_limit: Decimal::from_str("0.5875").unwrap(),
+                    value: Decimal::from_str("0.587500000000000001").unwrap(),
+                }
+            );
+
+            let value = Decimal::percent(40);
+            limiter
+                .check_and_update(&mut deps.storage, block_time, value)
+                .unwrap();
+
+            let block_time = block_time.plus_minutes(10); // -> + 50 mins
+            let value = Decimal::from_str("0.560000000000000001").unwrap();
+
+            let err = limiter
+                .check_and_update(&mut deps.storage, block_time, value)
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::ChangeUpperLimitExceeded {
+                    denom: "denoma".to_string(),
+                    upper_limit: Decimal::from_str("0.56").unwrap(),
+                    value: Decimal::from_str("0.560000000000000001").unwrap(),
+                }
+            );
         }
 
         #[test]

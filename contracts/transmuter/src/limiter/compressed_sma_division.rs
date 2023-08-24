@@ -78,6 +78,24 @@ impl CompressedSMADivision {
             .map_err(Into::into)
     }
 
+    // TODO: test this
+    pub fn next_started_at(
+        &self,
+        division_size: Uint64,
+        block_time: Timestamp,
+    ) -> Result<Timestamp, ContractError> {
+        let division_size = Uint64::from(division_size);
+        let started_at = Uint64::from(self.started_at.nanos());
+        let block_time = Uint64::from(block_time.nanos());
+        let ended_at = started_at.checked_add(division_size)?;
+        let elapsed_time_after_end = block_time.checked_sub(ended_at)?;
+        let elapsed_time_within_next_div = elapsed_time_after_end.checked_rem(division_size)?;
+
+        Ok(Timestamp::from_nanos(
+            block_time.checked_sub(elapsed_time_within_next_div)?.u64(),
+        ))
+    }
+
     /// This function calculates the average of the divisions in a specified window
     /// The window is defined by the `window_size` and `block_time`
     ///
@@ -102,10 +120,15 @@ impl CompressedSMADivision {
         let mut divisions = divisions.into_iter();
         let window_started_at = Uint64::from(block_time.nanos()).checked_sub(window_size)?;
 
+        let first_division = divisions.next();
+
+        // keep track of the lastest division
+        let mut lastest_division = first_division.clone();
+
         // process first division
         // this needs to be handled differently because the first division's cumsum needs to be recalibrated
         // based on how far window start time eats in to the first division
-        let (first_div_stared_at, mut cumsum) = match divisions.next() {
+        let (first_div_stared_at, mut cumsum) = match first_division {
             Some(division) => {
                 let division_started_at = Uint64::from(division.started_at.nanos());
                 let remaining_division_size = division_started_at
@@ -147,6 +170,24 @@ impl CompressedSMADivision {
             cumsum = cumsum
                 .checked_add(division.cumsum)?
                 .checked_add(division.weighted_latest_value(division_size, block_time)?)?;
+
+            lastest_division = Some(division);
+        }
+
+        // if latest division end before block time,
+        // add latest value * elasped time after latest division to cumsum
+        if let Some(latest_division) = lastest_division {
+            let latest_division_ended_at =
+                Uint64::from(latest_division.started_at.nanos()).checked_add(division_size)?;
+
+            if Uint64::from(block_time.nanos()) > latest_division_ended_at {
+                let elasped_time_after_latest_division =
+                    Uint64::from(block_time.nanos()).checked_sub(latest_division_ended_at)?;
+
+                cumsum = cumsum.checked_add(latest_division.latest_value.checked_mul(
+                    Decimal::checked_from_ratio(elasped_time_after_latest_division, 1u128)?,
+                )?)?;
+            }
         }
 
         let started_at = window_started_at.max(first_div_stared_at.nanos().into());
