@@ -730,6 +730,9 @@ mod tests {
                 .check_and_update(&mut deps.storage, block_time, value)
                 .unwrap();
 
+            // check divs count
+            assert_eq!(list_divisions(&limiter, &deps.storage).len(), 1);
+
             // now, average should be the same as the value regardless of how time pass
             // 50% + 5% = 55% is the boundary
             let block_time = block_time.plus_minutes(10);
@@ -737,6 +740,8 @@ mod tests {
             limiter
                 .check_and_update(&mut deps.storage, block_time, value)
                 .unwrap();
+
+            assert_eq!(list_divisions(&limiter, &deps.storage).len(), 1);
 
             // now, average = (50% x 600000000000 + 55% x 300000000000) / 900000000000 = 0.53
             let block_time = block_time.plus_minutes(15);
@@ -753,6 +758,8 @@ mod tests {
                     value: Decimal::from_str("0.580000000000000001").unwrap(),
                 }
             );
+
+            assert_eq!(list_divisions(&limiter, &deps.storage).len(), 1);
 
             // pass the first division
             let block_time = block_time.plus_minutes(15); // -> + 40 mins
@@ -771,10 +778,14 @@ mod tests {
                 }
             );
 
+            assert_eq!(list_divisions(&limiter, &deps.storage).len(), 1);
+
             let value = Decimal::percent(40);
             limiter
                 .check_and_update(&mut deps.storage, block_time, value)
                 .unwrap();
+
+            assert_eq!(list_divisions(&limiter, &deps.storage).len(), 2);
 
             let block_time = block_time.plus_minutes(10); // -> + 50 mins
             let value = Decimal::from_str("0.560000000000000001").unwrap();
@@ -800,6 +811,8 @@ mod tests {
                 .check_and_update(&mut deps.storage, block_time, value)
                 .unwrap_err();
 
+            assert_eq!(list_divisions(&limiter, &deps.storage).len(), 2);
+
             assert_eq!(
                 err,
                 ContractError::ChangeUpperLimitExceeded {
@@ -813,6 +826,8 @@ mod tests {
             limiter
                 .check_and_update(&mut deps.storage, block_time, value)
                 .unwrap();
+
+            assert_eq!(list_divisions(&limiter, &deps.storage).len(), 3);
         }
 
         #[test]
@@ -844,17 +859,23 @@ mod tests {
                 .check_and_update(&mut deps.storage, block_time, value)
                 .unwrap();
 
+            assert_eq!(list_divisions(&limiter, &deps.storage).len(), 1);
+
             let block_time = block_time.plus_minutes(10); // -> + 10 mins
             let value = Decimal::percent(45);
             limiter
                 .check_and_update(&mut deps.storage, block_time, value)
                 .unwrap();
 
+            assert_eq!(list_divisions(&limiter, &deps.storage).len(), 1);
+
             let block_time = block_time.plus_minutes(60); // -> + 70 mins
             let value = Decimal::from_str("0.500000000000000001").unwrap();
             let err = limiter
                 .check_and_update(&mut deps.storage, block_time, value)
                 .unwrap_err();
+
+            assert_eq!(list_divisions(&limiter, &deps.storage).len(), 1);
 
             assert_eq!(
                 err,
@@ -870,11 +891,17 @@ mod tests {
                 .check_and_update(&mut deps.storage, block_time, value)
                 .unwrap();
 
+            // 1st division stiil there
+            assert_eq!(dbg!(list_divisions(&limiter, &deps.storage)).len(), 2);
+
             let block_time = block_time.plus_minutes(10); // -> + 80 mins
             let value = Decimal::from_str("0.491666666666666667").unwrap();
             let err = limiter
                 .check_and_update(&mut deps.storage, block_time, value)
                 .unwrap_err();
+
+            // 1st division is gone
+            assert_eq!(list_divisions(&limiter, &deps.storage).len(), 1);
 
             assert_eq!(
                 err,
