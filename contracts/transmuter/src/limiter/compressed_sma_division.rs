@@ -78,7 +78,6 @@ impl CompressedSMADivision {
             .map_err(Into::into)
     }
 
-    // TODO: test this
     pub fn next_started_at(
         &self,
         division_size: Uint64,
@@ -998,5 +997,37 @@ mod tests {
         assert!(division
             .is_outdated(block_time, window_size, division_size)
             .unwrap());
+    }
+
+    #[test]
+    fn test_next_started_at() {
+        let division_size = Uint64::from(10u64);
+
+        let started_at = Timestamp::from_nanos(90);
+        let compressed_sma_division = CompressedSMADivision {
+            started_at,
+            updated_at: Timestamp::from_nanos(91),
+            latest_value: Decimal::zero(),
+            cumsum: Decimal::zero(),
+        };
+
+        let block_time = Timestamp::from_nanos(100);
+        let result = compressed_sma_division.next_started_at(division_size, block_time);
+        assert_eq!(result.unwrap(), Timestamp::from_nanos(100));
+
+        let block_time = Timestamp::from_nanos(105);
+
+        let result = compressed_sma_division.next_started_at(division_size, block_time);
+        assert_eq!(result.unwrap(), Timestamp::from_nanos(100));
+
+        let block_time = Timestamp::from_nanos(115);
+
+        let result = compressed_sma_division.next_started_at(division_size, block_time);
+        assert_eq!(result.unwrap(), Timestamp::from_nanos(110));
+
+        let block_time = Timestamp::from_nanos(202);
+
+        let result = compressed_sma_division.next_started_at(division_size, block_time);
+        assert_eq!(result.unwrap(), Timestamp::from_nanos(200));
     }
 }
