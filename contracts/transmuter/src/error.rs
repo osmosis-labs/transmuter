@@ -2,6 +2,7 @@ use std::fmt::Display;
 
 use cosmwasm_std::{
     CheckedFromRatioError, Coin, Decimal, DivideByZeroError, OverflowError, StdError, Uint128,
+    Uint64,
 };
 use thiserror::Error;
 
@@ -71,6 +72,9 @@ pub enum ContractError {
 
     #[error("Window must be evenly divisible by division size")]
     UnevenWindowDivision {},
+
+    #[error("Division count must not exceed {max_division_count}")]
+    DivisionCountExceeded { max_division_count: Uint64 },
 
     #[error("Change limit error: {reason}")]
     ChangeLimitError { reason: String },

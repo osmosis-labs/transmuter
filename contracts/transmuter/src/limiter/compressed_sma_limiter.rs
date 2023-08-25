@@ -6,6 +6,8 @@ use crate::ContractError;
 
 use super::compressed_sma_division::CompressedSMADivision;
 
+const MAX_DIVISION_COUNT: Uint64 = Uint64::new(10u64);
+
 #[cw_serde]
 pub struct WindowConfig {
     pub window_size: Uint64,
@@ -49,12 +51,22 @@ impl<'a> CompressedSMALimiter<'a> {
         storage: &mut dyn Storage,
         config: &WindowConfig,
     ) -> Result<(), ContractError> {
-        // TODO:
-        // - clean up all divisions if the config is changed
-        // - enforce max divisions
-        if config.window_size.checked_rem(config.division_count)? != Uint64::zero() {
-            return Err(ContractError::UnevenWindowDivision {});
-        }
+        // division count must not exceed MAX_DIVISION_COUNT
+        ensure!(
+            config.division_count <= MAX_DIVISION_COUNT,
+            ContractError::DivisionCountExceeded {
+                max_division_count: MAX_DIVISION_COUNT
+            }
+        );
+
+        // division count must evenly divide window size
+        ensure!(
+            config.window_size.checked_rem(config.division_count)? == Uint64::zero(),
+            ContractError::UnevenWindowDivision {}
+        );
+
+        // clean up all existing divisions
+        while (self.divisions.pop_back(storage)?).is_some() {}
 
         self.window_config.save(storage, config).map_err(Into::into)
     }
@@ -231,6 +243,36 @@ mod tests {
         }
 
         #[test]
+        fn test_fail_due_to_max_division_count_exceeded() {
+            let mut deps = mock_dependencies();
+
+            let limiter = CompressedSMALimiter::new(
+                String::from("denoma"),
+                "config",
+                "divisions",
+                "boundary_offset",
+                "latest_value",
+            );
+
+            let err = limiter
+                .set_window_config(
+                    &mut deps.storage,
+                    &WindowConfig {
+                        window_size: Uint64::from(660_000_000_000u64),
+                        division_count: Uint64::from(11u64),
+                    },
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::DivisionCountExceeded {
+                    max_division_count: MAX_DIVISION_COUNT
+                }
+            );
+        }
+
+        #[test]
         fn test_successful() {
             let mut deps = mock_dependencies();
 
@@ -261,6 +303,65 @@ mod tests {
                     division_count: Uint64::from(12u64),
                 }
             );
+        }
+
+        #[test]
+        fn test_clean_up_old_divisions_if_update_config() {
+            let mut deps = mock_dependencies();
+
+            let limiter = CompressedSMALimiter::new(
+                String::from("denoma"),
+                "config",
+                "divisions",
+                "boundary_offset",
+                "latest_value",
+            );
+            let config = WindowConfig {
+                window_size: Uint64::from(3_600_000_000_000u64),
+                division_count: Uint64::from(2u64),
+            };
+            limiter
+                .set_window_config(&mut deps.storage, &config)
+                .unwrap();
+
+            let block_time = Timestamp::from_nanos(1661231280000000000);
+
+            let divisions = vec![
+                CompressedSMADivision::new(
+                    block_time.minus_nanos(config.window_size.u64()),
+                    block_time
+                        .minus_nanos(config.window_size.u64())
+                        .plus_minutes(10),
+                    Decimal::percent(20),
+                    Decimal::percent(10),
+                )
+                .unwrap(),
+                CompressedSMADivision::new(
+                    block_time.minus_nanos(
+                        config.window_size.u64() - config.division_size().unwrap().u64(),
+                    ),
+                    block_time
+                        .minus_nanos(
+                            config.window_size.u64() - config.division_size().unwrap().u64(),
+                        )
+                        .plus_minutes(20),
+                    Decimal::percent(30),
+                    Decimal::percent(20),
+                )
+                .unwrap(),
+            ];
+            add_compressed_divisions(&mut deps.storage, &limiter, divisions.clone());
+            assert_eq!(list_divisions(&limiter, &deps.storage), divisions);
+
+            let config = WindowConfig {
+                window_size: Uint64::from(3_600_000_000_000u64),
+                division_count: Uint64::from(4u64),
+            };
+            limiter
+                .set_window_config(&mut deps.storage, &config)
+                .unwrap();
+
+            assert_eq!(list_divisions(&limiter, &deps.storage), vec![]);
         }
     }
 
