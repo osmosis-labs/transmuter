@@ -203,8 +203,8 @@ mod tests {
                 .set_window_config(
                     &mut deps.storage,
                     &WindowConfig {
-                        window_size: Uint64::from(604_800_000_000u64),
-                        division_count: Uint64::from(13u64),
+                        window_size: Uint64::from(604_800_000_001u64),
+                        division_count: Uint64::from(9u64),
                     },
                 )
                 .unwrap_err();
@@ -289,7 +289,7 @@ mod tests {
                     &mut deps.storage,
                     &WindowConfig {
                         window_size: Uint64::from(604_800_000_000u64),
-                        division_count: Uint64::from(12u64),
+                        division_count: Uint64::from(5u64),
                     },
                 )
                 .unwrap();
@@ -300,7 +300,7 @@ mod tests {
                 config,
                 WindowConfig {
                     window_size: Uint64::from(604_800_000_000u64),
-                    division_count: Uint64::from(12u64),
+                    division_count: Uint64::from(5u64),
                 }
             );
         }
