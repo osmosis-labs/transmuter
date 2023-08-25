@@ -84,7 +84,6 @@ impl CompressedSMADivision {
         division_size: Uint64,
         block_time: Timestamp,
     ) -> Result<Timestamp, ContractError> {
-        let division_size = Uint64::from(division_size);
         let started_at = Uint64::from(self.started_at.nanos());
         let block_time = Uint64::from(block_time.nanos());
         let ended_at = started_at.checked_add(division_size)?;
@@ -97,7 +96,7 @@ impl CompressedSMADivision {
     }
 
     /// This function calculates the average of the divisions in a specified window
-    /// The window is defined by the `window_size` and `block_time`
+    /// The window is defined by the `window_size` and `division_size`
     ///
     /// The calculation is done by accumulating the sum of (value * elapsed_time)
     /// then divide by the total elapsed time
@@ -112,6 +111,7 @@ impl CompressedSMADivision {
     /// - All divisions are within the window or at least overlap with the window
     /// - All divisions are of the same size
     pub fn compressed_moving_average(
+        latest_removed_division: Option<Self>,
         divisions: impl IntoIterator<Item = Self>,
         division_size: Uint64,
         window_size: Uint64,
@@ -122,13 +122,10 @@ impl CompressedSMADivision {
 
         let first_division = divisions.next();
 
-        // keep track of the lastest division
-        let mut lastest_division = first_division.clone();
-
         // process first division
         // this needs to be handled differently because the first division's cumsum needs to be recalibrated
         // based on how far window start time eats in to the first division
-        let (first_div_stared_at, mut cumsum) = match first_division {
+        let (mut processed_division, mut cumsum) = match first_division {
             Some(division) => {
                 let division_started_at = Uint64::from(division.started_at.nanos());
                 let remaining_division_size = division_started_at
@@ -160,42 +157,90 @@ impl CompressedSMADivision {
                         .checked_mul(Decimal::checked_from_ratio(remaining_division_size, 1u128)?)?
                 };
 
-                (division.started_at, cumsum)
+                (division, cumsum)
             }
-            None => return Err(StdError::not_found("division").into()),
+            None => {
+                // if there is no divisions, check the latest removed one
+                // if it's there then take its latest value as average
+                return match latest_removed_division {
+                    Some(CompressedSMADivision { latest_value, .. }) => Ok(latest_value),
+                    None => {
+                        Err(StdError::generic_err("there is no data point since last reset").into())
+                    }
+                };
+            }
         };
+
+        let first_div_started_at = processed_division.started_at;
 
         // accumulate cumsum from the rest of divisions
         for division in divisions {
+            // check the processed division ended at if it's equals to this division's started at
+            // if not, then add the latest value * gap size to cumsum
+            let processed_division_ended_at =
+                Uint64::from(processed_division.started_at.nanos()).checked_add(division_size)?;
+
+            let gap = Uint64::from(division.started_at.nanos())
+                .checked_sub(processed_division_ended_at)?;
+
+            let has_skipped_division = gap > Uint64::zero();
+
+            if has_skipped_division {
+                cumsum = cumsum.checked_add(
+                    processed_division
+                        .latest_value
+                        .checked_mul(Decimal::from_ratio(gap, 1u32))?,
+                )?;
+            }
+
             cumsum = cumsum
                 .checked_add(division.cumsum)?
                 .checked_add(division.weighted_latest_value(division_size, block_time)?)?;
 
-            lastest_division = Some(division);
+            processed_division = division;
         }
+
+        let latest_division = processed_division;
 
         // if latest division end before block time,
         // add latest value * elasped time after latest division to cumsum
-        if let Some(latest_division) = lastest_division {
-            let latest_division_ended_at =
-                Uint64::from(latest_division.started_at.nanos()).checked_add(division_size)?;
+        let latest_division_ended_at =
+            Uint64::from(latest_division.started_at.nanos()).checked_add(division_size)?;
 
-            if Uint64::from(block_time.nanos()) > latest_division_ended_at {
-                let elasped_time_after_latest_division =
-                    Uint64::from(block_time.nanos()).checked_sub(latest_division_ended_at)?;
+        if Uint64::from(block_time.nanos()) > latest_division_ended_at {
+            let elasped_time_after_latest_division =
+                Uint64::from(block_time.nanos()).checked_sub(latest_division_ended_at)?;
 
-                cumsum = cumsum.checked_add(latest_division.latest_value.checked_mul(
-                    Decimal::checked_from_ratio(elasped_time_after_latest_division, 1u128)?,
-                )?)?;
-            }
+            cumsum = cumsum.checked_add(latest_division.latest_value.checked_mul(
+                Decimal::checked_from_ratio(elasped_time_after_latest_division, 1u128)?,
+            )?)?;
         }
 
-        let started_at = window_started_at.max(first_div_stared_at.nanos().into());
-        let total_elapsed_time = Uint64::from(block_time.nanos()).checked_sub(started_at)?;
+        match latest_removed_division {
+            Some(latest_removed_division) => {
+                // if a division gets removed, it must be older than window_started_at
+                // its latest value should be static throughout window start until first division within window
+                let missing_period =
+                    Uint64::from(first_div_started_at.nanos()).checked_sub(window_started_at)?;
+                let missing_cumsum = latest_removed_division
+                    .latest_value
+                    .checked_mul(Decimal::from_ratio(missing_period, 1u32))?;
 
-        cumsum
-            .checked_div(Decimal::checked_from_ratio(total_elapsed_time, 1u128)?)
-            .map_err(Into::into)
+                cumsum
+                    .checked_add(missing_cumsum)?
+                    .checked_div(Decimal::from_ratio(window_size, 1u32))
+                    .map_err(Into::into)
+            }
+            None => {
+                let started_at = window_started_at.max(first_div_started_at.nanos().into());
+                let total_elapsed_time =
+                    Uint64::from(block_time.nanos()).checked_sub(started_at)?;
+
+                cumsum
+                    .checked_div(Decimal::checked_from_ratio(total_elapsed_time, 1u128)?)
+                    .map_err(Into::into)
+            }
+        }
     }
 
     fn adjusted_cumsum(
@@ -334,6 +379,7 @@ mod tests {
         let window_size = Uint64::from(1000u64);
         let block_time = Timestamp::from_nanos(1100);
         let average = CompressedSMADivision::compressed_moving_average(
+            None,
             divisions.into_iter(),
             division_size,
             window_size,
@@ -342,7 +388,9 @@ mod tests {
 
         assert_eq!(
             average.unwrap_err(),
-            ContractError::Std(StdError::not_found("division"))
+            ContractError::Std(StdError::generic_err(
+                "there is no data point since last reset"
+            ))
         );
     }
 
@@ -360,6 +408,7 @@ mod tests {
         let window_size = Uint64::from(1000u64);
         let block_time = Timestamp::from_nanos(1110);
         let average = CompressedSMADivision::compressed_moving_average(
+            None,
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -373,6 +422,7 @@ mod tests {
 
         let block_time = Timestamp::from_nanos(1115);
         let average = CompressedSMADivision::compressed_moving_average(
+            None,
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -390,6 +440,7 @@ mod tests {
         // half way to the division size
         let block_time = Timestamp::from_nanos(1150);
         let average = CompressedSMADivision::compressed_moving_average(
+            None,
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -407,6 +458,7 @@ mod tests {
         // at the division edge
         let block_time = Timestamp::from_nanos(1200);
         let average = CompressedSMADivision::compressed_moving_average(
+            None,
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -436,6 +488,7 @@ mod tests {
 
         let block_time = Timestamp::from_nanos(1200);
         let average = CompressedSMADivision::compressed_moving_average(
+            None,
             divisions.into_iter(),
             division_size,
             window_size,
@@ -476,6 +529,7 @@ mod tests {
 
         let block_time = Timestamp::from_nanos(1270);
         let average = CompressedSMADivision::compressed_moving_average(
+            None,
             divisions.into_iter(),
             division_size,
             window_size,
@@ -525,6 +579,7 @@ mod tests {
         let block_time = Timestamp::from_nanos(1370);
 
         let average = CompressedSMADivision::compressed_moving_average(
+            None,
             divisions.into_iter(),
             division_size,
             window_size,
@@ -576,6 +631,7 @@ mod tests {
         let block_time = Timestamp::from_nanos(1700);
 
         let average = CompressedSMADivision::compressed_moving_average(
+            None,
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -611,6 +667,7 @@ mod tests {
         let block_time = Timestamp::from_nanos(1705);
 
         let average = CompressedSMADivision::compressed_moving_average(
+            None,
             divisions.into_iter(),
             division_size,
             window_size,
@@ -645,6 +702,7 @@ mod tests {
         let block_time = Timestamp::from_nanos(1705);
 
         let average = CompressedSMADivision::compressed_moving_average(
+            None,
             divisions.into_iter(),
             division_size,
             window_size,
@@ -680,6 +738,7 @@ mod tests {
         let block_time = Timestamp::from_nanos(1740);
 
         let average = CompressedSMADivision::compressed_moving_average(
+            None,
             divisions.clone().into_iter(),
             division_size,
             window_size,
@@ -701,6 +760,7 @@ mod tests {
         let block_time = Timestamp::from_nanos(1899);
 
         let average = CompressedSMADivision::compressed_moving_average(
+            None,
             divisions.into_iter(),
             division_size,
             window_size,
@@ -717,6 +777,175 @@ mod tests {
                 + (Decimal::percent(40) * Decimal::from_ratio(60u128, 1u128))
                 + (Decimal::percent(40) * Decimal::from_ratio(40u128, 1u128))
                 + (Decimal::percent(50) * Decimal::from_ratio(159u128, 1u128)))
+                / Decimal::from_ratio(600u128, 1u128)
+        );
+    }
+
+    #[test]
+    fn test_average_when_div_is_skipping() {
+        // skipping 1 division
+        let division_size = Uint64::from(200u64);
+        let window_size = Uint64::from(600u64);
+
+        let divisions = vec![
+            {
+                let started_at = Timestamp::from_nanos(1100);
+                let updated_at = Timestamp::from_nanos(1110);
+                let value = Decimal::percent(20);
+                let prev_value = Decimal::percent(10);
+                CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap()
+            },
+            // -- skip 1300 -> 1500 --
+            // 20% * 200 - 1 div size
+            {
+                let started_at = Timestamp::from_nanos(1500);
+                let updated_at = Timestamp::from_nanos(1540);
+                let value = Decimal::percent(30);
+                let prev_value = Decimal::percent(20);
+                CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap()
+            },
+        ];
+
+        let block_time = Timestamp::from_nanos(1600);
+
+        let average = CompressedSMADivision::compressed_moving_average(
+            None,
+            divisions.clone().into_iter(),
+            division_size,
+            window_size,
+            block_time,
+        )
+        .unwrap();
+
+        assert_eq!(
+            average,
+            ((Decimal::percent(10) * Decimal::from_ratio(10u128, 1u128))
+                + (Decimal::percent(20) * Decimal::from_ratio(190u128, 1u128))
+                + (Decimal::percent(20) * Decimal::from_ratio(200u128, 1u128)) // skipped div
+                + (Decimal::percent(20) * Decimal::from_ratio(40u128, 1u128))
+                + (Decimal::percent(30) * Decimal::from_ratio(60u128, 1u128)))
+                / Decimal::from_ratio(500u128, 1u128)
+        );
+
+        let average = CompressedSMADivision::compressed_moving_average(
+            Some(
+                CompressedSMADivision::new(
+                    Timestamp::from_nanos(700),
+                    Timestamp::from_nanos(750),
+                    Decimal::percent(10),
+                    Decimal::percent(15),
+                )
+                .unwrap(),
+            ),
+            divisions.clone().into_iter(),
+            division_size,
+            window_size,
+            block_time,
+        )
+        .unwrap();
+
+        assert_eq!(
+            average,
+            ((Decimal::percent(10) * Decimal::from_ratio(100u128, 1u128)) // before first div
+                + (Decimal::percent(10) * Decimal::from_ratio(10u128, 1u128))
+                + (Decimal::percent(20) * Decimal::from_ratio(190u128, 1u128))
+                + (Decimal::percent(20) * Decimal::from_ratio(200u128, 1u128)) // skipped div
+                + (Decimal::percent(20) * Decimal::from_ratio(40u128, 1u128))
+                + (Decimal::percent(30) * Decimal::from_ratio(60u128, 1u128)))
+                / Decimal::from_ratio(600u128, 1u128)
+        );
+
+        let block_time = Timestamp::from_nanos(1700);
+        let average = CompressedSMADivision::compressed_moving_average(
+            Some(
+                CompressedSMADivision::new(
+                    Timestamp::from_nanos(700),
+                    Timestamp::from_nanos(750),
+                    Decimal::percent(10),
+                    Decimal::percent(15),
+                )
+                .unwrap(),
+            ),
+            divisions.into_iter(),
+            division_size,
+            window_size,
+            block_time,
+        )
+        .unwrap();
+
+        assert_eq!(
+            average,
+            ((Decimal::percent(10) * Decimal::from_ratio(10u128, 1u128))
+                + (Decimal::percent(20) * Decimal::from_ratio(190u128, 1u128))
+                + (Decimal::percent(20) * Decimal::from_ratio(200u128, 1u128)) // skipped div
+                + (Decimal::percent(20) * Decimal::from_ratio(40u128, 1u128))
+                + (Decimal::percent(30) * Decimal::from_ratio(160u128, 1u128)))
+                / Decimal::from_ratio(600u128, 1u128)
+        );
+
+        // skipping 2 divisions
+        let division_size = Uint64::from(100u64);
+        let window_size = Uint64::from(600u64);
+
+        let divisions = vec![
+            {
+                let started_at = Timestamp::from_nanos(1100);
+                let updated_at = Timestamp::from_nanos(1110);
+                let value = Decimal::percent(20);
+                let prev_value = Decimal::percent(10);
+                CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap()
+            },
+            // -- skip 1300 -> 1500 --
+            // 20% * 200 - 2 div size
+            {
+                let started_at = Timestamp::from_nanos(1500);
+                let updated_at = Timestamp::from_nanos(1540);
+                let value = Decimal::percent(30);
+                let prev_value = Decimal::percent(20);
+                CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap()
+            },
+        ];
+
+        let block_time = Timestamp::from_nanos(1600);
+
+        let average = CompressedSMADivision::compressed_moving_average(
+            None,
+            divisions.clone().into_iter(),
+            division_size,
+            window_size,
+            block_time,
+        )
+        .unwrap();
+
+        assert_eq!(
+            average,
+            ((Decimal::percent(10) * Decimal::from_ratio(10u128, 1u128))
+                + (Decimal::percent(20) * Decimal::from_ratio(190u128, 1u128))
+                + (Decimal::percent(20) * Decimal::from_ratio(100u128, 1u128)) // skipped div
+                + (Decimal::percent(20) * Decimal::from_ratio(100u128, 1u128)) // skipped div
+                + (Decimal::percent(20) * Decimal::from_ratio(40u128, 1u128))
+                + (Decimal::percent(30) * Decimal::from_ratio(60u128, 1u128)))
+                / Decimal::from_ratio(500u128, 1u128)
+        );
+
+        let block_time = Timestamp::from_nanos(1710);
+
+        let average = CompressedSMADivision::compressed_moving_average(
+            None,
+            divisions.into_iter(),
+            division_size,
+            window_size,
+            block_time,
+        )
+        .unwrap();
+
+        assert_eq!(
+            average,
+            ((Decimal::percent(20) * Decimal::from_ratio(190u128, 1u128))
+                + (Decimal::percent(20) * Decimal::from_ratio(100u128, 1u128)) // skipped div
+                + (Decimal::percent(20) * Decimal::from_ratio(100u128, 1u128)) // skipped div
+                + (Decimal::percent(20) * Decimal::from_ratio(40u128, 1u128))
+                + (Decimal::percent(30) * Decimal::from_ratio(170u128, 1u128)))
                 / Decimal::from_ratio(600u128, 1u128)
         );
     }

@@ -73,19 +73,21 @@ impl<'a> CompressedSMALimiter<'a> {
         &self,
         storage: &mut dyn Storage,
         block_time: Timestamp,
-    ) -> Result<(), ContractError> {
+    ) -> Result<Option<CompressedSMADivision>, ContractError> {
         let config = self.window_config.load(storage)?;
+
+        let mut latest_removed_division = None;
 
         while let Some(division) = self.divisions.front(storage)? {
             // if window completely passed the division, remove the division
             if division.is_outdated(block_time, config.window_size, config.division_size()?)? {
-                self.divisions.pop_front(storage)?;
+                latest_removed_division = self.divisions.pop_front(storage)?;
             } else {
                 break;
             }
         }
 
-        Ok(())
+        Ok(latest_removed_division)
     }
 
     /// Check if the value is within the limit and update the divisions
@@ -95,22 +97,23 @@ impl<'a> CompressedSMALimiter<'a> {
         block_time: Timestamp,
         value: Decimal,
     ) -> Result<(), ContractError> {
+        // clean up old divisions that are not in the window anymore
+        let latest_removed_division = self.remove_outdated_division(storage, block_time)?;
+
         let config = self.window_config.load(storage)?;
         let latest_division = self.divisions.back(storage)?;
 
-        // skip the checks if there is no division
-        if latest_division.is_some() {
+        // Cehck for upper limit if there is any existing division or there is any removed divisions
+        if latest_division.is_some() || latest_removed_division.is_some() {
             let avg = CompressedSMADivision::compressed_moving_average(
-                dbg!(self
-                    .divisions
+                latest_removed_division,
+                self.divisions
                     .iter(storage)?
-                    .collect::<Result<Vec<_>, _>>()?),
+                    .collect::<Result<Vec<_>, _>>()?,
                 config.division_size()?,
                 config.window_size,
                 block_time,
             )?;
-
-            dbg!(avg);
 
             // using saturating_add/sub since the overflowed value can't be exceeded anyway
             let upper_limit = avg.saturating_add(self.boundary_offset.load(storage)?);
@@ -685,7 +688,7 @@ mod tests {
                 )
                 .unwrap(),
             ];
-            add_compressed_divisions(&mut deps.storage, &limiter, divisions.clone());
+            add_compressed_divisions(&mut deps.storage, &limiter, divisions);
             limiter
                 .remove_outdated_division(&mut deps.storage, block_time)
                 .unwrap();
@@ -788,13 +791,157 @@ mod tests {
                     value: Decimal::from_str("0.560000000000000001").unwrap(),
                 }
             );
+
+            // pass 2nd division
+            let block_time = block_time.plus_minutes(20); // -> + 70 mins
+            let value = Decimal::from_str("0.525000000000000001").unwrap();
+
+            let err = limiter
+                .check_and_update(&mut deps.storage, block_time, value)
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::ChangeUpperLimitExceeded {
+                    denom: "denoma".to_string(),
+                    upper_limit: Decimal::from_str("0.525").unwrap(),
+                    value: Decimal::from_str("0.525000000000000001").unwrap(),
+                }
+            );
+
+            let value = Decimal::from_str("0.525").unwrap();
+            limiter
+                .check_and_update(&mut deps.storage, block_time, value)
+                .unwrap();
         }
 
         #[test]
-        fn test_with_clean_up_outdated() {}
+        fn test_with_clean_up_outdated() {
+            let mut deps = mock_dependencies();
+            let limiter = CompressedSMALimiter::new(
+                String::from("denomb"),
+                "config",
+                "divisions",
+                "boundary_offset",
+                "latest_value",
+            );
+            let config = WindowConfig {
+                window_size: Uint64::from(3_600_000_000_000u64), // 1 hrs
+                division_count: Uint64::from(4u64),              // 15 mins each
+            };
+            limiter
+                .set_window_config(&mut deps.storage, &config)
+                .unwrap();
+
+            limiter
+                .set_boundary_offset(&mut deps.storage, Decimal::percent(5))
+                .unwrap();
+
+            // divs are clean, there will set no limit to it
+            let block_time = Timestamp::from_nanos(1661231280000000000);
+            let value = Decimal::percent(40);
+            limiter
+                .check_and_update(&mut deps.storage, block_time, value)
+                .unwrap();
+
+            let block_time = block_time.plus_minutes(10); // -> + 10 mins
+            let value = Decimal::percent(45);
+            limiter
+                .check_and_update(&mut deps.storage, block_time, value)
+                .unwrap();
+
+            let block_time = block_time.plus_minutes(60); // -> + 70 mins
+            let value = Decimal::from_str("0.500000000000000001").unwrap();
+            let err = limiter
+                .check_and_update(&mut deps.storage, block_time, value)
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::ChangeUpperLimitExceeded {
+                    denom: "denomb".to_string(),
+                    upper_limit: Decimal::from_str("0.5").unwrap(),
+                    value: Decimal::from_str("0.500000000000000001").unwrap(),
+                }
+            );
+
+            let value = Decimal::percent(40);
+            limiter
+                .check_and_update(&mut deps.storage, block_time, value)
+                .unwrap();
+
+            let block_time = block_time.plus_minutes(10); // -> + 80 mins
+            let value = Decimal::from_str("0.491666666666666667").unwrap();
+            let err = limiter
+                .check_and_update(&mut deps.storage, block_time, value)
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::ChangeUpperLimitExceeded {
+                    denom: "denomb".to_string(),
+                    upper_limit: Decimal::from_str("0.491666666666666666").unwrap(),
+                    value: Decimal::from_str("0.491666666666666667").unwrap(),
+                }
+            );
+        }
 
         #[test]
-        fn test_with_skipped_windows() {}
+        fn test_with_skipped_windows() {
+            let mut deps = mock_dependencies();
+            let limiter = CompressedSMALimiter::new(
+                String::from("denomb"),
+                "config",
+                "divisions",
+                "boundary_offset",
+                "latest_value",
+            );
+            let config = WindowConfig {
+                window_size: Uint64::from(3_600_000_000_000u64), // 1 hrs
+                division_count: Uint64::from(4u64),              // 15 mins each
+            };
+            limiter
+                .set_window_config(&mut deps.storage, &config)
+                .unwrap();
+
+            limiter
+                .set_boundary_offset(&mut deps.storage, Decimal::percent(5))
+                .unwrap();
+
+            let block_time = Timestamp::from_nanos(1661231280000000000);
+            let value = Decimal::percent(40);
+            limiter
+                .check_and_update(&mut deps.storage, block_time, value)
+                .unwrap();
+
+            let block_time = block_time.plus_minutes(20); // -> + 20 mins
+            let value = Decimal::percent(45);
+            limiter
+                .check_and_update(&mut deps.storage, block_time, value)
+                .unwrap();
+
+            let block_time = block_time.plus_minutes(30); // -> + 50 mins
+            let value = Decimal::percent(46);
+            limiter
+                .check_and_update(&mut deps.storage, block_time, value)
+                .unwrap();
+
+            let block_time = block_time.plus_minutes(70); // -> + 120 mins
+            let value = Decimal::from_str("0.510000000000000001").unwrap();
+
+            let err = limiter
+                .check_and_update(&mut deps.storage, block_time, value)
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::ChangeUpperLimitExceeded {
+                    denom: String::from("denomb"),
+                    upper_limit: Decimal::percent(51),
+                    value
+                }
+            );
+        }
     }
 
     fn list_divisions(
