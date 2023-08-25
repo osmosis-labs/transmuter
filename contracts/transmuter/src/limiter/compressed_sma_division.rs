@@ -1,10 +1,9 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{ensure, Decimal, StdError, Timestamp, Uint64};
+use cosmwasm_std::{ensure, Decimal, StdError, Timestamp, Uint128, Uint64};
 
 use crate::ContractError;
 
-/// CompressedDivision is a compressed representation of a compressed sliding window
-/// for calculating approximated moving average.
+/// CompressedDivision is a compressed representation of a data points in sliding window
 #[cw_serde]
 pub struct CompressedSMADivision {
     /// Time where the division is mark as started
@@ -34,13 +33,13 @@ impl CompressedSMADivision {
             )
         );
 
-        let elapsed_time =
-            Uint64::from(updated_at.nanos()).checked_sub(started_at.nanos().into())?;
+        let elapsed_time = elapsed_time(started_at.nanos(), updated_at.nanos())?;
+
         Ok(Self {
             started_at,
             updated_at,
             latest_value: value,
-            cumsum: prev_value.checked_mul(Decimal::checked_from_ratio(elapsed_time, 1u128)?)?,
+            cumsum: prev_value.checked_mul(from_uint(elapsed_time))?,
         })
     }
 
@@ -64,18 +63,18 @@ impl CompressedSMADivision {
         window_size: Uint64,
         division_size: Uint64,
     ) -> Result<bool, ContractError> {
-        let window_started_at = Uint64::from(block_time.nanos()).checked_sub(window_size)?;
-        let division_ended_at = Uint64::from(self.started_at.nanos()).checked_add(division_size)?;
+        let window_started_at = backward(block_time.nanos(), window_size)?;
+        let division_ended_at = forward(self.started_at.nanos(), division_size)?;
 
         Ok(window_started_at >= division_ended_at)
     }
 
     pub fn elapsed_time(&self, block_time: Timestamp) -> Result<Uint64, ContractError> {
-        let block_time = Uint64::from(block_time.nanos());
+        elapsed_time(self.started_at.nanos(), block_time.nanos())
+    }
 
-        block_time
-            .checked_sub(Uint64::from(self.started_at.nanos()))
-            .map_err(Into::into)
+    pub fn ended_at(&self, division_size: Uint64) -> Result<Uint64, ContractError> {
+        forward(self.started_at.nanos(), division_size)
     }
 
     pub fn next_started_at(
@@ -85,20 +84,21 @@ impl CompressedSMADivision {
     ) -> Result<Timestamp, ContractError> {
         let started_at = Uint64::from(self.started_at.nanos());
         let block_time = Uint64::from(block_time.nanos());
-        let ended_at = started_at.checked_add(division_size)?;
-        let elapsed_time_after_end = block_time.checked_sub(ended_at)?;
+
+        let ended_at = forward(started_at, division_size)?;
+        let elapsed_time_after_end = elapsed_time(ended_at, block_time)?;
         let elapsed_time_within_next_div = elapsed_time_after_end.checked_rem(division_size)?;
 
         Ok(Timestamp::from_nanos(
-            block_time.checked_sub(elapsed_time_within_next_div)?.u64(),
+            backward(block_time, elapsed_time_within_next_div)?.u64(),
         ))
     }
 
-    /// This function calculates the average of the divisions in a specified window
+    /// This function calculates the arithmatic mean of the divisions in a specified window
     /// The window is defined by the `window_size` and `division_size`
     ///
-    /// The calculation is done by accumulating the sum of (value * elapsed_time)
-    /// then divide by the total elapsed time
+    /// The calculation is done by accumulating the sum of value * elapsed_time (integral)
+    /// then divide by the total elapsed time (integral range)
     ///
     /// As this is `CompressionDivision`, not all the data points in the window is stored for gas optimization
     /// When the window covers portion of the first division, it needs to readjust the cumsum
@@ -109,6 +109,8 @@ impl CompressedSMADivision {
     /// - Last division's updated_at is less than block_time
     /// - All divisions are within the window or at least overlap with the window
     /// - All divisions are of the same size
+    ///
+    /// The above assumptions are guaranteed by the `CompressedSMALimiter`
     pub fn compressed_moving_average(
         latest_removed_division: Option<Self>,
         divisions: impl IntoIterator<Item = Self>,
@@ -117,7 +119,7 @@ impl CompressedSMADivision {
         block_time: Timestamp,
     ) -> Result<Decimal, ContractError> {
         let mut divisions = divisions.into_iter();
-        let window_started_at = Uint64::from(block_time.nanos()).checked_sub(window_size)?;
+        let window_started_at = backward(block_time.nanos(), window_size)?;
 
         let first_division = divisions.next();
 
@@ -127,33 +129,51 @@ impl CompressedSMADivision {
         let (mut processed_division, mut cumsum) = match first_division {
             Some(division) => {
                 let division_started_at = Uint64::from(division.started_at.nanos());
-                let remaining_division_size = division_started_at
-                    .checked_add(division_size)?
-                    .checked_sub(window_started_at)?
-                    .min(division_size);
+
+                // |  div 1   |  div 2  |  div 3  |
+                //      ██████ <- remiaining division size
+                //     |           window            |
+                let remaining_division_size =
+                    elapsed_time(window_started_at, division.ended_at(division_size)?)?
+                        .min(division_size);
 
                 let latest_value_elapsed_time =
                     division.latest_value_elapsed_time(division_size, block_time)?;
 
-                let cumsum = if remaining_division_size > latest_value_elapsed_time {
-                    // readjust cumsum if window start after first division
-                    // if the window start before the first division, then the first division's cumsum can be used as is
+                let window_started_before_last_first_div_update =
+                    window_started_at < division.updated_at.nanos().into();
+
+                let cumsum =
+                // |  div 1   |
+                //      ^ last first div updated
+                //   |          window           |
+                //   ^ window started at
+                //
+                // This case, existing cumsum needs to be taken into account
+                if window_started_before_last_first_div_update {
                     let window_started_after_first_division =
                         window_started_at > division_started_at;
 
-                    let cumsum = if window_started_after_first_division {
+                    let cumsum =
+                    // if the window start after the first division, then the first division's cumsum needs
+                    // readjustment based on how far the window start time eats in to the first division
+                    if window_started_after_first_division {
                         division
                             .adjusted_cumsum(remaining_division_size, latest_value_elapsed_time)?
-                    } else {
+                    }
+                    // if the window start before the first division, then the first division's cumsum can be used as is
+                    else {
                         division.cumsum
                     };
 
                     cumsum
                         .checked_add(division.weighted_latest_value(division_size, block_time)?)?
-                } else {
+                }
+                // else disregard the existing cumsum, and calculate cumsum from the remaning division size
+                else {
                     division
                         .latest_value
-                        .checked_mul(Decimal::checked_from_ratio(remaining_division_size, 1u128)?)?
+                        .checked_mul(from_uint(remaining_division_size))?
                 };
 
                 (division, cumsum)
@@ -172,27 +192,26 @@ impl CompressedSMADivision {
 
         let first_div_started_at = processed_division.started_at;
 
-        // accumulate cumsum from the rest of divisions
+        // integrate the rest of divisions
         for division in divisions {
-            // check the processed division ended at if it's equals to this division's started at
-            // if not, then add the latest value * gap size to cumsum
-            let processed_division_ended_at =
-                Uint64::from(processed_division.started_at.nanos()).checked_add(division_size)?;
+            // check if there is any gap between divisions
+            // if so, take the latest value * gap the missing cumsum
 
-            let gap = Uint64::from(division.started_at.nanos())
-                .checked_sub(processed_division_ended_at)?;
+            // |  div 1   |    x    |    x    |  div 2  |
+            //            ████████████████████ <- gap
+            //     |           window            |
+            let gap = elapsed_time(
+                processed_division.ended_at(division_size)?,
+                division.started_at.nanos(),
+            )?;
 
-            let has_skipped_division = gap > Uint64::zero();
-
-            if has_skipped_division {
-                cumsum = cumsum.checked_add(
-                    processed_division
-                        .latest_value
-                        .checked_mul(Decimal::from_ratio(gap, 1u32))?,
-                )?;
-            }
+            // if there is no gap between divisions, then the gap_integral is 0
+            let gap_integral = processed_division
+                .latest_value
+                .checked_mul(from_uint(gap))?;
 
             cumsum = cumsum
+                .checked_add(gap_integral)?
                 .checked_add(division.cumsum)?
                 .checked_add(division.weighted_latest_value(division_size, block_time)?)?;
 
@@ -203,40 +222,71 @@ impl CompressedSMADivision {
 
         // if latest division end before block time,
         // add latest value * elasped time after latest division to cumsum
-        let latest_division_ended_at =
-            Uint64::from(latest_division.started_at.nanos()).checked_add(division_size)?;
+        let latest_division_ended_at = latest_division.ended_at(division_size)?;
 
+        // |   div 1   |   div 2   |   div 3   |
+        //                                     ^ latest division ended at
+        //                                         ^ block time
+        //                                     ████ <- latest value elapsed time after latest division
         if Uint64::from(block_time.nanos()) > latest_division_ended_at {
             let elasped_time_after_latest_division =
-                Uint64::from(block_time.nanos()).checked_sub(latest_division_ended_at)?;
+                elapsed_time(latest_division_ended_at, block_time.nanos())?;
 
-            cumsum = cumsum.checked_add(latest_division.latest_value.checked_mul(
-                Decimal::checked_from_ratio(elasped_time_after_latest_division, 1u128)?,
-            )?)?;
+            // integrate with the latest value by elasped time after latest division
+            cumsum = cumsum.checked_add(
+                latest_division
+                    .latest_value
+                    .checked_mul(from_uint(elasped_time_after_latest_division))?,
+            )?;
         }
 
         match latest_removed_division {
             Some(latest_removed_division) => {
                 // if a division gets removed, it must be older than window_started_at
                 // its latest value should be static throughout window start until first division within window
-                let missing_period =
-                    Uint64::from(first_div_started_at.nanos()).checked_sub(window_started_at)?;
+                // so we take integral of it
+                // if window started at first division, then there is no missing cumsum and this will be 0
+                //
+                // ==============================================
+                //
+                //     v period with latest removed window value
+                //    ██|   div 1   |   div 2   |   div 3   |
+                //   |              window               |
+                //
+                // ==============================================
+                let missing_period = elapsed_time(window_started_at, first_div_started_at.nanos())?;
                 let missing_cumsum = latest_removed_division
                     .latest_value
-                    .checked_mul(Decimal::from_ratio(missing_period, 1u32))?;
+                    .checked_mul(from_uint(missing_period))?;
 
                 cumsum
                     .checked_add(missing_cumsum)?
-                    .checked_div(Decimal::from_ratio(window_size, 1u32))
+                    // for this case, we can be sure that total integral range is window size
+                    // since it integrates from window stared at
+                    .checked_div(from_uint(window_size))
                     .map_err(Into::into)
             }
             None => {
+                // if there is no removed division, then the total integral range can be either case
+                //
+                // ========================================
+                //
+                //      |   div 1   |   div 2   |   div 3   |
+                //   |              window               |
+                //      █████████████████████████████████
+                //      ^ start at first division
+                //                                      ^ end at block time
+                // ========================================
+                //
+                // |   div 1   |   div 2   |   div 3   |
+                //   |              window               |
+                //   ████████████████████████████████████
+                //   ^ start at window start
+                //                                      ^ end at block time
                 let started_at = window_started_at.max(first_div_started_at.nanos().into());
-                let total_elapsed_time =
-                    Uint64::from(block_time.nanos()).checked_sub(started_at)?;
-
+                let total_elapsed_time = elapsed_time(started_at, block_time.nanos())?;
                 cumsum
-                    .checked_div(Decimal::checked_from_ratio(total_elapsed_time, 1u128)?)
+                    .checked_div(from_uint(total_elapsed_time))
                     .map_err(Into::into)
             }
         }
@@ -247,20 +297,36 @@ impl CompressedSMADivision {
         remaining_division_size: Uint64,
         latest_value_elapsed_time: Uint64,
     ) -> Result<Decimal, ContractError> {
-        let current_cumsum_weight =
-            Uint64::from(self.updated_at.nanos()).checked_sub(self.started_at.nanos().into())?;
+        let current_cumsum_weight = elapsed_time(self.started_at.nanos(), self.updated_at.nanos())?;
 
         let new_cumsum_weight = remaining_division_size.checked_sub(latest_value_elapsed_time)?;
 
-        let division_average_before_latest_update = self
-            .cumsum
-            .checked_div(Decimal::checked_from_ratio(current_cumsum_weight, 1u128)?)?;
+        let division_average_before_latest_update =
+            self.cumsum.checked_div(from_uint(current_cumsum_weight))?;
 
         division_average_before_latest_update
-            .checked_mul(Decimal::checked_from_ratio(new_cumsum_weight, 1u128)?)
+            .checked_mul(from_uint(new_cumsum_weight))
             .map_err(Into::into)
     }
 
+    /// This function calculates the elapsed time since the latest value is updated
+    /// The elapsed time is capped by the division size:
+    /// If the end of the division is before the block time,
+    /// then the elapsed time is counted until the end of the division
+    ///
+    /// === end of division is before block time ===
+    ///
+    /// |  div 1   |
+    ///      ^ latest value updated
+    ///          ^ block time
+    ///      ████ <- latest value elapsed time
+    ///
+    /// === end of division is after block time ===
+    ///
+    /// |  div 1   |
+    ///      ^ latest value updated
+    ///               ^ block time
+    ///      ██████ <- latest value elapsed time
     fn latest_value_elapsed_time(
         &self,
         division_size: Uint64,
@@ -268,12 +334,9 @@ impl CompressedSMADivision {
     ) -> Result<Uint64, ContractError> {
         let ended_at = Uint64::from(self.started_at.nanos()).checked_add(division_size)?;
         let block_time = Uint64::from(block_time.nanos());
-        if block_time > ended_at {
-            ended_at.checked_sub(self.updated_at.nanos().into())
-        } else {
-            block_time.checked_sub(self.updated_at.nanos().into())
-        }
-        .map_err(Into::into)
+
+        let latest_value_persist_until = block_time.min(ended_at);
+        elapsed_time(self.updated_at.nanos(), latest_value_persist_until).map_err(Into::into)
     }
 
     fn weighted_latest_value(
@@ -283,9 +346,34 @@ impl CompressedSMADivision {
     ) -> Result<Decimal, ContractError> {
         let elapsed_time = self.latest_value_elapsed_time(division_size, block_time)?;
         self.latest_value
-            .checked_mul(Decimal::checked_from_ratio(elapsed_time, 1u128)?)
+            .checked_mul(from_uint(elapsed_time))
             .map_err(Into::into)
     }
+}
+
+fn elapsed_time(from: impl Into<Uint64>, to: impl Into<Uint64>) -> Result<Uint64, ContractError> {
+    let from = from.into();
+    let to = to.into();
+
+    to.checked_sub(from).map_err(Into::into)
+}
+
+fn forward(from: impl Into<Uint64>, by: impl Into<Uint64>) -> Result<Uint64, ContractError> {
+    let from = from.into();
+    let by = by.into();
+
+    from.checked_add(by).map_err(Into::into)
+}
+
+fn backward(from: impl Into<Uint64>, by: impl Into<Uint64>) -> Result<Uint64, ContractError> {
+    let from = from.into();
+    let by = by.into();
+
+    from.checked_sub(by).map_err(Into::into)
+}
+
+fn from_uint(uint: impl Into<Uint128>) -> Decimal {
+    Decimal::from_ratio(uint.into(), 1u128)
 }
 
 #[cfg(test)]
