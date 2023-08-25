@@ -15,8 +15,8 @@ pub struct CompressedSMADivision {
     /// The latest value that gets updated
     latest_value: Decimal,
 
-    /// cumulative sum of each updated value * elasped time since last update
-    cumsum: Decimal,
+    /// sum of each updated value * elasped time since last update
+    integral: Decimal,
 }
 
 impl CompressedSMADivision {
@@ -39,7 +39,7 @@ impl CompressedSMADivision {
             started_at,
             updated_at,
             latest_value: value,
-            cumsum: prev_value.checked_mul(from_uint(elapsed_time))?,
+            integral: prev_value.checked_mul(from_uint(elapsed_time))?,
         })
     }
 
@@ -50,7 +50,7 @@ impl CompressedSMADivision {
             started_at: self.started_at,
             updated_at,
             latest_value: value,
-            cumsum: self.cumsum.checked_add(
+            integral: self.integral.checked_add(
                 self.latest_value
                     .checked_mul(Decimal::checked_from_ratio(elapsed_time, 1u128)?)?,
             )?,
@@ -101,7 +101,7 @@ impl CompressedSMADivision {
     /// then divide by the total elapsed time (integral range)
     ///
     /// As this is `CompressionDivision`, not all the data points in the window is stored for gas optimization
-    /// When the window covers portion of the first division, it needs to readjust the cumsum
+    /// When the window covers portion of the first division, it needs to readjust the integral
     /// based on how far the window start time eats in to the first division proportionally.
     ///
     /// ## Assumptions
@@ -124,9 +124,9 @@ impl CompressedSMADivision {
         let first_division = divisions.next();
 
         // process first division
-        // this needs to be handled differently because the first division's cumsum needs to be recalibrated
+        // this needs to be handled differently because the first division's integral needs to be recalibrated
         // based on how far window start time eats in to the first division
-        let (mut processed_division, mut cumsum) = match first_division {
+        let (mut processed_division, mut integral) = match first_division {
             Some(division) => {
                 let division_started_at = Uint64::from(division.started_at.nanos());
 
@@ -143,40 +143,40 @@ impl CompressedSMADivision {
                 let window_started_before_last_first_div_update =
                     window_started_at < division.updated_at.nanos().into();
 
-                let cumsum =
+                let integral =
                 // |  div 1   |
                 //      ^ last first div updated
                 //   |          window           |
                 //   ^ window started at
                 //
-                // This case, existing cumsum needs to be taken into account
+                // This case, existing integral needs to be taken into account
                 if window_started_before_last_first_div_update {
                     let window_started_after_first_division =
                         window_started_at > division_started_at;
 
-                    let cumsum =
-                    // if the window start after the first division, then the first division's cumsum needs
+                    let integral =
+                    // if the window start after the first division, then the first division's integral needs
                     // readjustment based on how far the window start time eats in to the first division
                     if window_started_after_first_division {
                         division
-                            .adjusted_cumsum(remaining_division_size, latest_value_elapsed_time)?
+                            .adjusted_integral(remaining_division_size, latest_value_elapsed_time)?
                     }
-                    // if the window start before the first division, then the first division's cumsum can be used as is
+                    // if the window start before the first division, then the first division's integral can be used as is
                     else {
-                        division.cumsum
+                        division.integral
                     };
 
-                    cumsum
-                        .checked_add(division.weighted_latest_value(division_size, block_time)?)?
+                    integral
+                        .checked_add(division.latest_value_integral(division_size, block_time)?)?
                 }
-                // else disregard the existing cumsum, and calculate cumsum from the remaning division size
+                // else disregard the existing integral, and calculate integral from the remaning division size
                 else {
                     division
                         .latest_value
                         .checked_mul(from_uint(remaining_division_size))?
                 };
 
-                (division, cumsum)
+                (division, integral)
             }
             None => {
                 // if there is no divisions, check the latest removed one
@@ -195,7 +195,7 @@ impl CompressedSMADivision {
         // integrate the rest of divisions
         for division in divisions {
             // check if there is any gap between divisions
-            // if so, take the latest value * gap the missing cumsum
+            // if so, take the latest value * gap the missing integral
 
             // |  div 1   |    x    |    x    |  div 2  |
             //            ████████████████████ <- gap
@@ -210,10 +210,10 @@ impl CompressedSMADivision {
                 .latest_value
                 .checked_mul(from_uint(gap))?;
 
-            cumsum = cumsum
+            integral = integral
                 .checked_add(gap_integral)?
-                .checked_add(division.cumsum)?
-                .checked_add(division.weighted_latest_value(division_size, block_time)?)?;
+                .checked_add(division.integral)?
+                .checked_add(division.latest_value_integral(division_size, block_time)?)?;
 
             processed_division = division;
         }
@@ -221,7 +221,7 @@ impl CompressedSMADivision {
         let latest_division = processed_division;
 
         // if latest division end before block time,
-        // add latest value * elasped time after latest division to cumsum
+        // add latest value * elasped time after latest division to integral
         let latest_division_ended_at = latest_division.ended_at(division_size)?;
 
         // |   div 1   |   div 2   |   div 3   |
@@ -233,7 +233,7 @@ impl CompressedSMADivision {
                 elapsed_time(latest_division_ended_at, block_time.nanos())?;
 
             // integrate with the latest value by elasped time after latest division
-            cumsum = cumsum.checked_add(
+            integral = integral.checked_add(
                 latest_division
                     .latest_value
                     .checked_mul(from_uint(elasped_time_after_latest_division))?,
@@ -245,7 +245,7 @@ impl CompressedSMADivision {
                 // if a division gets removed, it must be older than window_started_at
                 // its latest value should be static throughout window start until first division within window
                 // so we take integral of it
-                // if window started at first division, then there is no missing cumsum and this will be 0
+                // if window started at first division, then there is no missing integral and this will be 0
                 //
                 // ==============================================
                 //
@@ -255,12 +255,12 @@ impl CompressedSMADivision {
                 //
                 // ==============================================
                 let missing_period = elapsed_time(window_started_at, first_div_started_at.nanos())?;
-                let missing_cumsum = latest_removed_division
+                let missing_integral = latest_removed_division
                     .latest_value
                     .checked_mul(from_uint(missing_period))?;
 
-                cumsum
-                    .checked_add(missing_cumsum)?
+                integral
+                    .checked_add(missing_integral)?
                     // for this case, we can be sure that total integral range is window size
                     // since it integrates from window stared at
                     .checked_div(from_uint(window_size))
@@ -285,27 +285,29 @@ impl CompressedSMADivision {
                 //                                      ^ end at block time
                 let started_at = window_started_at.max(first_div_started_at.nanos().into());
                 let total_elapsed_time = elapsed_time(started_at, block_time.nanos())?;
-                cumsum
+                integral
                     .checked_div(from_uint(total_elapsed_time))
                     .map_err(Into::into)
             }
         }
     }
 
-    fn adjusted_cumsum(
+    fn adjusted_integral(
         &self,
         remaining_division_size: Uint64,
         latest_value_elapsed_time: Uint64,
     ) -> Result<Decimal, ContractError> {
-        let current_cumsum_weight = elapsed_time(self.started_at.nanos(), self.updated_at.nanos())?;
+        let current_integral_range =
+            elapsed_time(self.started_at.nanos(), self.updated_at.nanos())?;
 
-        let new_cumsum_weight = remaining_division_size.checked_sub(latest_value_elapsed_time)?;
+        let new_integral_range = remaining_division_size.checked_sub(latest_value_elapsed_time)?;
 
-        let division_average_before_latest_update =
-            self.cumsum.checked_div(from_uint(current_cumsum_weight))?;
+        let division_average_before_latest_update = self
+            .integral
+            .checked_div(from_uint(current_integral_range))?;
 
         division_average_before_latest_update
-            .checked_mul(from_uint(new_cumsum_weight))
+            .checked_mul(from_uint(new_integral_range))
             .map_err(Into::into)
     }
 
@@ -339,7 +341,7 @@ impl CompressedSMADivision {
         elapsed_time(self.updated_at.nanos(), latest_value_persist_until).map_err(Into::into)
     }
 
-    fn weighted_latest_value(
+    fn latest_value_integral(
         &self,
         division_size: Uint64,
         block_time: Timestamp,
@@ -398,7 +400,7 @@ mod tests {
                 started_at,
                 updated_at,
                 latest_value: value,
-                cumsum: Decimal::percent(10) * Decimal::from_ratio(10u128, 1u128)
+                integral: Decimal::percent(10) * Decimal::from_ratio(10u128, 1u128)
             }
         );
 
@@ -415,7 +417,7 @@ mod tests {
                 started_at,
                 updated_at,
                 latest_value: value,
-                cumsum: Decimal::zero()
+                integral: Decimal::zero()
             }
         );
 
@@ -453,7 +455,7 @@ mod tests {
                 started_at,
                 updated_at,
                 latest_value: value,
-                cumsum: (Decimal::percent(10) * Decimal::from_ratio(10u128, 1u128))
+                integral: (Decimal::percent(10) * Decimal::from_ratio(10u128, 1u128))
                     + (Decimal::percent(20) * Decimal::from_ratio(20u128, 1u128))
             }
         );
@@ -1043,7 +1045,7 @@ mod tests {
             started_at: Timestamp::from_nanos(1000000000),
             updated_at: Timestamp::from_nanos(1000000022),
             latest_value: Decimal::percent(10),
-            cumsum: Decimal::percent(22),
+            integral: Decimal::percent(22),
         };
         let window_size = Uint64::from(1000u64);
         let division_size = Uint64::from(100u64);
@@ -1096,7 +1098,7 @@ mod tests {
             started_at,
             updated_at: Timestamp::from_nanos(91),
             latest_value: Decimal::zero(),
-            cumsum: Decimal::zero(),
+            integral: Decimal::zero(),
         };
 
         let block_time = Timestamp::from_nanos(100);
