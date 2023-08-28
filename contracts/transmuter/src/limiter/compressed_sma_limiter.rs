@@ -6,11 +6,25 @@ use crate::ContractError;
 
 use super::compressed_sma_division::CompressedSMADivision;
 
+/// Maximum number of divisions allowed in a window.
+/// This limited so that the contract can't be abused by setting a large division count,
+/// which will cause high gas usage when checking the limit, cleaning up divisions, etc.
 const MAX_DIVISION_COUNT: Uint64 = Uint64::new(10u64);
 
 #[cw_serde]
 pub struct WindowConfig {
+    /// Size of the window in nanoseconds
     pub window_size: Uint64,
+
+    /// Number of divisions in the window.
+    /// The window size must be evenly divisible by the division count.
+    /// While operating, the actual count of divisions is between 0 and division count + 1 inclusively
+    /// since window might cover only a part of the division, for example, if division count is 3:
+    ///
+    /// |   div 1   |   div 2   |   div 3   |   div 4   |
+    ///      |------------- window --------------|
+    ///
+    /// The window size is 3 divisions, but the actutal division needed for SMA is 4.
     pub division_count: Uint64,
 }
 
@@ -60,14 +74,17 @@ impl<'a> CompressedSMALimiter<'a> {
         );
 
         // division count must evenly divide window size
+        let is_window_evenly_dividable =
+            config.window_size.checked_rem(config.division_count)? == Uint64::zero();
         ensure!(
-            config.window_size.checked_rem(config.division_count)? == Uint64::zero(),
+            is_window_evenly_dividable,
             ContractError::UnevenWindowDivision {}
         );
 
         // clean up all existing divisions
-        while (self.divisions.pop_back(storage)?).is_some() {}
+        self.clean_up_all_divisions(storage)?;
 
+        // update config
         self.window_config.save(storage, config).map_err(Into::into)
     }
 
@@ -81,7 +98,12 @@ impl<'a> CompressedSMALimiter<'a> {
             .map_err(Into::into)
     }
 
-    fn remove_outdated_division(
+    fn clean_up_all_divisions(&self, storage: &mut dyn Storage) -> Result<(), ContractError> {
+        while (self.divisions.pop_back(storage)?).is_some() {}
+        Ok(())
+    }
+
+    fn clean_up_outdated_divisions(
         &self,
         storage: &mut dyn Storage,
         block_time: Timestamp,
@@ -103,41 +125,31 @@ impl<'a> CompressedSMALimiter<'a> {
     }
 
     /// Check if the value is within the limit and update the divisions
-    pub fn check_and_update(
+    pub fn check_limit_and_update(
         &self,
         storage: &mut dyn Storage,
         block_time: Timestamp,
         value: Decimal,
     ) -> Result<(), ContractError> {
         // clean up old divisions that are not in the window anymore
-        let latest_removed_division = self.remove_outdated_division(storage, block_time)?;
+        let latest_removed_division = self.clean_up_outdated_divisions(storage, block_time)?;
 
         let config = self.window_config.load(storage)?;
         let latest_division = self.divisions.back(storage)?;
+        let division_size = config.division_size()?;
 
-        // Cehck for upper limit if there is any existing division or there is any removed divisions
-        if latest_division.is_some() || latest_removed_division.is_some() {
-            let avg = CompressedSMADivision::compressed_moving_average(
-                latest_removed_division,
-                self.divisions
-                    .iter(storage)?
-                    .collect::<Result<Vec<_>, _>>()?,
-                config.division_size()?,
+        // Check for upper limit if there is any existing division or there is any removed divisions
+        let has_any_prev_data_points =
+            latest_division.is_some() || latest_removed_division.is_some();
+        if has_any_prev_data_points {
+            self.ensure_value_within_upper_limit(
+                storage,
+                division_size,
                 config.window_size,
                 block_time,
+                latest_removed_division,
+                value,
             )?;
-
-            // using saturating_add/sub since the overflowed value can't be exceeded anyway
-            let upper_limit = avg.saturating_add(self.boundary_offset.load(storage)?);
-
-            ensure!(
-                value <= upper_limit,
-                ContractError::ChangeUpperLimitExceeded {
-                    denom: self.denom.clone(),
-                    upper_limit,
-                    value,
-                }
-            );
         }
 
         // update latest value
@@ -147,9 +159,8 @@ impl<'a> CompressedSMALimiter<'a> {
         match latest_division {
             Some(division) => {
                 // If the division is over, create a new division
-                if division.elapsed_time(block_time)? >= config.division_size()? {
-                    let started_at =
-                        division.next_started_at(config.division_size()?, block_time)?;
+                if division.elapsed_time(block_time)? >= division_size {
+                    let started_at = division.next_started_at(division_size, block_time)?;
 
                     let new_division =
                         CompressedSMADivision::new(started_at, block_time, value, prev_value)?;
@@ -171,6 +182,40 @@ impl<'a> CompressedSMALimiter<'a> {
                 self.divisions.push_back(storage, &new_division)?;
             }
         };
+
+        Ok(())
+    }
+
+    fn ensure_value_within_upper_limit(
+        &self,
+        storage: &dyn Storage,
+        division_size: Uint64,
+        window_size: Uint64,
+        block_time: Timestamp,
+        latest_removed_division: Option<CompressedSMADivision>,
+        value: Decimal,
+    ) -> Result<(), ContractError> {
+        let avg = CompressedSMADivision::compressed_moving_average(
+            latest_removed_division,
+            self.divisions
+                .iter(storage)?
+                .collect::<Result<Vec<_>, _>>()?,
+            division_size,
+            window_size,
+            block_time,
+        )?;
+
+        // using saturating_add/sub since the overflowed value can't be exceeded anyway
+        let upper_limit = avg.saturating_add(self.boundary_offset.load(storage)?);
+
+        ensure!(
+            value <= upper_limit,
+            ContractError::ChangeUpperLimitExceeded {
+                denom: self.denom.clone(),
+                upper_limit,
+                value,
+            }
+        );
 
         Ok(())
     }
@@ -391,7 +436,7 @@ mod tests {
 
             let block_time = Timestamp::from_nanos(1661231280000000000);
             limiter
-                .remove_outdated_division(&mut deps.storage, block_time)
+                .clean_up_outdated_divisions(&mut deps.storage, block_time)
                 .unwrap();
 
             assert_eq!(list_divisions(&limiter, &deps.storage), vec![]);
@@ -444,7 +489,7 @@ mod tests {
             ];
             add_compressed_divisions(&mut deps.storage, &limiter, divisions.clone());
             limiter
-                .remove_outdated_division(&mut deps.storage, block_time)
+                .clean_up_outdated_divisions(&mut deps.storage, block_time)
                 .unwrap();
             assert_eq!(list_divisions(&limiter, &deps.storage), divisions);
 
@@ -569,7 +614,7 @@ mod tests {
             ];
             add_compressed_divisions(&mut deps.storage, &limiter, divisions.clone());
             limiter
-                .remove_outdated_division(&mut deps.storage, block_time)
+                .clean_up_outdated_divisions(&mut deps.storage, block_time)
                 .unwrap();
             assert_eq!(
                 list_divisions(&limiter, &deps.storage),
@@ -645,7 +690,7 @@ mod tests {
             ];
             add_compressed_divisions(&mut deps.storage, &limiter, divisions.clone());
             limiter
-                .remove_outdated_division(&mut deps.storage, block_time)
+                .clean_up_outdated_divisions(&mut deps.storage, block_time)
                 .unwrap();
             assert_eq!(
                 list_divisions(&limiter, &deps.storage),
@@ -718,7 +763,7 @@ mod tests {
             ];
             add_compressed_divisions(&mut deps.storage, &limiter, divisions.clone());
             limiter
-                .remove_outdated_division(&mut deps.storage, block_time)
+                .clean_up_outdated_divisions(&mut deps.storage, block_time)
                 .unwrap();
             assert_eq!(
                 list_divisions(&limiter, &deps.storage),
@@ -791,7 +836,7 @@ mod tests {
             ];
             add_compressed_divisions(&mut deps.storage, &limiter, divisions);
             limiter
-                .remove_outdated_division(&mut deps.storage, block_time)
+                .clean_up_outdated_divisions(&mut deps.storage, block_time)
                 .unwrap();
             assert_eq!(list_divisions(&limiter, &deps.storage), vec![]);
         }
@@ -828,7 +873,7 @@ mod tests {
             let block_time = Timestamp::from_nanos(1661231280000000000);
             let value = Decimal::percent(50);
             limiter
-                .check_and_update(&mut deps.storage, block_time, value)
+                .check_limit_and_update(&mut deps.storage, block_time, value)
                 .unwrap();
 
             // check divs count
@@ -839,7 +884,7 @@ mod tests {
             let block_time = block_time.plus_minutes(10);
             let value = Decimal::percent(55);
             limiter
-                .check_and_update(&mut deps.storage, block_time, value)
+                .check_limit_and_update(&mut deps.storage, block_time, value)
                 .unwrap();
 
             assert_eq!(list_divisions(&limiter, &deps.storage).len(), 1);
@@ -848,7 +893,7 @@ mod tests {
             let block_time = block_time.plus_minutes(15);
             let value = Decimal::from_str("0.580000000000000001").unwrap(); // 53% + 5% = 58%
             let err = limiter
-                .check_and_update(&mut deps.storage, block_time, value)
+                .check_limit_and_update(&mut deps.storage, block_time, value)
                 .unwrap_err();
 
             assert_eq!(
@@ -867,7 +912,7 @@ mod tests {
             let value = Decimal::from_str("0.587500000000000001").unwrap();
 
             let err = limiter
-                .check_and_update(&mut deps.storage, block_time, value)
+                .check_limit_and_update(&mut deps.storage, block_time, value)
                 .unwrap_err();
 
             assert_eq!(
@@ -883,7 +928,7 @@ mod tests {
 
             let value = Decimal::percent(40);
             limiter
-                .check_and_update(&mut deps.storage, block_time, value)
+                .check_limit_and_update(&mut deps.storage, block_time, value)
                 .unwrap();
 
             assert_eq!(list_divisions(&limiter, &deps.storage).len(), 2);
@@ -892,7 +937,7 @@ mod tests {
             let value = Decimal::from_str("0.560000000000000001").unwrap();
 
             let err = limiter
-                .check_and_update(&mut deps.storage, block_time, value)
+                .check_limit_and_update(&mut deps.storage, block_time, value)
                 .unwrap_err();
 
             assert_eq!(
@@ -909,7 +954,7 @@ mod tests {
             let value = Decimal::from_str("0.525000000000000001").unwrap();
 
             let err = limiter
-                .check_and_update(&mut deps.storage, block_time, value)
+                .check_limit_and_update(&mut deps.storage, block_time, value)
                 .unwrap_err();
 
             assert_eq!(list_divisions(&limiter, &deps.storage).len(), 2);
@@ -925,7 +970,7 @@ mod tests {
 
             let value = Decimal::from_str("0.525").unwrap();
             limiter
-                .check_and_update(&mut deps.storage, block_time, value)
+                .check_limit_and_update(&mut deps.storage, block_time, value)
                 .unwrap();
 
             assert_eq!(list_divisions(&limiter, &deps.storage).len(), 3);
@@ -957,7 +1002,7 @@ mod tests {
             let block_time = Timestamp::from_nanos(1661231280000000000);
             let value = Decimal::percent(40);
             limiter
-                .check_and_update(&mut deps.storage, block_time, value)
+                .check_limit_and_update(&mut deps.storage, block_time, value)
                 .unwrap();
 
             assert_eq!(list_divisions(&limiter, &deps.storage).len(), 1);
@@ -965,7 +1010,7 @@ mod tests {
             let block_time = block_time.plus_minutes(10); // -> + 10 mins
             let value = Decimal::percent(45);
             limiter
-                .check_and_update(&mut deps.storage, block_time, value)
+                .check_limit_and_update(&mut deps.storage, block_time, value)
                 .unwrap();
 
             assert_eq!(list_divisions(&limiter, &deps.storage).len(), 1);
@@ -973,7 +1018,7 @@ mod tests {
             let block_time = block_time.plus_minutes(60); // -> + 70 mins
             let value = Decimal::from_str("0.500000000000000001").unwrap();
             let err = limiter
-                .check_and_update(&mut deps.storage, block_time, value)
+                .check_limit_and_update(&mut deps.storage, block_time, value)
                 .unwrap_err();
 
             assert_eq!(list_divisions(&limiter, &deps.storage).len(), 1);
@@ -989,16 +1034,16 @@ mod tests {
 
             let value = Decimal::percent(40);
             limiter
-                .check_and_update(&mut deps.storage, block_time, value)
+                .check_limit_and_update(&mut deps.storage, block_time, value)
                 .unwrap();
 
             // 1st division stiil there
-            assert_eq!(dbg!(list_divisions(&limiter, &deps.storage)).len(), 2);
+            assert_eq!(list_divisions(&limiter, &deps.storage).len(), 2);
 
             let block_time = block_time.plus_minutes(10); // -> + 80 mins
             let value = Decimal::from_str("0.491666666666666667").unwrap();
             let err = limiter
-                .check_and_update(&mut deps.storage, block_time, value)
+                .check_limit_and_update(&mut deps.storage, block_time, value)
                 .unwrap_err();
 
             // 1st division is gone
@@ -1039,26 +1084,26 @@ mod tests {
             let block_time = Timestamp::from_nanos(1661231280000000000);
             let value = Decimal::percent(40);
             limiter
-                .check_and_update(&mut deps.storage, block_time, value)
+                .check_limit_and_update(&mut deps.storage, block_time, value)
                 .unwrap();
 
             let block_time = block_time.plus_minutes(20); // -> + 20 mins
             let value = Decimal::percent(45);
             limiter
-                .check_and_update(&mut deps.storage, block_time, value)
+                .check_limit_and_update(&mut deps.storage, block_time, value)
                 .unwrap();
 
             let block_time = block_time.plus_minutes(30); // -> + 50 mins
             let value = Decimal::percent(46);
             limiter
-                .check_and_update(&mut deps.storage, block_time, value)
+                .check_limit_and_update(&mut deps.storage, block_time, value)
                 .unwrap();
 
             let block_time = block_time.plus_minutes(70); // -> + 120 mins
             let value = Decimal::from_str("0.510000000000000001").unwrap();
 
             let err = limiter
-                .check_and_update(&mut deps.storage, block_time, value)
+                .check_limit_and_update(&mut deps.storage, block_time, value)
                 .unwrap_err();
 
             assert_eq!(

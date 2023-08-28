@@ -1,9 +1,29 @@
-use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{ensure, Decimal, StdError, Timestamp, Uint128, Uint64};
-
+use super::helpers::*;
 use crate::ContractError;
+use cosmwasm_schema::cw_serde;
+use cosmwasm_std::{ensure, Decimal, StdError, Timestamp, Uint64};
 
-/// CompressedDivision is a compressed representation of a data points in sliding window
+/// CompressedDivision is a compressed representation of a data points in sliding window.
+/// It is used to reduce the gas cost of storing, retriving & cleaning up data points in sliding window.
+///
+/// The structure of the compression is as follows:
+///
+/// ======= CompressedSMADivision =======
+/// |                                   |
+/// |                . `latest_value`   |
+/// ^ `started_at`   ^ `updated_at`     ^ `ended_at`[1]
+/// |████████████████                   |
+/// |     ^ integral = sum(value * elapsed_time) til latest update
+/// =====================================
+/// -------------------------------------> time
+///
+/// It is a lossy compression of the data points in the window, it keeps the integral
+/// of the data points until latest update of the division, which is enough to calculate
+/// the average of the data points in the window. But the average will become approximate once
+/// the window edge is within the integral region (before latest update of the division).
+///
+/// [1] `ended_at` is not defined in the struct because it can be calculated by `started_at` + `division_size`
+/// where `division_size` is defined at the `CompressedSMALimiter`
 #[cw_serde]
 pub struct CompressedSMADivision {
     /// Time where the division is mark as started
@@ -44,16 +64,15 @@ impl CompressedSMADivision {
     }
 
     pub fn update(&self, updated_at: Timestamp, value: Decimal) -> Result<Self, ContractError> {
-        let elapsed_time =
-            Uint64::from(updated_at.nanos()).checked_sub(self.updated_at.nanos().into())?;
+        let prev_updated_at = self.updated_at.nanos();
+        let elapsed_time = elapsed_time(prev_updated_at, updated_at.nanos())?;
         Ok(Self {
             started_at: self.started_at,
             updated_at,
             latest_value: value,
-            integral: self.integral.checked_add(
-                self.latest_value
-                    .checked_mul(Decimal::checked_from_ratio(elapsed_time, 1u128)?)?,
-            )?,
+            integral: self
+                .integral
+                .checked_add(self.latest_value.checked_mul(from_uint(elapsed_time))?)?,
         })
     }
 
@@ -77,6 +96,13 @@ impl CompressedSMADivision {
         forward(self.started_at.nanos(), division_size)
     }
 
+    /// Find the next started_at time based on the division size.
+    ///
+    /// In the following graphic, each division is `division_size` long.
+    ///
+    /// |   self   |         |         |          |
+    ///                                   ^ block_time
+    ///                                ^ next_started_at
     pub fn next_started_at(
         &self,
         division_size: Uint64,
@@ -85,9 +111,8 @@ impl CompressedSMADivision {
         let started_at = Uint64::from(self.started_at.nanos());
         let block_time = Uint64::from(block_time.nanos());
 
-        let ended_at = forward(started_at, division_size)?;
-        let elapsed_time_after_end = elapsed_time(ended_at, block_time)?;
-        let elapsed_time_within_next_div = elapsed_time_after_end.checked_rem(division_size)?;
+        let elapsed_time_within_next_div =
+            elapsed_time(started_at, block_time)?.checked_rem(division_size)?;
 
         Ok(Timestamp::from_nanos(
             backward(block_time, elapsed_time_within_next_div)?.u64(),
@@ -351,31 +376,6 @@ impl CompressedSMADivision {
             .checked_mul(from_uint(elapsed_time))
             .map_err(Into::into)
     }
-}
-
-fn elapsed_time(from: impl Into<Uint64>, to: impl Into<Uint64>) -> Result<Uint64, ContractError> {
-    let from = from.into();
-    let to = to.into();
-
-    to.checked_sub(from).map_err(Into::into)
-}
-
-fn forward(from: impl Into<Uint64>, by: impl Into<Uint64>) -> Result<Uint64, ContractError> {
-    let from = from.into();
-    let by = by.into();
-
-    from.checked_add(by).map_err(Into::into)
-}
-
-fn backward(from: impl Into<Uint64>, by: impl Into<Uint64>) -> Result<Uint64, ContractError> {
-    let from = from.into();
-    let by = by.into();
-
-    from.checked_sub(by).map_err(Into::into)
-}
-
-fn from_uint(uint: impl Into<Uint128>) -> Decimal {
-    Decimal::from_ratio(uint.into(), 1u128)
 }
 
 #[cfg(test)]
