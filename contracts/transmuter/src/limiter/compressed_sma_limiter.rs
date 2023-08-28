@@ -4,7 +4,7 @@ use cw_storage_plus::{Deque, Item};
 
 use crate::ContractError;
 
-use super::compressed_sma_division::CompressedSMADivision;
+use super::{compressed_sma_division::CompressedSMADivision, Limiter};
 
 /// Maximum number of divisions allowed in a window.
 /// This limited so that the contract can't be abused by setting a large division count,
@@ -56,7 +56,7 @@ pub struct CompressedSMALimiter<'a> {
 }
 
 impl<'a> CompressedSMALimiter<'a> {
-    const fn new(
+    pub const fn new(
         denom: String,
         window_config_namespace: &'a str,
         divisions_namespace: &'a str,
@@ -108,66 +108,6 @@ impl<'a> CompressedSMALimiter<'a> {
         self.boundary_offset
             .save(storage, &boundary_offset)
             .map_err(Into::into)
-    }
-
-    /// Check if the value is within the limit and update the divisions
-    pub fn check_limit_and_update(
-        &self,
-        storage: &mut dyn Storage,
-        block_time: Timestamp,
-        value: Decimal,
-    ) -> Result<(), ContractError> {
-        // clean up old divisions that are not in the window anymore
-        let latest_removed_division = self.clean_up_outdated_divisions(storage, block_time)?;
-
-        let config = self.window_config.load(storage)?;
-        let latest_division = self.divisions.back(storage)?;
-        let division_size = config.division_size()?;
-
-        // Check for upper limit if there is any existing division or there is any removed divisions
-        let has_any_prev_data_points =
-            latest_division.is_some() || latest_removed_division.is_some();
-        if has_any_prev_data_points {
-            self.ensure_value_within_upper_limit(
-                storage,
-                division_size,
-                config.window_size,
-                block_time,
-                latest_removed_division,
-                value,
-            )?;
-        }
-
-        // update latest value
-        let prev_value = self.latest_value.may_load(storage)?.unwrap_or_default();
-        self.latest_value.save(storage, &value)?;
-
-        match latest_division {
-            Some(division) => {
-                // If the division is over, create a new division
-                if division.elapsed_time(block_time)? >= division_size {
-                    let started_at = division.next_started_at(division_size, block_time)?;
-
-                    let new_division =
-                        CompressedSMADivision::new(started_at, block_time, value, prev_value)?;
-                    self.divisions.push_back(storage, &new_division)?;
-                }
-                // else update the current division
-                else {
-                    self.divisions.pop_back(storage)?;
-                    let updated_division = division.update(block_time, value)?;
-
-                    self.divisions.push_back(storage, &updated_division)?;
-                }
-            }
-            None => {
-                let new_division =
-                    CompressedSMADivision::new(block_time, block_time, value, value)?;
-                self.divisions.push_back(storage, &new_division)?;
-            }
-        };
-
-        Ok(())
     }
 
     fn clean_up_all_divisions(&self, storage: &mut dyn Storage) -> Result<(), ContractError> {
@@ -226,6 +166,68 @@ impl<'a> CompressedSMALimiter<'a> {
                 value,
             }
         );
+
+        Ok(())
+    }
+}
+
+impl Limiter for CompressedSMALimiter<'_> {
+    /// Check if the value is within the limit and update the divisions
+    fn check_limit_and_update(
+        &self,
+        storage: &mut dyn Storage,
+        block_time: Timestamp,
+        value: Decimal,
+    ) -> Result<(), ContractError> {
+        // clean up old divisions that are not in the window anymore
+        let latest_removed_division = self.clean_up_outdated_divisions(storage, block_time)?;
+
+        let config = self.window_config.load(storage)?;
+        let latest_division = self.divisions.back(storage)?;
+        let division_size = config.division_size()?;
+
+        // Check for upper limit if there is any existing division or there is any removed divisions
+        let has_any_prev_data_points =
+            latest_division.is_some() || latest_removed_division.is_some();
+        if has_any_prev_data_points {
+            self.ensure_value_within_upper_limit(
+                storage,
+                division_size,
+                config.window_size,
+                block_time,
+                latest_removed_division,
+                value,
+            )?;
+        }
+
+        // update latest value
+        let prev_value = self.latest_value.may_load(storage)?.unwrap_or_default();
+        self.latest_value.save(storage, &value)?;
+
+        match latest_division {
+            Some(division) => {
+                // If the division is over, create a new division
+                if division.elapsed_time(block_time)? >= division_size {
+                    let started_at = division.next_started_at(division_size, block_time)?;
+
+                    let new_division =
+                        CompressedSMADivision::new(started_at, block_time, value, prev_value)?;
+                    self.divisions.push_back(storage, &new_division)?;
+                }
+                // else update the current division
+                else {
+                    self.divisions.pop_back(storage)?;
+                    let updated_division = division.update(block_time, value)?;
+
+                    self.divisions.push_back(storage, &updated_division)?;
+                }
+            }
+            None => {
+                let new_division =
+                    CompressedSMADivision::new(block_time, block_time, value, value)?;
+                self.divisions.push_back(storage, &new_division)?;
+            }
+        };
 
         Ok(())
     }

@@ -4,6 +4,7 @@ use crate::ContractError;
 
 use super::TransmuterPool;
 
+// TODO: add limiter as parameter
 impl TransmuterPool {
     pub fn transmute(
         &mut self,

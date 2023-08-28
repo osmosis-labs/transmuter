@@ -33,6 +33,20 @@ pub struct Transmuter<'a> {
     pub(crate) admin: Admin<'a>,
 }
 
+/// Referencing limiter for each pool asset denom.
+/// This requires macro to avoid lifetime issue.
+macro_rules! limiter {
+    ($denom:expr) => {
+        $crate::limiter::CompressedSMALimiter::new(
+            $denom,
+            &format!("window_config__{}", $denom),
+            &format!("divisions__{}", $denom),
+            &format!("boundary_offset__{}", $denom),
+            &format!("latest_value__{}", $denom),
+        )
+    };
+}
+
 #[contract]
 #[error(ContractError)]
 impl Transmuter<'_> {
