@@ -1,5 +1,3 @@
-use std::fmt::Display;
-
 use cosmwasm_std::{
     CheckedFromRatioError, Coin, Decimal, DivideByZeroError, OverflowError, StdError, Uint128,
     Uint64,
@@ -76,8 +74,8 @@ pub enum ContractError {
     #[error("Division count must not exceed {max_division_count}")]
     DivisionCountExceeded { max_division_count: Uint64 },
 
-    #[error("Change limit error: {reason}")]
-    ChangeLimitError { reason: String },
+    #[error("Time must be monotonically increasing")]
+    NonMonotonicTime {},
 
     #[error(
         "Change upper limit exceeded for `{denom}`, upper limit is {upper_limit}, but the resulted ratio is {value}"
@@ -88,9 +86,6 @@ pub enum ContractError {
         value: Decimal,
     },
 
-    #[error("Calculation error: {reason}")]
-    CalculationError { reason: String },
-
     #[error("{0}")]
     OverflowError(#[from] OverflowError),
 
@@ -99,18 +94,4 @@ pub enum ContractError {
 
     #[error("{0}")]
     CheckedFromRatioError(#[from] CheckedFromRatioError),
-}
-
-impl ContractError {
-    pub fn calculation_error(error: impl Display) -> Self {
-        ContractError::CalculationError {
-            reason: error.to_string(),
-        }
-    }
-
-    pub fn change_limit_error(error: impl Display) -> Self {
-        ContractError::ChangeLimitError {
-            reason: error.to_string(),
-        }
-    }
 }

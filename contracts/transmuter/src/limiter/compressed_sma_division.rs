@@ -46,12 +46,7 @@ impl CompressedSMADivision {
         value: Decimal,
         prev_value: Decimal,
     ) -> Result<Self, ContractError> {
-        ensure!(
-            updated_at >= started_at,
-            ContractError::change_limit_error(
-                "`updated_at` must be greater than or equal to `started_at`"
-            )
-        );
+        ensure!(updated_at >= started_at, ContractError::NonMonotonicTime {});
 
         let elapsed_time = elapsed_time(started_at.nanos(), updated_at.nanos())?;
 
@@ -428,12 +423,7 @@ mod tests {
         let err =
             CompressedSMADivision::new(started_at, updated_at, value, prev_value).unwrap_err();
 
-        assert_eq!(
-            err,
-            ContractError::change_limit_error(
-                "`updated_at` must be greater than or equal to `started_at`"
-            )
-        );
+        assert_eq!(err, ContractError::NonMonotonicTime {});
     }
 
     #[test]

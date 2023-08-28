@@ -169,9 +169,7 @@ impl<'a> CompressedSMALimiter<'a> {
                 // else update the current division
                 else {
                     self.divisions.pop_back(storage)?;
-                    let updated_division = division
-                        .update(block_time, value)
-                        .map_err(ContractError::calculation_error)?;
+                    let updated_division = division.update(block_time, value)?;
 
                     self.divisions.push_back(storage, &updated_division)?;
                 }
