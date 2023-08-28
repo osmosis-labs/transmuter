@@ -35,12 +35,24 @@ impl WindowConfig {
             .map_err(Into::into)
     }
 }
+
 pub struct CompressedSMALimiter<'a> {
-    pub denom: String,
-    pub window_config: Item<'a, WindowConfig>,
-    pub divisions: Deque<'a, CompressedSMADivision>,
-    pub latest_value: Item<'a, Decimal>,
-    pub boundary_offset: Item<'a, Decimal>,
+    /// Denom of the token that this limiter keeps track the limit of.
+    denom: String,
+
+    /// Config for window and divisions
+    window_config: Item<'a, WindowConfig>,
+
+    /// Divisions in the window, divisions are ordered from oldest to newest.
+    /// Kept divisions must exist within or overlap with the window, else
+    /// they will be cleaned up.
+    divisions: Deque<'a, CompressedSMADivision>,
+
+    /// Latest updated value.
+    latest_value: Item<'a, Decimal>,
+
+    /// Offset from the moving average that the value is allowed to be updated to.
+    boundary_offset: Item<'a, Decimal>,
 }
 
 impl<'a> CompressedSMALimiter<'a> {
@@ -96,32 +108,6 @@ impl<'a> CompressedSMALimiter<'a> {
         self.boundary_offset
             .save(storage, &boundary_offset)
             .map_err(Into::into)
-    }
-
-    fn clean_up_all_divisions(&self, storage: &mut dyn Storage) -> Result<(), ContractError> {
-        while (self.divisions.pop_back(storage)?).is_some() {}
-        Ok(())
-    }
-
-    fn clean_up_outdated_divisions(
-        &self,
-        storage: &mut dyn Storage,
-        block_time: Timestamp,
-    ) -> Result<Option<CompressedSMADivision>, ContractError> {
-        let config = self.window_config.load(storage)?;
-
-        let mut latest_removed_division = None;
-
-        while let Some(division) = self.divisions.front(storage)? {
-            // if window completely passed the division, remove the division
-            if division.is_outdated(block_time, config.window_size, config.division_size()?)? {
-                latest_removed_division = self.divisions.pop_front(storage)?;
-            } else {
-                break;
-            }
-        }
-
-        Ok(latest_removed_division)
     }
 
     /// Check if the value is within the limit and update the divisions
@@ -182,6 +168,32 @@ impl<'a> CompressedSMALimiter<'a> {
         };
 
         Ok(())
+    }
+
+    fn clean_up_all_divisions(&self, storage: &mut dyn Storage) -> Result<(), ContractError> {
+        while (self.divisions.pop_back(storage)?).is_some() {}
+        Ok(())
+    }
+
+    fn clean_up_outdated_divisions(
+        &self,
+        storage: &mut dyn Storage,
+        block_time: Timestamp,
+    ) -> Result<Option<CompressedSMADivision>, ContractError> {
+        let config = self.window_config.load(storage)?;
+
+        let mut latest_removed_division = None;
+
+        while let Some(division) = self.divisions.front(storage)? {
+            // if window completely passed the division, remove the division
+            if division.is_outdated(block_time, config.window_size, config.division_size()?)? {
+                latest_removed_division = self.divisions.pop_front(storage)?;
+            } else {
+                break;
+            }
+        }
+
+        Ok(latest_removed_division)
     }
 
     fn ensure_value_within_upper_limit(
