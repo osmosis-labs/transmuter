@@ -179,7 +179,7 @@ impl CompressedSMADivision {
                     // readjustment based on how far the window start time eats in to the first division
                     if window_started_after_first_division {
                         division
-                            .adjusted_integral(remaining_division_size, latest_value_elapsed_time)?
+                            .adjusted_integral(window_started_at)?
                     }
                     // if the window start before the first division, then the first division's integral can be used as is
                     else {
@@ -312,15 +312,24 @@ impl CompressedSMADivision {
         }
     }
 
-    fn adjusted_integral(
-        &self,
-        remaining_division_size: Uint64,
-        latest_value_elapsed_time: Uint64,
-    ) -> Result<Decimal, ContractError> {
+    /// In case the window start time is within the first observing division and before latest division updated_at,
+    /// the integral needs to be adjusted based on how far the window start time eats in to the first division's
+    /// current integral range:
+    ///
+    /// |   div 1   |    div 2   |   div 3   |
+    ///       |         window         |
+    /// █████████ <- current integral range (from first division started at til latest value updated at)
+    ///       ███ <- new integral range (from window start time til latest value updated at)
+    ///         ^ latest value updated at
+    ///
+    /// The reason being that, existing integral is calculated based on the elapsed time since the first division started,
+    /// but the window start time has already gone past the first division started time, so we should weight the integral
+    /// based on the remaining time that the current integral represents, which means within window start time til latest value updated at.
+    fn adjusted_integral(&self, window_stared_at: Uint64) -> Result<Decimal, ContractError> {
         let current_integral_range =
             elapsed_time(self.started_at.nanos(), self.updated_at.nanos())?;
 
-        let new_integral_range = remaining_division_size.checked_sub(latest_value_elapsed_time)?;
+        let new_integral_range = elapsed_time(window_stared_at, self.updated_at.nanos())?;
 
         let division_average_before_latest_update = self
             .integral
