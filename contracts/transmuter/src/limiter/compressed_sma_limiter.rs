@@ -39,23 +39,7 @@ impl WindowConfig {
 }
 
 pub struct CompressedSMALimiterManager<'a> {
-    /// Denom of the token that this limiter keeps track the limit of.
-    denom: String,
-
-    /// Config for window and divisions
-    window_config: Item<'a, WindowConfig>,
-
-    /// Divisions in the window, divisions are ordered from oldest to newest.
-    /// Kept divisions must exist within or overlap with the window, else
-    /// they will be cleaned up.
-    divisions: Deque<'a, CompressedSMADivision>,
-
-    /// Latest updated value.
-    latest_value: Item<'a, Decimal>,
-
-    /// Offset from the moving average that the value is allowed to be updated to.
-    boundary_offset: Item<'a, Decimal>,
-
+    /// Map of (denom, human_readable_window) -> CompressedSMALimiter
     limiters: Map<'a, (&'a str, &'a str), CompressedSMALimiter>,
 }
 #[cw_serde]
@@ -104,20 +88,9 @@ impl CompressedSMALimiter {
 }
 
 impl<'a> CompressedSMALimiterManager<'a> {
-    pub const fn new(
-        denom: String,
-        window_config_namespace: &'a str,
-        divisions_namespace: &'a str,
-        boundary_offset_namespace: &'a str,
-        latest_value_namespace: &'a str,
-    ) -> Self {
+    pub const fn new(limiters_namespace: &'a str) -> Self {
         Self {
-            denom,
-            window_config: Item::new(window_config_namespace),
-            divisions: Deque::new(divisions_namespace),
-            boundary_offset: Item::new(boundary_offset_namespace),
-            latest_value: Item::new(latest_value_namespace),
-            limiters: Map::new("limiters"), // TODO: expose this
+            limiters: Map::new(limiters_namespace),
         }
     }
 
@@ -230,6 +203,7 @@ impl<'a> CompressedSMALimiterManager<'a> {
             !limiter.divisions.is_empty() || latest_removed_division.is_some();
         if has_any_prev_data_points {
             self.ensure_value_within_upper_limit(
+                denom,
                 limiter.divisions.clone(),
                 division_size,
                 config.window_size,
@@ -244,31 +218,28 @@ impl<'a> CompressedSMALimiterManager<'a> {
         let prev_value = limiter.latest_value;
         let latest_value = value;
 
-        let divisions = match limiter.divisions.is_empty() {
-            true => {
-                vec![CompressedSMADivision::new(
-                    block_time, block_time, value, value,
-                )?]
+        let divisions = if limiter.divisions.is_empty() {
+            vec![CompressedSMADivision::new(
+                block_time, block_time, value, value,
+            )?]
+        } else {
+            // If the division is over, create a new division
+            let mut divisions = VecDeque::from(limiter.divisions);
+            let latest_division = divisions.pop_back().expect("divisions must not be empty");
+
+            if latest_division.elapsed_time(block_time)? >= division_size {
+                let started_at = latest_division.next_started_at(division_size, block_time)?;
+
+                let new_division =
+                    CompressedSMADivision::new(started_at, block_time, value, prev_value)?;
+                divisions.push_back(latest_division);
+                divisions.push_back(new_division);
+                divisions.into()
             }
-            false => {
-                // If the division is over, create a new division
-                let mut divisions = VecDeque::from(limiter.divisions);
-                let latest_division = divisions.pop_back().expect("divisions must not be empty");
-
-                if latest_division.elapsed_time(block_time)? >= division_size {
-                    let started_at = latest_division.next_started_at(division_size, block_time)?;
-
-                    let new_division =
-                        CompressedSMADivision::new(started_at, block_time, value, prev_value)?;
-                    divisions.push_back(latest_division);
-                    divisions.push_back(new_division);
-                    divisions.into()
-                }
-                // else update the current division
-                else {
-                    divisions.push_back(latest_division.update(block_time, value)?);
-                    divisions.into()
-                }
+            // else update the current division
+            else {
+                divisions.push_back(latest_division.update(block_time, value)?);
+                divisions.into()
             }
         };
 
@@ -290,11 +261,6 @@ impl<'a> CompressedSMALimiterManager<'a> {
             },
         )?;
 
-        Ok(())
-    }
-
-    fn clean_up_all_divisions(&self, storage: &mut dyn Storage) -> Result<(), ContractError> {
-        while (self.divisions.pop_back(storage)?).is_some() {}
         Ok(())
     }
 
@@ -347,6 +313,7 @@ impl<'a> CompressedSMALimiterManager<'a> {
 
     fn ensure_value_within_upper_limit(
         &self,
+        denom: &str,
         divisions: Vec<CompressedSMADivision>,
         division_size: Uint64,
         window_size: Uint64,
@@ -369,7 +336,7 @@ impl<'a> CompressedSMALimiterManager<'a> {
         ensure!(
             value <= upper_limit,
             ContractError::ChangeUpperLimitExceeded {
-                denom: self.denom.clone(),
+                denom: denom.to_string(),
                 upper_limit,
                 value,
             }
@@ -394,13 +361,7 @@ mod tests {
         fn test_fail_due_to_div_count_does_not_evenly_divide_the_window() {
             let mut deps = mock_dependencies();
 
-            let limiter = CompressedSMALimiterManager::new(
-                String::from("denoma"),
-                "config",
-                "divisions",
-                "boundary_offset",
-                "latest_value",
-            );
+            let limiter = CompressedSMALimiterManager::new("limiters");
 
             let err = limiter
                 .register_limiter(
@@ -422,13 +383,7 @@ mod tests {
         fn test_fail_due_to_div_size_is_zero() {
             let mut deps = mock_dependencies();
 
-            let limiter = CompressedSMALimiterManager::new(
-                String::from("denoma"),
-                "config",
-                "divisions",
-                "boundary_offset",
-                "latest_value",
-            );
+            let limiter = CompressedSMALimiterManager::new("limiters");
 
             let err = limiter
                 .register_limiter(
@@ -455,13 +410,7 @@ mod tests {
         fn test_fail_due_to_max_division_count_exceeded() {
             let mut deps = mock_dependencies();
 
-            let limiter = CompressedSMALimiterManager::new(
-                String::from("denoma"),
-                "config",
-                "divisions",
-                "boundary_offset",
-                "latest_value",
-            );
+            let limiter = CompressedSMALimiterManager::new("limiters");
 
             let err = limiter
                 .register_limiter(
@@ -488,13 +437,7 @@ mod tests {
         fn test_successful() {
             let mut deps = mock_dependencies();
 
-            let limiter = CompressedSMALimiterManager::new(
-                String::from("denoma"),
-                "config",
-                "divisions",
-                "boundary_offset",
-                "latest_value",
-            );
+            let limiter = CompressedSMALimiterManager::new("limiters");
 
             limiter
                 .register_limiter(
@@ -527,13 +470,7 @@ mod tests {
         fn test_clean_up_old_divisions_if_update_config() {
             let mut deps = mock_dependencies();
 
-            let limiter = CompressedSMALimiterManager::new(
-                String::from("denoma"),
-                "config",
-                "divisions",
-                "boundary_offset",
-                "latest_value",
-            );
+            let limiter = CompressedSMALimiterManager::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64),
                 division_count: Uint64::from(2u64),
@@ -608,13 +545,7 @@ mod tests {
         fn test_empty_divisions() {
             let mut deps = mock_dependencies();
 
-            let limiter = CompressedSMALimiterManager::new(
-                String::from("denoma"),
-                "config",
-                "divisions",
-                "boundary_offset",
-                "latest_value",
-            );
+            let limiter = CompressedSMALimiterManager::new("limiters");
             limiter
                 .register_limiter(
                     &mut deps.storage,
@@ -643,13 +574,7 @@ mod tests {
         fn test_no_outdated_divisions() {
             let mut deps = mock_dependencies();
 
-            let limiter = CompressedSMALimiterManager::new(
-                String::from("denoma"),
-                "config",
-                "divisions",
-                "boundary_offset",
-                "latest_value",
-            );
+            let limiter = CompressedSMALimiterManager::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64),
                 division_count: Uint64::from(2u64),
@@ -707,13 +632,7 @@ mod tests {
 
             // with overlapping divisions
             let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new(
-                String::from("denoma"),
-                "config",
-                "divisions",
-                "boundary_offset",
-                "latest_value",
-            );
+            let limiter = CompressedSMALimiterManager::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64),
                 division_count: Uint64::from(2u64),
@@ -787,13 +706,7 @@ mod tests {
         #[test]
         fn test_with_single_outdated_divisions() {
             let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new(
-                String::from("denoma"),
-                "config",
-                "divisions",
-                "boundary_offset",
-                "latest_value",
-            );
+            let limiter = CompressedSMALimiterManager::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64),
                 division_count: Uint64::from(2u64),
@@ -865,13 +778,7 @@ mod tests {
         fn test_with_multiple_outdated_division() {
             // with no overlapping divisions
             let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new(
-                String::from("denoma"),
-                "config",
-                "divisions",
-                "boundary_offset",
-                "latest_value",
-            );
+            let limiter = CompressedSMALimiterManager::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64),
                 division_count: Uint64::from(2u64),
@@ -950,13 +857,7 @@ mod tests {
 
             // with some overlapping divisions
             let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new(
-                String::from("denoma"),
-                "config",
-                "divisions",
-                "boundary_offset",
-                "latest_value",
-            );
+            let limiter = CompressedSMALimiterManager::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64),
                 division_count: Uint64::from(2u64),
@@ -1035,13 +936,7 @@ mod tests {
 
             // with all outdated divisions
             let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new(
-                String::from("denoma"),
-                "config",
-                "divisions",
-                "boundary_offset",
-                "latest_value",
-            );
+            let limiter = CompressedSMALimiterManager::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64),
                 division_count: Uint64::from(2u64),
@@ -1122,13 +1017,7 @@ mod tests {
         #[test]
         fn test_no_clean_up_outdated() {
             let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new(
-                String::from("denoma"),
-                "config",
-                "divisions",
-                "boundary_offset",
-                "latest_value",
-            );
+            let limiter = CompressedSMALimiterManager::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64), // 1 hrs
                 division_count: Uint64::from(2u64),              // 30 mins each
@@ -1273,13 +1162,7 @@ mod tests {
         #[test]
         fn test_with_clean_up_outdated() {
             let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new(
-                String::from("denomb"),
-                "config",
-                "divisions",
-                "boundary_offset",
-                "latest_value",
-            );
+            let limiter = CompressedSMALimiterManager::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64), // 1 hrs
                 division_count: Uint64::from(4u64),              // 15 mins each
@@ -1377,13 +1260,7 @@ mod tests {
         #[test]
         fn test_with_skipped_windows() {
             let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new(
-                String::from("denomb"),
-                "config",
-                "divisions",
-                "boundary_offset",
-                "latest_value",
-            );
+            let limiter = CompressedSMALimiterManager::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64), // 1 hrs
                 division_count: Uint64::from(4u64),              // 15 mins each
