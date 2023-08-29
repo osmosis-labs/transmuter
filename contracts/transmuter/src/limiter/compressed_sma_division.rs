@@ -77,7 +77,6 @@ impl CompressedSMADivision {
         window_size: Uint64,
         division_size: Uint64,
     ) -> Result<bool, ContractError> {
-        dbg!(block_time);
         let window_started_at = backward(block_time.nanos(), window_size)?;
         let division_ended_at = forward(self.started_at.nanos(), division_size)?;
 
@@ -134,7 +133,7 @@ impl CompressedSMADivision {
     /// The above assumptions are guaranteed by the `CompressedSMALimiter`
     pub fn compressed_moving_average(
         latest_removed_division: Option<Self>,
-        divisions: impl IntoIterator<Item = Self>,
+        divisions: &Vec<CompressedSMADivision>,
         division_size: Uint64,
         window_size: Uint64,
         block_time: Timestamp,
@@ -466,7 +465,7 @@ mod tests {
         let block_time = Timestamp::from_nanos(1100);
         let average = CompressedSMADivision::compressed_moving_average(
             None,
-            divisions.into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,
@@ -495,7 +494,7 @@ mod tests {
         let block_time = Timestamp::from_nanos(1110);
         let average = CompressedSMADivision::compressed_moving_average(
             None,
-            divisions.clone().into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,
@@ -509,7 +508,7 @@ mod tests {
         let block_time = Timestamp::from_nanos(1115);
         let average = CompressedSMADivision::compressed_moving_average(
             None,
-            divisions.clone().into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,
@@ -527,7 +526,7 @@ mod tests {
         let block_time = Timestamp::from_nanos(1150);
         let average = CompressedSMADivision::compressed_moving_average(
             None,
-            divisions.clone().into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,
@@ -545,7 +544,7 @@ mod tests {
         let block_time = Timestamp::from_nanos(1200);
         let average = CompressedSMADivision::compressed_moving_average(
             None,
-            divisions.clone().into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,
@@ -575,7 +574,7 @@ mod tests {
         let block_time = Timestamp::from_nanos(1200);
         let average = CompressedSMADivision::compressed_moving_average(
             None,
-            divisions.into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,
@@ -616,7 +615,7 @@ mod tests {
         let block_time = Timestamp::from_nanos(1270);
         let average = CompressedSMADivision::compressed_moving_average(
             None,
-            divisions.into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,
@@ -666,7 +665,7 @@ mod tests {
 
         let average = CompressedSMADivision::compressed_moving_average(
             None,
-            divisions.into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,
@@ -718,7 +717,7 @@ mod tests {
 
         let average = CompressedSMADivision::compressed_moving_average(
             None,
-            divisions.clone().into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,
@@ -754,7 +753,7 @@ mod tests {
 
         let average = CompressedSMADivision::compressed_moving_average(
             None,
-            divisions.into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,
@@ -789,7 +788,7 @@ mod tests {
 
         let average = CompressedSMADivision::compressed_moving_average(
             None,
-            divisions.into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,
@@ -825,7 +824,7 @@ mod tests {
 
         let average = CompressedSMADivision::compressed_moving_average(
             None,
-            divisions.clone().into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,
@@ -847,7 +846,7 @@ mod tests {
 
         let average = CompressedSMADivision::compressed_moving_average(
             None,
-            divisions.into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,
@@ -896,7 +895,7 @@ mod tests {
 
         let average = CompressedSMADivision::compressed_moving_average(
             None,
-            divisions.clone().into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,
@@ -923,7 +922,7 @@ mod tests {
                 )
                 .unwrap(),
             ),
-            divisions.clone().into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,
@@ -952,7 +951,7 @@ mod tests {
                 )
                 .unwrap(),
             ),
-            divisions.into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,
@@ -996,7 +995,7 @@ mod tests {
 
         let average = CompressedSMADivision::compressed_moving_average(
             None,
-            divisions.clone().into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,
@@ -1018,7 +1017,7 @@ mod tests {
 
         let average = CompressedSMADivision::compressed_moving_average(
             None,
-            divisions.into_iter(),
+            &divisions,
             division_size,
             window_size,
             block_time,

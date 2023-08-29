@@ -85,6 +85,36 @@ impl CompressedSMALimiter {
 
         Ok(self)
     }
+
+    fn ensure_upper_limit(
+        &self,
+        denom: &str,
+        block_time: Timestamp,
+        latest_removed_division: Option<CompressedSMADivision>,
+        value: Decimal,
+    ) -> Result<(), ContractError> {
+        let avg = CompressedSMADivision::compressed_moving_average(
+            latest_removed_division,
+            &self.divisions,
+            self.window_config.division_size()?,
+            self.window_config.window_size,
+            block_time,
+        )?;
+
+        // using saturating_add/sub since the overflowed value can't be exceeded anyway
+        let upper_limit = avg.saturating_add(self.boundary_offset);
+
+        ensure!(
+            value <= upper_limit,
+            ContractError::ChangeUpperLimitExceeded {
+                denom: denom.to_string(),
+                upper_limit,
+                value,
+            }
+        );
+
+        Ok(())
+    }
 }
 
 impl<'a> CompressedSMALimiterManager<'a> {
@@ -188,13 +218,12 @@ impl<'a> CompressedSMALimiterManager<'a> {
         block_time: Timestamp,
         value: Decimal,
     ) -> Result<(), ContractError> {
-        dbg!(block_time);
         // clean up old divisions that are not in the window anymore
         let latest_removed_division =
             self.clean_up_outdated_divisions(storage, denom, human_readable_window, block_time)?;
 
         let limiter = self.get_limiter(storage, denom, human_readable_window)?;
-        let config = limiter.window_config;
+        let config = &limiter.window_config;
 
         let division_size = config.division_size()?;
 
@@ -202,16 +231,7 @@ impl<'a> CompressedSMALimiterManager<'a> {
         let has_any_prev_data_points =
             !limiter.divisions.is_empty() || latest_removed_division.is_some();
         if has_any_prev_data_points {
-            self.ensure_value_within_upper_limit(
-                denom,
-                limiter.divisions.clone(),
-                division_size,
-                config.window_size,
-                limiter.boundary_offset,
-                block_time,
-                latest_removed_division,
-                value,
-            )?;
+            limiter.ensure_upper_limit(denom, block_time, latest_removed_division, value)?
         }
 
         // update latest value
@@ -309,40 +329,6 @@ impl<'a> CompressedSMALimiterManager<'a> {
         )?;
 
         Ok(latest_removed_division)
-    }
-
-    fn ensure_value_within_upper_limit(
-        &self,
-        denom: &str,
-        divisions: Vec<CompressedSMADivision>,
-        division_size: Uint64,
-        window_size: Uint64,
-        boundary_offset: Decimal,
-        block_time: Timestamp,
-        latest_removed_division: Option<CompressedSMADivision>,
-        value: Decimal,
-    ) -> Result<(), ContractError> {
-        let avg = CompressedSMADivision::compressed_moving_average(
-            latest_removed_division,
-            divisions,
-            division_size,
-            window_size,
-            block_time,
-        )?;
-
-        // using saturating_add/sub since the overflowed value can't be exceeded anyway
-        let upper_limit = avg.saturating_add(boundary_offset);
-
-        ensure!(
-            value <= upper_limit,
-            ContractError::ChangeUpperLimitExceeded {
-                denom: denom.to_string(),
-                upper_limit,
-                value,
-            }
-        );
-
-        Ok(())
     }
 }
 
