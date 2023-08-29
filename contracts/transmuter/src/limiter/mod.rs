@@ -2,7 +2,7 @@ mod compressed_sma_division;
 mod compressed_sma_limiter;
 mod helpers;
 
-pub use compressed_sma_limiter::CompressedSMALimiter;
+pub use compressed_sma_limiter::CompressedSMALimiterManager;
 use cosmwasm_std::{Decimal, Storage, Timestamp};
 
 use crate::ContractError;

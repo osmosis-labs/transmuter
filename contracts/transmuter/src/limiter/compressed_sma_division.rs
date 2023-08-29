@@ -77,6 +77,7 @@ impl CompressedSMADivision {
         window_size: Uint64,
         division_size: Uint64,
     ) -> Result<bool, ContractError> {
+        dbg!(block_time);
         let window_started_at = backward(block_time.nanos(), window_size)?;
         let division_ended_at = forward(self.started_at.nanos(), division_size)?;
 
@@ -156,9 +157,6 @@ impl CompressedSMADivision {
                 let remaining_division_size =
                     elapsed_time(window_started_at, division.ended_at(division_size)?)?
                         .min(division_size);
-
-                let latest_value_elapsed_time =
-                    division.latest_value_elapsed_time(division_size, block_time)?;
 
                 let window_started_before_last_first_div_update =
                     window_started_at < division.updated_at.nanos().into();
