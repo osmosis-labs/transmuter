@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{ensure, Decimal, Storage, Timestamp, Uint64};
-use cw_storage_plus::{Deque, Item, Map};
+use cw_storage_plus::Map;
 
 use crate::ContractError;
 
@@ -60,7 +60,29 @@ pub struct CompressedSMALimiter {
 }
 
 impl CompressedSMALimiter {
+    fn new(window_config: WindowConfig, boundary_offset: Decimal) -> Result<Self, ContractError> {
+        Self {
+            divisions: vec![],
+            latest_value: Decimal::zero(),
+            window_config,
+            boundary_offset,
+        }
+        .ensure_window_config_constraint()
+    }
+
     fn set_window_config(mut self, config: WindowConfig) -> Result<Self, ContractError> {
+        // clean up all existing divisions
+        self.divisions.clear();
+
+        // update config
+        self.window_config = config;
+
+        // ensure window config constraint
+        self.ensure_window_config_constraint()
+    }
+
+    fn ensure_window_config_constraint(self) -> Result<Self, ContractError> {
+        let config = &self.window_config;
         // division count must not exceed MAX_DIVISION_COUNT
         ensure!(
             config.division_count <= MAX_DIVISION_COUNT,
@@ -76,12 +98,6 @@ impl CompressedSMALimiter {
             is_window_evenly_dividable,
             ContractError::UnevenWindowDivision {}
         );
-
-        // clean up all existing divisions
-        self.divisions.clear();
-
-        // update config
-        self.window_config = config;
 
         Ok(self)
     }
@@ -115,6 +131,37 @@ impl CompressedSMALimiter {
 
         Ok(())
     }
+
+    fn clean_up_outdated_divisions(
+        self,
+        block_time: Timestamp,
+    ) -> Result<(Option<CompressedSMADivision>, Self), ContractError> {
+        let mut latest_removed_division = None;
+
+        let mut divisions = VecDeque::from(self.divisions);
+
+        while let Some(division) = divisions.front() {
+            // if window completely passed the division, remove the division
+
+            if division.is_outdated(
+                block_time,
+                self.window_config.window_size,
+                self.window_config.division_size()?,
+            )? {
+                latest_removed_division = divisions.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        Ok((
+            latest_removed_division,
+            Self {
+                divisions: divisions.into(),
+                ..self
+            },
+        ))
+    }
 }
 
 impl<'a> CompressedSMALimiterManager<'a> {
@@ -132,20 +179,22 @@ impl<'a> CompressedSMALimiterManager<'a> {
         window_config: WindowConfig,
         boundary_offset: Decimal,
     ) -> Result<(), ContractError> {
-        let limiter = CompressedSMALimiter {
-            divisions: vec![],
-            latest_value: Decimal::zero(),
-            window_config: WindowConfig {
-                window_size: Uint64::zero(),
-                division_count: Uint64::zero(),
-            },
-            boundary_offset,
-        }
-        .set_window_config(window_config)?;
-
+        // TODO: check if the limiter already exists
+        let limiter = CompressedSMALimiter::new(window_config, boundary_offset)?;
         self.limiters
             .save(storage, (denom, human_readable_window), &limiter)
             .map_err(Into::into)
+    }
+
+    // TODO: test this
+    pub fn deregister_limiter(
+        &self,
+        storage: &mut dyn Storage,
+        denom: &str,
+        human_readable_window: &str,
+    ) {
+        self.limiters
+            .remove(storage, (denom, human_readable_window))
     }
 
     pub fn set_window_config(
@@ -219,13 +268,11 @@ impl<'a> CompressedSMALimiterManager<'a> {
         value: Decimal,
     ) -> Result<(), ContractError> {
         // clean up old divisions that are not in the window anymore
-        let latest_removed_division =
-            self.clean_up_outdated_divisions(storage, denom, human_readable_window, block_time)?;
+        let (latest_removed_division, mut limiter) = self
+            .get_limiter(storage, denom, human_readable_window)?
+            .clean_up_outdated_divisions(block_time)?;
 
-        let limiter = self.get_limiter(storage, denom, human_readable_window)?;
-        let config = &limiter.window_config;
-
-        let division_size = config.division_size()?;
+        let division_size = limiter.window_config.division_size()?;
 
         // Check for upper limit if there is any existing division or there is any removed divisions
         let has_any_prev_data_points =
@@ -236,9 +283,9 @@ impl<'a> CompressedSMALimiterManager<'a> {
 
         // update latest value
         let prev_value = limiter.latest_value;
-        let latest_value = value;
+        limiter.latest_value = value;
 
-        let divisions = if limiter.divisions.is_empty() {
+        limiter.divisions = if limiter.divisions.is_empty() {
             vec![CompressedSMADivision::new(
                 block_time, block_time, value, value,
             )?]
@@ -263,72 +310,11 @@ impl<'a> CompressedSMALimiterManager<'a> {
             }
         };
 
-        // update divisions
-        self.limiters.update(
-            storage,
-            (denom, human_readable_window),
-            |limiter: Option<CompressedSMALimiter>| -> Result<CompressedSMALimiter, ContractError> {
-                let limiter = limiter.ok_or(ContractError::LimiterDoesNotExist {
-                    denom: denom.to_string(),
-                    human_readable_window: human_readable_window.to_string(),
-                })?;
-
-                Ok(CompressedSMALimiter {
-                    divisions,
-                    latest_value,
-                    ..limiter
-                })
-            },
-        )?;
+        // save updated limiter
+        self.limiters
+            .save(storage, (denom, human_readable_window), &limiter)?;
 
         Ok(())
-    }
-
-    fn clean_up_outdated_divisions(
-        &self,
-        storage: &mut dyn Storage,
-        denom: &str,
-        human_readable_window: &str,
-        block_time: Timestamp,
-    ) -> Result<Option<CompressedSMADivision>, ContractError> {
-        let limiter = self.get_limiter(storage, denom, human_readable_window)?;
-
-        let mut latest_removed_division = None;
-
-        let mut divisions = VecDeque::from(limiter.divisions);
-
-        while let Some(division) = divisions.front() {
-            // if window completely passed the division, remove the division
-
-            if division.is_outdated(
-                block_time,
-                limiter.window_config.window_size,
-                limiter.window_config.division_size()?,
-            )? {
-                latest_removed_division = divisions.pop_front();
-            } else {
-                break;
-            }
-        }
-
-        // update divisions
-        self.limiters.update(
-            storage,
-            (denom, human_readable_window),
-            |limiter: Option<CompressedSMALimiter>| -> Result<CompressedSMALimiter, ContractError> {
-                let limiter = limiter.ok_or(ContractError::LimiterDoesNotExist {
-                    denom: denom.to_string(),
-                    human_readable_window: human_readable_window.to_string(),
-                })?;
-
-                Ok(CompressedSMALimiter {
-                    divisions: divisions.into(),
-                    ..limiter
-                })
-            },
-        )?;
-
-        Ok(latest_removed_division)
     }
 }
 
@@ -529,51 +515,30 @@ mod tests {
 
         #[test]
         fn test_empty_divisions() {
-            let mut deps = mock_dependencies();
-
-            let limiter = CompressedSMALimiterManager::new("limiters");
-            limiter
-                .register_limiter(
-                    &mut deps.storage,
-                    "denoma",
-                    "1h",
-                    WindowConfig {
-                        window_size: Uint64::from(3_600_000_000_000u64),
-                        division_count: Uint64::from(5u64),
-                    },
-                    Decimal::percent(10),
-                )
-                .unwrap();
+            let limiter = CompressedSMALimiter {
+                divisions: vec![],
+                latest_value: Decimal::zero(),
+                window_config: WindowConfig {
+                    window_size: Uint64::from(3_600_000_000_000u64),
+                    division_count: Uint64::from(5u64),
+                },
+                boundary_offset: Decimal::percent(10),
+            };
 
             let block_time = Timestamp::from_nanos(1661231280000000000);
-            limiter
-                .clean_up_outdated_divisions(&mut deps.storage, "denoma", "1h", block_time)
-                .unwrap();
+            let (latest_removed_division, limiter) =
+                limiter.clean_up_outdated_divisions(block_time).unwrap();
 
-            assert_eq!(
-                list_divisions(&limiter, "denoma", "1h", &deps.storage),
-                vec![]
-            );
+            assert_eq!(latest_removed_division, None);
+            assert_eq!(limiter.divisions, vec![]);
         }
 
         #[test]
         fn test_no_outdated_divisions() {
-            let mut deps = mock_dependencies();
-
-            let limiter = CompressedSMALimiterManager::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64),
                 division_count: Uint64::from(2u64),
             };
-            limiter
-                .register_limiter(
-                    &mut deps.storage,
-                    "denoma",
-                    "1h",
-                    config.clone(),
-                    Decimal::percent(10),
-                )
-                .unwrap();
 
             let block_time = Timestamp::from_nanos(1661231280000000000);
 
@@ -601,37 +566,23 @@ mod tests {
                 )
                 .unwrap(),
             ];
-            add_compressed_divisions(
-                &mut deps.storage,
-                &limiter,
-                "denoma",
-                "1h",
-                divisions.clone(),
-            );
-            limiter
-                .clean_up_outdated_divisions(&mut deps.storage, "denoma", "1h", block_time)
-                .unwrap();
-            assert_eq!(
-                list_divisions(&limiter, "denoma", "1h", &deps.storage),
-                divisions
-            );
+            let limiter = CompressedSMALimiter {
+                divisions: divisions.clone(),
+                latest_value: Decimal::percent(30),
+                window_config: config,
+                boundary_offset: Decimal::percent(10),
+            };
+            let (latest_removed_division, limiter) =
+                limiter.clean_up_outdated_divisions(block_time).unwrap();
+
+            assert_eq!(latest_removed_division, None);
+            assert_eq!(limiter.divisions, divisions);
 
             // with overlapping divisions
-            let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64),
                 division_count: Uint64::from(2u64),
             };
-            limiter
-                .register_limiter(
-                    &mut deps.storage,
-                    "denoma",
-                    "1h",
-                    config.clone(),
-                    Decimal::percent(10),
-                )
-                .unwrap();
 
             let offset_mins = 20;
             let divisions = vec![
@@ -676,36 +627,26 @@ mod tests {
                 )
                 .unwrap(),
             ];
-            add_compressed_divisions(
-                &mut deps.storage,
-                &limiter,
-                "denoma",
-                "1h",
-                divisions.clone(),
-            );
-            assert_eq!(
-                list_divisions(&limiter, "denoma", "1h", &deps.storage),
-                divisions
-            );
+            let limiter = CompressedSMALimiter {
+                divisions: divisions.clone(),
+                latest_value: Decimal::percent(30),
+                window_config: config,
+                boundary_offset: Decimal::percent(10),
+            };
+
+            let (latest_removed_division, limiter) =
+                limiter.clean_up_outdated_divisions(block_time).unwrap();
+
+            assert_eq!(latest_removed_division, None);
+            assert_eq!(limiter.divisions, divisions);
         }
 
         #[test]
         fn test_with_single_outdated_divisions() {
-            let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64),
                 division_count: Uint64::from(2u64),
             };
-            limiter
-                .register_limiter(
-                    &mut deps.storage,
-                    "denoma",
-                    "1h",
-                    config.clone(),
-                    Decimal::percent(10),
-                )
-                .unwrap();
 
             let block_time = Timestamp::from_nanos(1661231280000000000);
 
@@ -744,41 +685,28 @@ mod tests {
                 )
                 .unwrap(),
             ];
-            add_compressed_divisions(
-                &mut deps.storage,
-                &limiter,
-                "denoma",
-                "1h",
-                divisions.clone(),
-            );
-            limiter
-                .clean_up_outdated_divisions(&mut deps.storage, "denoma", "1h", block_time)
-                .unwrap();
-            assert_eq!(
-                list_divisions(&limiter, "denoma", "1h", &deps.storage),
-                divisions[1..].to_vec()
-            );
+            let limiter = CompressedSMALimiter {
+                divisions: divisions.clone(),
+                latest_value: Decimal::percent(30),
+                window_config: config,
+                boundary_offset: Decimal::percent(10),
+            };
+
+            let (latest_removed_division, limiter) =
+                limiter.clean_up_outdated_divisions(block_time).unwrap();
+
+            assert_eq!(latest_removed_division, Some(divisions[0].clone()));
+            assert_eq!(limiter.divisions, divisions[1..].to_vec());
         }
 
         #[test]
         fn test_with_multiple_outdated_division() {
             // with no overlapping divisions
-            let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new("limiters");
+
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64),
                 division_count: Uint64::from(2u64),
             };
-
-            limiter
-                .register_limiter(
-                    &mut deps.storage,
-                    "denoma",
-                    "1h",
-                    config.clone(),
-                    Decimal::percent(10),
-                )
-                .unwrap();
 
             let block_time = Timestamp::from_nanos(1661231280000000000);
 
@@ -826,38 +754,25 @@ mod tests {
                 )
                 .unwrap(),
             ];
-            add_compressed_divisions(
-                &mut deps.storage,
-                &limiter,
-                "denoma",
-                "1h",
-                divisions.clone(),
-            );
-            limiter
-                .clean_up_outdated_divisions(&mut deps.storage, "denoma", "1h", block_time)
-                .unwrap();
-            assert_eq!(
-                list_divisions(&limiter, "denoma", "1h", &deps.storage),
-                divisions[2..].to_vec()
-            );
+            let limiter = CompressedSMALimiter {
+                divisions: divisions.clone(),
+                latest_value: Decimal::percent(30),
+                window_config: config,
+                boundary_offset: Decimal::percent(10),
+            };
+
+            let (latest_removed_division, limiter) =
+                limiter.clean_up_outdated_divisions(block_time).unwrap();
+
+            assert_eq!(latest_removed_division, Some(divisions[1].clone()));
+            assert_eq!(limiter.divisions, divisions[2..].to_vec());
 
             // with some overlapping divisions
-            let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new("limiters");
+
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64),
                 division_count: Uint64::from(2u64),
             };
-
-            limiter
-                .register_limiter(
-                    &mut deps.storage,
-                    "denoma",
-                    "1h",
-                    config.clone(),
-                    Decimal::percent(10),
-                )
-                .unwrap();
 
             let block_time = Timestamp::from_nanos(1661231280000000000);
 
@@ -905,38 +820,24 @@ mod tests {
                 )
                 .unwrap(),
             ];
-            add_compressed_divisions(
-                &mut deps.storage,
-                &limiter,
-                "denoma",
-                "1h",
-                divisions.clone(),
-            );
-            limiter
-                .clean_up_outdated_divisions(&mut deps.storage, "denoma", "1h", block_time)
-                .unwrap();
-            assert_eq!(
-                list_divisions(&limiter, "denoma", "1h", &deps.storage),
-                divisions[1..].to_vec()
-            );
+
+            let limiter = CompressedSMALimiter {
+                divisions: divisions.clone(),
+                latest_value: Decimal::percent(30),
+                window_config: config,
+                boundary_offset: Decimal::percent(10),
+            };
+            let (latest_removed_division, limiter) =
+                limiter.clean_up_outdated_divisions(block_time).unwrap();
+
+            assert_eq!(latest_removed_division, Some(divisions[0].clone()));
+            assert_eq!(limiter.divisions, divisions[1..].to_vec());
 
             // with all outdated divisions
-            let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64),
                 division_count: Uint64::from(2u64),
             };
-
-            limiter
-                .register_limiter(
-                    &mut deps.storage,
-                    "denoma",
-                    "1h",
-                    config.clone(),
-                    Decimal::percent(10),
-                )
-                .unwrap();
 
             let block_time = Timestamp::from_nanos(1661231280000000000);
 
@@ -984,14 +885,18 @@ mod tests {
                 )
                 .unwrap(),
             ];
-            add_compressed_divisions(&mut deps.storage, &limiter, "denoma", "1h", divisions);
-            limiter
-                .clean_up_outdated_divisions(&mut deps.storage, "denoma", "1h", block_time)
-                .unwrap();
-            assert_eq!(
-                list_divisions(&limiter, "denoma", "1h", &deps.storage),
-                vec![]
-            );
+            let limiter = CompressedSMALimiter {
+                divisions: divisions.clone(),
+                latest_value: Decimal::percent(30),
+                window_config: config,
+                boundary_offset: Decimal::percent(10),
+            };
+
+            let (latest_removed_division, limiter) =
+                limiter.clean_up_outdated_divisions(block_time).unwrap();
+
+            assert_eq!(latest_removed_division, Some(divisions[2].clone()));
+            assert_eq!(limiter.divisions, vec![]);
         }
     }
 
@@ -1154,13 +1059,7 @@ mod tests {
                 division_count: Uint64::from(4u64),              // 15 mins each
             };
             limiter
-                .register_limiter(
-                    &mut deps.storage,
-                    "denomb",
-                    "1h",
-                    config.clone(),
-                    Decimal::zero(),
-                )
+                .register_limiter(&mut deps.storage, "denomb", "1h", config, Decimal::zero())
                 .unwrap();
 
             limiter
@@ -1227,12 +1126,6 @@ mod tests {
                 .check_limit_and_update(&mut deps.storage, "denomb", "1h", block_time, value)
                 .unwrap_err();
 
-            // 1st division is gone
-            assert_eq!(
-                list_divisions(&limiter, "denomb", "1h", &deps.storage).len(),
-                1
-            );
-
             assert_eq!(
                 err,
                 ContractError::ChangeUpperLimitExceeded {
@@ -1240,6 +1133,34 @@ mod tests {
                     upper_limit: Decimal::from_str("0.491666666666666666").unwrap(),
                     value: Decimal::from_str("0.491666666666666667").unwrap(),
                 }
+            );
+
+            // 1st division is not removed yet since limit exceeded first
+            assert_eq!(
+                list_divisions(&limiter, "denomb", "1h", &deps.storage).len(),
+                2
+            );
+
+            let old_divs = list_divisions(&limiter, "denomb", "1h", &deps.storage);
+            let value = Decimal::from_str("0.491666666666666666").unwrap();
+            limiter
+                .check_limit_and_update(&mut deps.storage, "denomb", "1h", block_time, value)
+                .unwrap();
+
+            // 1st division is removed, and add new division
+            assert_eq!(
+                list_divisions(&limiter, "denomb", "1h", &deps.storage),
+                vec![
+                    old_divs[1..].to_vec(),
+                    vec![CompressedSMADivision::new(
+                        block_time.minus_minutes(5), // @75 (= 15 * 5)
+                        block_time,
+                        value,
+                        Decimal::percent(40),
+                    )
+                    .unwrap()]
+                ]
+                .concat(),
             );
         }
 
