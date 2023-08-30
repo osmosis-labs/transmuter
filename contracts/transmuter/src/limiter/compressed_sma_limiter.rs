@@ -269,6 +269,31 @@ impl<'a> CompressedSMALimiterManager<'a> {
             })
     }
 
+    pub fn list_limiters_by_denom(
+        &self,
+        storage: &dyn Storage,
+        denom: &str,
+    ) -> Result<Vec<(String, CompressedSMALimiter)>, ContractError> {
+        // there is no need to limit, since the number of limiters is expected to be small
+        self.limiters
+            .prefix(denom)
+            .range(storage, None, None, cosmwasm_std::Order::Ascending)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn list_limiters(
+        &self,
+        storage: &dyn Storage,
+    ) -> Result<Vec<((String, String), CompressedSMALimiter)>, ContractError> {
+        // there is no need to limit, since the number of limiters is expected to be small
+        self.limiters
+            .range(storage, None, None, cosmwasm_std::Order::Ascending)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     /// Check if the value is within the limit and update the divisions
     fn check_limit_and_update(
         &self,
@@ -359,7 +384,7 @@ mod tests {
                 .unwrap();
 
             assert_eq!(
-                limiters(&limiter, &deps.storage),
+                limiter.list_limiters(&deps.storage).unwrap(),
                 vec![(
                     ("denoma".to_string(), "1m".to_string()),
                     CompressedSMALimiter {
@@ -388,7 +413,7 @@ mod tests {
                 .unwrap();
 
             assert_eq!(
-                limiters(&limiter, &deps.storage),
+                limiter.list_limiters(&deps.storage).unwrap(),
                 vec![
                     (
                         ("denoma".to_string(), "1h".to_string()),
@@ -431,7 +456,7 @@ mod tests {
                 .unwrap();
 
             assert_eq!(
-                limiters(&limiter, &deps.storage),
+                limiter.list_limiters(&deps.storage).unwrap(),
                 vec![
                     (
                         ("denoma".to_string(), "1h".to_string()),
@@ -470,6 +495,57 @@ mod tests {
                         }
                     )
                 ]
+            );
+
+            // list limiters by denom
+            assert_eq!(
+                limiter
+                    .list_limiters_by_denom(&deps.storage, "denoma")
+                    .unwrap(),
+                vec![
+                    (
+                        "1h".to_string(),
+                        CompressedSMALimiter {
+                            divisions: vec![],
+                            latest_value: Decimal::zero(),
+                            window_config: WindowConfig {
+                                window_size: Uint64::from(3_600_000_000_000u64),
+                                division_count: Uint64::from(2u64),
+                            },
+                            boundary_offset: Decimal::percent(10)
+                        }
+                    ),
+                    (
+                        "1m".to_string(),
+                        CompressedSMALimiter {
+                            divisions: vec![],
+                            latest_value: Decimal::zero(),
+                            window_config: WindowConfig {
+                                window_size: Uint64::from(604_800_000_000u64),
+                                division_count: Uint64::from(5u64),
+                            },
+                            boundary_offset: Decimal::percent(10)
+                        }
+                    )
+                ]
+            );
+
+            assert_eq!(
+                limiter
+                    .list_limiters_by_denom(&deps.storage, "denomb")
+                    .unwrap(),
+                vec![(
+                    "1m".to_string(),
+                    CompressedSMALimiter {
+                        divisions: vec![],
+                        latest_value: Decimal::zero(),
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10)
+                    }
+                )]
             );
         }
 
@@ -532,7 +608,7 @@ mod tests {
                 .unwrap();
 
             assert_eq!(
-                limiters(&limiter, &deps.storage),
+                limiter.list_limiters(&deps.storage).unwrap(),
                 vec![(
                     ("denoma".to_string(), "1m".to_string()),
                     CompressedSMALimiter {
@@ -561,7 +637,7 @@ mod tests {
                 .unwrap();
 
             assert_eq!(
-                limiters(&limiter, &deps.storage),
+                limiter.list_limiters(&deps.storage).unwrap(),
                 vec![
                     (
                         ("denoma".to_string(), "1h".to_string()),
@@ -593,7 +669,7 @@ mod tests {
             limiter.deregister_limiter(&mut deps.storage, "denoma", "1m");
 
             assert_eq!(
-                limiters(&limiter, &deps.storage),
+                limiter.list_limiters(&deps.storage).unwrap(),
                 vec![(
                     ("denoma".to_string(), "1h".to_string()),
                     CompressedSMALimiter {
@@ -610,18 +686,7 @@ mod tests {
 
             limiter.deregister_limiter(&mut deps.storage, "denoma", "1h");
 
-            assert_eq!(limiters(&limiter, &deps.storage), vec![]);
-        }
-
-        fn limiters(
-            manager: &CompressedSMALimiterManager,
-            storage: &dyn Storage,
-        ) -> Vec<((String, String), CompressedSMALimiter)> {
-            manager
-                .limiters
-                .range(storage, None, None, Order::Ascending)
-                .collect::<StdResult<Vec<_>>>()
-                .unwrap()
+            assert_eq!(limiter.list_limiters(&deps.storage).unwrap(), vec![]);
         }
     }
 
