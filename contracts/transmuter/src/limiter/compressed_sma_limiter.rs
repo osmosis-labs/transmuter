@@ -103,33 +103,76 @@ impl CompressedSMALimiter {
     }
 
     fn ensure_upper_limit(
-        &self,
-        denom: &str,
+        self,
         block_time: Timestamp,
-        latest_removed_division: Option<CompressedSMADivision>,
+        denom: &str,
         value: Decimal,
-    ) -> Result<(), ContractError> {
-        let avg = CompressedSMADivision::compressed_moving_average(
-            latest_removed_division,
-            &self.divisions,
-            self.window_config.division_size()?,
-            self.window_config.window_size,
-            block_time,
-        )?;
+    ) -> Result<Self, ContractError> {
+        let (latest_removed_division, updated_limiter) =
+            self.clean_up_outdated_divisions(block_time)?;
 
-        // using saturating_add/sub since the overflowed value can't be exceeded anyway
-        let upper_limit = avg.saturating_add(self.boundary_offset);
+        // Check for upper limit if there is any existing division or there is any removed divisions
+        let has_any_prev_data_points =
+            !updated_limiter.divisions.is_empty() || latest_removed_division.is_some();
 
-        ensure!(
-            value <= upper_limit,
-            ContractError::ChangeUpperLimitExceeded {
-                denom: denom.to_string(),
-                upper_limit,
-                value,
+        if has_any_prev_data_points {
+            let avg = CompressedSMADivision::compressed_moving_average(
+                latest_removed_division,
+                &updated_limiter.divisions,
+                updated_limiter.window_config.division_size()?,
+                updated_limiter.window_config.window_size,
+                block_time,
+            )?;
+
+            // using saturating_add/sub since the overflowed value can't be exceeded anyway
+            let upper_limit = avg.saturating_add(updated_limiter.boundary_offset);
+
+            ensure!(
+                value <= upper_limit,
+                ContractError::ChangeUpperLimitExceeded {
+                    denom: denom.to_string(),
+                    upper_limit,
+                    value,
+                }
+            );
+        }
+
+        Ok(updated_limiter)
+    }
+
+    fn update(self, block_time: Timestamp, value: Decimal) -> Result<Self, ContractError> {
+        let mut updated_limiter = self;
+
+        let division_size = updated_limiter.window_config.division_size()?;
+        let prev_value = updated_limiter.latest_value;
+        updated_limiter.latest_value = value;
+
+        updated_limiter.divisions = if updated_limiter.divisions.is_empty() {
+            vec![CompressedSMADivision::new(
+                block_time, block_time, value, value,
+            )?]
+        } else {
+            // If the division is over, create a new division
+            let mut divisions = VecDeque::from(updated_limiter.divisions);
+            let latest_division = divisions.pop_back().expect("divisions must not be empty");
+
+            if latest_division.elapsed_time(block_time)? >= division_size {
+                let started_at = latest_division.next_started_at(division_size, block_time)?;
+
+                let new_division =
+                    CompressedSMADivision::new(started_at, block_time, value, prev_value)?;
+                divisions.push_back(latest_division);
+                divisions.push_back(new_division);
+                divisions.into()
             }
-        );
+            // else update the current division
+            else {
+                divisions.push_back(latest_division.update(block_time, value)?);
+                divisions.into()
+            }
+        };
 
-        Ok(())
+        Ok(updated_limiter)
     }
 
     fn clean_up_outdated_divisions(
@@ -303,48 +346,10 @@ impl<'a> CompressedSMALimiterManager<'a> {
         block_time: Timestamp,
         value: Decimal,
     ) -> Result<(), ContractError> {
-        // clean up old divisions that are not in the window anymore
-        let (latest_removed_division, mut limiter) = self
+        let limiter = self
             .get_limiter(storage, denom, human_readable_window)?
-            .clean_up_outdated_divisions(block_time)?;
-
-        let division_size = limiter.window_config.division_size()?;
-
-        // Check for upper limit if there is any existing division or there is any removed divisions
-        let has_any_prev_data_points =
-            !limiter.divisions.is_empty() || latest_removed_division.is_some();
-        if has_any_prev_data_points {
-            limiter.ensure_upper_limit(denom, block_time, latest_removed_division, value)?
-        }
-
-        // update latest value
-        let prev_value = limiter.latest_value;
-        limiter.latest_value = value;
-
-        limiter.divisions = if limiter.divisions.is_empty() {
-            vec![CompressedSMADivision::new(
-                block_time, block_time, value, value,
-            )?]
-        } else {
-            // If the division is over, create a new division
-            let mut divisions = VecDeque::from(limiter.divisions);
-            let latest_division = divisions.pop_back().expect("divisions must not be empty");
-
-            if latest_division.elapsed_time(block_time)? >= division_size {
-                let started_at = latest_division.next_started_at(division_size, block_time)?;
-
-                let new_division =
-                    CompressedSMADivision::new(started_at, block_time, value, prev_value)?;
-                divisions.push_back(latest_division);
-                divisions.push_back(new_division);
-                divisions.into()
-            }
-            // else update the current division
-            else {
-                divisions.push_back(latest_division.update(block_time, value)?);
-                divisions.into()
-            }
-        };
+            .ensure_upper_limit(block_time, denom, value)?
+            .update(block_time, value)?;
 
         // save updated limiter
         self.limiters
@@ -361,8 +366,6 @@ mod tests {
     use super::*;
 
     mod registration {
-        use cosmwasm_std::Order;
-
         use super::*;
 
         #[test]
