@@ -27,6 +27,9 @@ pub enum ContractError {
         expected_denom: Vec<String>,
     },
 
+    #[error("Not a pool asset denom: {denom}")]
+    InvalidPoolAssetDenom { denom: String },
+
     #[error("Insufficient pool asset: required: {required}, available: {available}")]
     InsufficientPoolAsset { required: Coin, available: Coin },
 

@@ -1,5 +1,6 @@
 mod exit_pool;
 mod join_pool;
+mod ratio;
 mod transmute;
 
 use cosmwasm_schema::cw_serde;
