@@ -86,6 +86,14 @@ pub enum ContractError {
     },
 
     #[error(
+        "Limiter already exists for denom: {denom}, human_readable_window: {human_readable_window}"
+    )]
+    LimiterAlreadyExists {
+        denom: String,
+        human_readable_window: String,
+    },
+
+    #[error(
         "Change upper limit exceeded for `{denom}`, upper limit is {upper_limit}, but the resulted ratio is {value}"
     )]
     ChangeUpperLimitExceeded {

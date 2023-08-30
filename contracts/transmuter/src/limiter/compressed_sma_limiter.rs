@@ -179,14 +179,25 @@ impl<'a> CompressedSMALimiterManager<'a> {
         window_config: WindowConfig,
         boundary_offset: Decimal,
     ) -> Result<(), ContractError> {
-        // TODO: check if the limiter already exists
+        let is_registering_limiter_exists = self
+            .limiters
+            .may_load(storage, (denom, human_readable_window))?
+            .is_some();
+
+        ensure!(
+            !is_registering_limiter_exists,
+            ContractError::LimiterAlreadyExists {
+                denom: denom.to_string(),
+                human_readable_window: human_readable_window.to_string()
+            }
+        );
+
         let limiter = CompressedSMALimiter::new(window_config, boundary_offset)?;
         self.limiters
             .save(storage, (denom, human_readable_window), &limiter)
             .map_err(Into::into)
     }
 
-    // TODO: test this
     pub fn deregister_limiter(
         &self,
         storage: &mut dyn Storage,
@@ -323,6 +334,296 @@ mod tests {
     use cosmwasm_std::{testing::mock_dependencies, StdResult};
 
     use super::*;
+
+    mod registration {
+        use cosmwasm_std::Order;
+
+        use super::*;
+
+        #[test]
+        fn test_register_limiter_works() {
+            let mut deps = mock_dependencies();
+            let limiter = CompressedSMALimiterManager::new("limiters");
+
+            limiter
+                .register_limiter(
+                    &mut deps.storage,
+                    "denoma",
+                    "1m",
+                    WindowConfig {
+                        window_size: Uint64::from(604_800_000_000u64),
+                        division_count: Uint64::from(5u64),
+                    },
+                    Decimal::percent(10),
+                )
+                .unwrap();
+
+            assert_eq!(
+                limiters(&limiter, &deps.storage),
+                vec![(
+                    ("denoma".to_string(), "1m".to_string()),
+                    CompressedSMALimiter {
+                        divisions: vec![],
+                        latest_value: Decimal::zero(),
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10)
+                    }
+                )]
+            );
+
+            limiter
+                .register_limiter(
+                    &mut deps.storage,
+                    "denoma",
+                    "1h",
+                    WindowConfig {
+                        window_size: Uint64::from(3_600_000_000_000u64),
+                        division_count: Uint64::from(2u64),
+                    },
+                    Decimal::percent(10),
+                )
+                .unwrap();
+
+            assert_eq!(
+                limiters(&limiter, &deps.storage),
+                vec![
+                    (
+                        ("denoma".to_string(), "1h".to_string()),
+                        CompressedSMALimiter {
+                            divisions: vec![],
+                            latest_value: Decimal::zero(),
+                            window_config: WindowConfig {
+                                window_size: Uint64::from(3_600_000_000_000u64),
+                                division_count: Uint64::from(2u64),
+                            },
+                            boundary_offset: Decimal::percent(10)
+                        }
+                    ),
+                    (
+                        ("denoma".to_string(), "1m".to_string()),
+                        CompressedSMALimiter {
+                            divisions: vec![],
+                            latest_value: Decimal::zero(),
+                            window_config: WindowConfig {
+                                window_size: Uint64::from(604_800_000_000u64),
+                                division_count: Uint64::from(5u64),
+                            },
+                            boundary_offset: Decimal::percent(10)
+                        }
+                    )
+                ]
+            );
+
+            limiter
+                .register_limiter(
+                    &mut deps.storage,
+                    "denomb",
+                    "1m",
+                    WindowConfig {
+                        window_size: Uint64::from(604_800_000_000u64),
+                        division_count: Uint64::from(5u64),
+                    },
+                    Decimal::percent(10),
+                )
+                .unwrap();
+
+            assert_eq!(
+                limiters(&limiter, &deps.storage),
+                vec![
+                    (
+                        ("denoma".to_string(), "1h".to_string()),
+                        CompressedSMALimiter {
+                            divisions: vec![],
+                            latest_value: Decimal::zero(),
+                            window_config: WindowConfig {
+                                window_size: Uint64::from(3_600_000_000_000u64),
+                                division_count: Uint64::from(2u64),
+                            },
+                            boundary_offset: Decimal::percent(10)
+                        }
+                    ),
+                    (
+                        ("denoma".to_string(), "1m".to_string()),
+                        CompressedSMALimiter {
+                            divisions: vec![],
+                            latest_value: Decimal::zero(),
+                            window_config: WindowConfig {
+                                window_size: Uint64::from(604_800_000_000u64),
+                                division_count: Uint64::from(5u64),
+                            },
+                            boundary_offset: Decimal::percent(10)
+                        }
+                    ),
+                    (
+                        ("denomb".to_string(), "1m".to_string()),
+                        CompressedSMALimiter {
+                            divisions: vec![],
+                            latest_value: Decimal::zero(),
+                            window_config: WindowConfig {
+                                window_size: Uint64::from(604_800_000_000u64),
+                                division_count: Uint64::from(5u64),
+                            },
+                            boundary_offset: Decimal::percent(10)
+                        }
+                    )
+                ]
+            );
+        }
+
+        #[test]
+        fn test_register_same_key_fail() {
+            let mut deps = mock_dependencies();
+            let limiter = CompressedSMALimiterManager::new("limiters");
+
+            limiter
+                .register_limiter(
+                    &mut deps.storage,
+                    "denoma",
+                    "1m",
+                    WindowConfig {
+                        window_size: Uint64::from(604_800_000_000u64),
+                        division_count: Uint64::from(5u64),
+                    },
+                    Decimal::percent(10),
+                )
+                .unwrap();
+
+            let err = limiter
+                .register_limiter(
+                    &mut deps.storage,
+                    "denoma",
+                    "1m",
+                    WindowConfig {
+                        window_size: Uint64::from(604_800_000_000u64),
+                        division_count: Uint64::from(10u64),
+                    },
+                    Decimal::percent(10),
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::LimiterAlreadyExists {
+                    denom: "denoma".to_string(),
+                    human_readable_window: "1m".to_string()
+                }
+            );
+        }
+
+        #[test]
+        fn test_deregister() {
+            let mut deps = mock_dependencies();
+            let limiter = CompressedSMALimiterManager::new("limiters");
+
+            limiter
+                .register_limiter(
+                    &mut deps.storage,
+                    "denoma",
+                    "1m",
+                    WindowConfig {
+                        window_size: Uint64::from(604_800_000_000u64),
+                        division_count: Uint64::from(5u64),
+                    },
+                    Decimal::percent(10),
+                )
+                .unwrap();
+
+            assert_eq!(
+                limiters(&limiter, &deps.storage),
+                vec![(
+                    ("denoma".to_string(), "1m".to_string()),
+                    CompressedSMALimiter {
+                        divisions: vec![],
+                        latest_value: Decimal::zero(),
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10)
+                    }
+                )]
+            );
+
+            limiter
+                .register_limiter(
+                    &mut deps.storage,
+                    "denoma",
+                    "1h",
+                    WindowConfig {
+                        window_size: Uint64::from(3_600_000_000_000u64),
+                        division_count: Uint64::from(2u64),
+                    },
+                    Decimal::percent(10),
+                )
+                .unwrap();
+
+            assert_eq!(
+                limiters(&limiter, &deps.storage),
+                vec![
+                    (
+                        ("denoma".to_string(), "1h".to_string()),
+                        CompressedSMALimiter {
+                            divisions: vec![],
+                            latest_value: Decimal::zero(),
+                            window_config: WindowConfig {
+                                window_size: Uint64::from(3_600_000_000_000u64),
+                                division_count: Uint64::from(2u64),
+                            },
+                            boundary_offset: Decimal::percent(10)
+                        }
+                    ),
+                    (
+                        ("denoma".to_string(), "1m".to_string()),
+                        CompressedSMALimiter {
+                            divisions: vec![],
+                            latest_value: Decimal::zero(),
+                            window_config: WindowConfig {
+                                window_size: Uint64::from(604_800_000_000u64),
+                                division_count: Uint64::from(5u64),
+                            },
+                            boundary_offset: Decimal::percent(10)
+                        }
+                    )
+                ]
+            );
+
+            limiter.deregister_limiter(&mut deps.storage, "denoma", "1m");
+
+            assert_eq!(
+                limiters(&limiter, &deps.storage),
+                vec![(
+                    ("denoma".to_string(), "1h".to_string()),
+                    CompressedSMALimiter {
+                        divisions: vec![],
+                        latest_value: Decimal::zero(),
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(3_600_000_000_000u64),
+                            division_count: Uint64::from(2u64),
+                        },
+                        boundary_offset: Decimal::percent(10)
+                    }
+                )]
+            );
+
+            limiter.deregister_limiter(&mut deps.storage, "denoma", "1h");
+
+            assert_eq!(limiters(&limiter, &deps.storage), vec![]);
+        }
+
+        fn limiters(
+            manager: &CompressedSMALimiterManager,
+            storage: &dyn Storage,
+        ) -> Vec<((String, String), CompressedSMALimiter)> {
+            manager
+                .limiters
+                .range(storage, None, None, Order::Ascending)
+                .collect::<StdResult<Vec<_>>>()
+                .unwrap()
+        }
+    }
 
     mod set_config {
         use cosmwasm_std::DivideByZeroError;
