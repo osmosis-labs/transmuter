@@ -34,6 +34,8 @@ impl TransmuterPool {
 
         Ok(ratio)
     }
+
+    // TODO: ratio for all pool assets
 }
 
 #[cfg(test)]

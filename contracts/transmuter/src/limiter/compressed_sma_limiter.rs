@@ -38,7 +38,7 @@ impl WindowConfig {
     }
 }
 
-pub struct CompressedSMALimiterManager<'a> {
+pub struct Limiters<'a> {
     /// Map of (denom, human_readable_window) -> CompressedSMALimiter
     limiters: Map<'a, (&'a str, &'a str), CompressedSMALimiter>,
 }
@@ -207,14 +207,14 @@ impl CompressedSMALimiter {
     }
 }
 
-impl<'a> CompressedSMALimiterManager<'a> {
+impl<'a> Limiters<'a> {
     pub const fn new(limiters_namespace: &'a str) -> Self {
         Self {
             limiters: Map::new(limiters_namespace),
         }
     }
 
-    pub fn register_limiter(
+    pub fn register(
         &self,
         storage: &mut dyn Storage,
         denom: &str,
@@ -241,12 +241,7 @@ impl<'a> CompressedSMALimiterManager<'a> {
             .map_err(Into::into)
     }
 
-    pub fn deregister_limiter(
-        &self,
-        storage: &mut dyn Storage,
-        denom: &str,
-        human_readable_window: &str,
-    ) {
+    pub fn deregister(&self, storage: &mut dyn Storage, denom: &str, human_readable_window: &str) {
         self.limiters
             .remove(storage, (denom, human_readable_window))
     }
@@ -357,6 +352,49 @@ impl<'a> CompressedSMALimiterManager<'a> {
 
         Ok(())
     }
+
+    // TODO: write ratios function before testing this, check if it can return (&str, Decimal) or only (String, Decimal)
+    // TODO: check_limits_and_update(Vec<(denom, value)>) - turn the above function to this one
+    fn check_limits_and_update(
+        &self,
+        storage: &mut dyn Storage,
+        denom_value_pairs: Vec<(&str, Decimal)>,
+        block_time: Timestamp,
+    ) -> Result<(), ContractError> {
+        for (denom, value) in denom_value_pairs {
+            let limiters = self.list_limiters_by_denom(storage, denom)?;
+
+            for (human_readable_window, limiter) in limiters {
+                let limiter = limiter
+                    .ensure_upper_limit(block_time, denom, value)?
+                    .update(block_time, value)?;
+
+                // save updated limiter
+                self.limiters
+                    .save(storage, (denom, &human_readable_window), &limiter)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    // TODO: check_limits(Vec<(denom, value)>)
+    fn check_limits(
+        &self,
+        storage: &mut dyn Storage,
+        denom_value_pairs: Vec<(&str, Decimal)>,
+        block_time: Timestamp,
+    ) -> Result<(), ContractError> {
+        for (denom, value) in denom_value_pairs {
+            let limiters = self.list_limiters_by_denom(storage, denom)?;
+
+            for (_, limiter) in limiters {
+                limiter.ensure_upper_limit(block_time, denom, value)?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -371,10 +409,10 @@ mod tests {
         #[test]
         fn test_register_limiter_works() {
             let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new("limiters");
+            let limiter = Limiters::new("limiters");
 
             limiter
-                .register_limiter(
+                .register(
                     &mut deps.storage,
                     "denoma",
                     "1m",
@@ -403,7 +441,7 @@ mod tests {
             );
 
             limiter
-                .register_limiter(
+                .register(
                     &mut deps.storage,
                     "denoma",
                     "1h",
@@ -446,7 +484,7 @@ mod tests {
             );
 
             limiter
-                .register_limiter(
+                .register(
                     &mut deps.storage,
                     "denomb",
                     "1m",
@@ -555,10 +593,10 @@ mod tests {
         #[test]
         fn test_register_same_key_fail() {
             let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new("limiters");
+            let limiter = Limiters::new("limiters");
 
             limiter
-                .register_limiter(
+                .register(
                     &mut deps.storage,
                     "denoma",
                     "1m",
@@ -571,7 +609,7 @@ mod tests {
                 .unwrap();
 
             let err = limiter
-                .register_limiter(
+                .register(
                     &mut deps.storage,
                     "denoma",
                     "1m",
@@ -595,10 +633,10 @@ mod tests {
         #[test]
         fn test_deregister() {
             let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new("limiters");
+            let limiter = Limiters::new("limiters");
 
             limiter
-                .register_limiter(
+                .register(
                     &mut deps.storage,
                     "denoma",
                     "1m",
@@ -627,7 +665,7 @@ mod tests {
             );
 
             limiter
-                .register_limiter(
+                .register(
                     &mut deps.storage,
                     "denoma",
                     "1h",
@@ -669,7 +707,7 @@ mod tests {
                 ]
             );
 
-            limiter.deregister_limiter(&mut deps.storage, "denoma", "1m");
+            limiter.deregister(&mut deps.storage, "denoma", "1m");
 
             assert_eq!(
                 limiter.list_limiters(&deps.storage).unwrap(),
@@ -687,7 +725,7 @@ mod tests {
                 )]
             );
 
-            limiter.deregister_limiter(&mut deps.storage, "denoma", "1h");
+            limiter.deregister(&mut deps.storage, "denoma", "1h");
 
             assert_eq!(limiter.list_limiters(&deps.storage).unwrap(), vec![]);
         }
@@ -702,10 +740,10 @@ mod tests {
         fn test_fail_due_to_div_count_does_not_evenly_divide_the_window() {
             let mut deps = mock_dependencies();
 
-            let limiter = CompressedSMALimiterManager::new("limiters");
+            let limiter = Limiters::new("limiters");
 
             let err = limiter
-                .register_limiter(
+                .register(
                     &mut deps.storage,
                     "denoma",
                     "1m",
@@ -724,10 +762,10 @@ mod tests {
         fn test_fail_due_to_div_size_is_zero() {
             let mut deps = mock_dependencies();
 
-            let limiter = CompressedSMALimiterManager::new("limiters");
+            let limiter = Limiters::new("limiters");
 
             let err = limiter
-                .register_limiter(
+                .register(
                     &mut deps.storage,
                     "denoma",
                     "1m",
@@ -751,10 +789,10 @@ mod tests {
         fn test_fail_due_to_max_division_count_exceeded() {
             let mut deps = mock_dependencies();
 
-            let limiter = CompressedSMALimiterManager::new("limiters");
+            let limiter = Limiters::new("limiters");
 
             let err = limiter
-                .register_limiter(
+                .register(
                     &mut deps.storage,
                     "denoma",
                     "1m",
@@ -778,10 +816,10 @@ mod tests {
         fn test_successful() {
             let mut deps = mock_dependencies();
 
-            let limiter = CompressedSMALimiterManager::new("limiters");
+            let limiter = Limiters::new("limiters");
 
             limiter
-                .register_limiter(
+                .register(
                     &mut deps.storage,
                     "denoma",
                     "1m",
@@ -811,13 +849,13 @@ mod tests {
         fn test_clean_up_old_divisions_if_update_config() {
             let mut deps = mock_dependencies();
 
-            let limiter = CompressedSMALimiterManager::new("limiters");
+            let limiter = Limiters::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64),
                 division_count: Uint64::from(2u64),
             };
             limiter
-                .register_limiter(
+                .register(
                     &mut deps.storage,
                     "denoma",
                     "1h",
@@ -1277,14 +1315,14 @@ mod tests {
         #[test]
         fn test_no_clean_up_outdated() {
             let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new("limiters");
+            let limiter = Limiters::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64), // 1 hrs
                 division_count: Uint64::from(2u64),              // 30 mins each
             };
 
             limiter
-                .register_limiter(&mut deps.storage, "denoma", "1h", config, Decimal::zero())
+                .register(&mut deps.storage, "denoma", "1h", config, Decimal::zero())
                 .unwrap();
 
             limiter
@@ -1422,13 +1460,13 @@ mod tests {
         #[test]
         fn test_with_clean_up_outdated() {
             let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new("limiters");
+            let limiter = Limiters::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64), // 1 hrs
                 division_count: Uint64::from(4u64),              // 15 mins each
             };
             limiter
-                .register_limiter(&mut deps.storage, "denomb", "1h", config, Decimal::zero())
+                .register(&mut deps.storage, "denomb", "1h", config, Decimal::zero())
                 .unwrap();
 
             limiter
@@ -1536,13 +1574,13 @@ mod tests {
         #[test]
         fn test_with_skipped_windows() {
             let mut deps = mock_dependencies();
-            let limiter = CompressedSMALimiterManager::new("limiters");
+            let limiter = Limiters::new("limiters");
             let config = WindowConfig {
                 window_size: Uint64::from(3_600_000_000_000u64), // 1 hrs
                 division_count: Uint64::from(4u64),              // 15 mins each
             };
             limiter
-                .register_limiter(&mut deps.storage, "denomb", "1h", config, Decimal::zero())
+                .register(&mut deps.storage, "denomb", "1h", config, Decimal::zero())
                 .unwrap();
 
             limiter
@@ -1586,7 +1624,7 @@ mod tests {
     }
 
     fn list_divisions(
-        limiter: &CompressedSMALimiterManager,
+        limiter: &Limiters,
         denom: &str,
         humanized_window_size: &str,
         storage: &dyn Storage,
@@ -1600,7 +1638,7 @@ mod tests {
 
     fn add_compressed_divisions(
         storage: &mut dyn Storage,
-        limiter: &CompressedSMALimiterManager,
+        limiter: &Limiters,
         denom: &str,
         humanized_window_size: &str,
         divisions: impl IntoIterator<Item = CompressedSMADivision>,

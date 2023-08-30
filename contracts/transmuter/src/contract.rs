@@ -1,5 +1,9 @@
 use crate::{
-    admin::Admin, ensure_admin_authority, error::ContractError, shares::Shares,
+    admin::Admin,
+    ensure_admin_authority,
+    error::ContractError,
+    limiter::{CompressedSMALimiter, Limiters, WindowConfig},
+    shares::Shares,
     transmuter_pool::TransmuterPool,
 };
 use cosmwasm_schema::cw_serde;
@@ -31,6 +35,7 @@ pub struct Transmuter<'a> {
     pub(crate) pool: Item<'a, TransmuterPool>,
     pub(crate) shares: Shares<'a>,
     pub(crate) admin: Admin<'a>,
+    pub(crate) limiters: Limiters<'a>,
 }
 
 #[contract]
@@ -43,6 +48,7 @@ impl Transmuter<'_> {
             pool: Item::new("pool"),
             shares: Shares::new("share_denom"),
             admin: Admin::new("admin"),
+            limiters: Limiters::new("limiters"),
         }
     }
 
@@ -104,6 +110,119 @@ impl Transmuter<'_> {
             _ => Err(StdError::not_found(format!("No reply handler found for: {:?}", msg)).into()),
         }
     }
+
+    // TODO: test this
+    #[msg(exec)]
+    fn register_limiter(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        denom: String,
+        human_readable_window: String,
+        window_config: WindowConfig,
+        boundary_offset: Decimal,
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+
+        // only admin can register limiter
+        ensure_admin_authority!(info.sender, self.admin, deps.as_ref());
+
+        let window_size = window_config.window_size.to_string();
+        let division_count = window_config.division_count.to_string();
+        let boundary_offset_string = boundary_offset.to_string();
+        let attrs = vec![
+            ("method", "register_limiter"),
+            ("denom", &denom),
+            ("human_readable_window", &human_readable_window),
+            ("window_size", &window_size),
+            ("division_count", division_count.as_str()),
+            ("boundary_offset", boundary_offset_string.as_str()),
+        ];
+
+        // register limiter
+        self.limiters.register(
+            deps.storage,
+            &denom,
+            &human_readable_window,
+            window_config,
+            boundary_offset,
+        )?;
+
+        Ok(Response::new()
+            .add_attribute("method", "register_limiter")
+            .add_attributes(attrs))
+    }
+
+    #[msg(exec)]
+    fn deregister_limiter(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        denom: String,
+        human_readable_window: String,
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+
+        // only admin can deregister limiter
+        ensure_admin_authority!(info.sender, self.admin, deps.as_ref());
+
+        let attrs = vec![
+            ("method", "deregister_limiter"),
+            ("denom", &denom),
+            ("human_readable_window", &human_readable_window),
+        ];
+
+        // deregister limiter
+        self.limiters
+            .deregister(deps.storage, &denom, &human_readable_window);
+
+        Ok(Response::new()
+            .add_attribute("method", "deregister_limiter")
+            .add_attributes(attrs))
+    }
+
+    #[msg(exec)]
+    fn set_boundary_offset(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        denom: String,
+        human_readable_window: String,
+        boundary_offset: Decimal,
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+
+        // only admin can set boundary offset
+        ensure_admin_authority!(info.sender, self.admin, deps.as_ref());
+
+        let boundary_offset_string = boundary_offset.to_string();
+        let attrs = vec![
+            ("method", "set_boundary_offset"),
+            ("denom", &denom),
+            ("human_readable_window", &human_readable_window),
+            ("boundary_offset", boundary_offset_string.as_str()),
+        ];
+
+        // set boundary offset
+        self.limiters.set_boundary_offset(
+            deps.storage,
+            &denom,
+            &human_readable_window,
+            boundary_offset,
+        )?;
+
+        Ok(Response::new()
+            .add_attribute("method", "set_boundary_offset")
+            .add_attributes(attrs))
+    }
+
+    #[msg(query)]
+    fn list_limiters(&self, ctx: (Deps, Env)) -> Result<ListLimitersResponse, ContractError> {
+        let (deps, _env) = ctx;
+
+        let limiters = self.limiters.list_limiters(deps.storage)?;
+
+        Ok(ListLimitersResponse { limiters })
+    }
+
+    // === end fns to test ===
 
     #[msg(exec)]
     pub fn set_lp_denom_metadata(
@@ -171,6 +290,11 @@ impl Transmuter<'_> {
                 pool.join_pool(&info.funds)?;
                 Ok(pool)
             })?;
+
+        // TODO:
+        // - ensure updated pool ratio does not exceed limit
+        //   - list all (denom, ratio) pairs
+        //   - each pair, check against its limiters (check_and_update_limiters(Vec<(denom, ratio)>)
 
         // mint lp tokens
         let share_denom = self.shares.get_share_denom(deps.storage)?;
@@ -245,6 +369,11 @@ impl Transmuter<'_> {
                 pool.exit_pool(&tokens_out)?;
                 Ok(pool)
             })?;
+
+        // TODO:
+        // - ensure updated pool ratio does not exceed limit
+        //   - list all (denom, ratio) pairs
+        //   - each pair, check against its limiters (check_and_update_limiters(Vec<(denom, ratio)>))
 
         let bank_send_msg = BankMsg::Send {
             to_address: info.sender.to_string(),
@@ -540,6 +669,11 @@ impl Transmuter<'_> {
             admin_candidate: self.admin.candidate(deps)?,
         })
     }
+}
+
+#[cw_serde]
+pub struct ListLimitersResponse {
+    pub limiters: Vec<((String, String), CompressedSMALimiter)>,
 }
 
 #[cw_serde]

@@ -122,6 +122,11 @@ impl SudoMsg {
                     }
                 );
 
+                // TODO:
+                // - ensure updated pool ratio does not exceed limit
+                //   - list all (denom, ratio) pairs
+                //   - each pair, check against its limiters (check_and_update_limiters(Vec<(denom, ratio)>)
+
                 // save pool
                 transmuter.pool.save(deps.storage, &pool)?;
 
@@ -212,6 +217,11 @@ impl SudoMsg {
                         required: token_in.amount,
                     }
                 );
+
+                // TODO:
+                // - ensure updated pool ratio does not exceed limit
+                //   - list all (denom, ratio) pairs
+                //   - each pair, check against its limiters (check_and_update_limiters(Vec<(denom, ratio)>)
 
                 // save pool
                 transmuter.pool.save(deps.storage, &pool)?;
