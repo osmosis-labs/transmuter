@@ -107,7 +107,7 @@ impl SudoMsg {
                 }
 
                 let (pool, token_out) = transmuter._calc_out_amt_given_in(
-                    (deps.as_ref(), env),
+                    (deps.as_ref(), env.clone()),
                     token_in,
                     token_out_denom,
                     swap_fee,
@@ -126,6 +126,15 @@ impl SudoMsg {
                 // - ensure updated pool ratio does not exceed limit
                 //   - list all (denom, ratio) pairs
                 //   - each pair, check against its limiters (check_and_update_limiters(Vec<(denom, ratio)>)
+
+                // check and update limiters only if pool assets are not zero
+                if let Some(ratios) = pool.all_ratios()? {
+                    transmuter.limiters.check_limits_and_update(
+                        deps.storage,
+                        ratios,
+                        env.block.time,
+                    )?;
+                }
 
                 // save pool
                 transmuter.pool.save(deps.storage, &pool)?;

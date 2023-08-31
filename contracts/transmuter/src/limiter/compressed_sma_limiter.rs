@@ -335,64 +335,24 @@ impl<'a> Limiters<'a> {
             .map_err(Into::into)
     }
 
-    /// Check if the value is within the limit and update the divisions
-    fn check_limit_and_update(
+    pub fn check_limits_and_update(
         &self,
         storage: &mut dyn Storage,
-        denom: &str,
-        human_readable_window: &str,
-        block_time: Timestamp,
-        value: Decimal,
-    ) -> Result<(), ContractError> {
-        let limiter = self
-            .get_limiter(storage, denom, human_readable_window)?
-            .ensure_upper_limit(block_time, denom, value)?
-            .update(block_time, value)?;
-
-        // save updated limiter
-        self.limiters
-            .save(storage, (denom, human_readable_window), &limiter)?;
-
-        Ok(())
-    }
-
-    // TODO: write ratios function before testing this, check if it can return (&str, Decimal) or only (String, Decimal)
-    // TODO: check_limits_and_update(Vec<(denom, value)>) - turn the above function to this one
-    fn check_limits_and_update(
-        &self,
-        storage: &mut dyn Storage,
-        denom_value_pairs: Vec<(&str, Decimal)>,
+        denom_value_pairs: Vec<(String, Decimal)>,
         block_time: Timestamp,
     ) -> Result<(), ContractError> {
         for (denom, value) in denom_value_pairs {
-            let limiters = self.list_limiters_by_denom(storage, denom)?;
+            let limiters = self.list_limiters_by_denom(storage, denom.as_str())?;
 
             for (human_readable_window, limiter) in limiters {
+                dbg!(denom.as_str(), human_readable_window.as_str(), value);
                 let limiter = limiter
-                    .ensure_upper_limit(block_time, denom, value)?
+                    .ensure_upper_limit(block_time, denom.as_str(), value)?
                     .update(block_time, value)?;
 
                 // save updated limiter
                 self.limiters
-                    .save(storage, (denom, &human_readable_window), &limiter)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    // TODO: check_limits(Vec<(denom, value)>)
-    fn check_limits(
-        &self,
-        storage: &mut dyn Storage,
-        denom_value_pairs: Vec<(&str, Decimal)>,
-        block_time: Timestamp,
-    ) -> Result<(), ContractError> {
-        for (denom, value) in denom_value_pairs {
-            let limiters = self.list_limiters_by_denom(storage, denom)?;
-
-            for (_, limiter) in limiters {
-                limiter.ensure_upper_limit(block_time, denom, value)?;
+                    .save(storage, (denom.as_str(), &human_readable_window), &limiter)?;
             }
         }
 
@@ -834,17 +794,22 @@ mod tests {
                 )
                 .unwrap();
 
-            let config = limiter
-                .get_limiter(&deps.storage, "denoma", "1m")
-                .unwrap()
-                .window_config;
+            let limiters = limiter.list_limiters(&deps.storage).unwrap();
 
             assert_eq!(
-                config,
-                WindowConfig {
-                    window_size: Uint64::from(604_800_000_000u64),
-                    division_count: Uint64::from(5u64),
-                }
+                limiters,
+                vec![(
+                    ("denoma".to_string(), "1m".to_string()),
+                    CompressedSMALimiter {
+                        divisions: vec![],
+                        latest_value: Decimal::zero(),
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10)
+                    }
+                )]
             );
         }
 
@@ -1310,7 +1275,7 @@ mod tests {
         }
     }
 
-    mod check_and_update {
+    mod check_limits_and_update {
         use std::str::FromStr;
 
         use super::*;
@@ -1325,18 +1290,24 @@ mod tests {
             };
 
             limiter
-                .register(&mut deps.storage, "denoma", "1h", config, Decimal::zero())
-                .unwrap();
-
-            limiter
-                .set_boundary_offset(&mut deps.storage, "denoma", "1h", Decimal::percent(5))
+                .register(
+                    &mut deps.storage,
+                    "denoma",
+                    "1h",
+                    config,
+                    Decimal::percent(5),
+                )
                 .unwrap();
 
             // divs are clean, there will set no limit to it
             let block_time = Timestamp::from_nanos(1661231280000000000);
             let value = Decimal::percent(50);
             limiter
-                .check_limit_and_update(&mut deps.storage, "denoma", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denoma".to_string(), value)],
+                    block_time,
+                )
                 .unwrap();
 
             // check divs count
@@ -1350,7 +1321,11 @@ mod tests {
             let block_time = block_time.plus_minutes(10);
             let value = Decimal::percent(55);
             limiter
-                .check_limit_and_update(&mut deps.storage, "denoma", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denoma".to_string(), value)],
+                    block_time,
+                )
                 .unwrap();
 
             assert_eq!(
@@ -1362,7 +1337,11 @@ mod tests {
             let block_time = block_time.plus_minutes(15);
             let value = Decimal::from_str("0.580000000000000001").unwrap(); // 53% + 5% = 58%
             let err = limiter
-                .check_limit_and_update(&mut deps.storage, "denoma", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denoma".to_string(), value)],
+                    block_time,
+                )
                 .unwrap_err();
 
             assert_eq!(
@@ -1384,7 +1363,11 @@ mod tests {
             let value = Decimal::from_str("0.587500000000000001").unwrap();
 
             let err = limiter
-                .check_limit_and_update(&mut deps.storage, "denoma", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denoma".to_string(), value)],
+                    block_time,
+                )
                 .unwrap_err();
 
             assert_eq!(
@@ -1403,7 +1386,11 @@ mod tests {
 
             let value = Decimal::percent(40);
             limiter
-                .check_limit_and_update(&mut deps.storage, "denoma", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denoma".to_string(), value)],
+                    block_time,
+                )
                 .unwrap();
 
             assert_eq!(
@@ -1415,7 +1402,11 @@ mod tests {
             let value = Decimal::from_str("0.560000000000000001").unwrap();
 
             let err = limiter
-                .check_limit_and_update(&mut deps.storage, "denoma", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denoma".to_string(), value)],
+                    block_time,
+                )
                 .unwrap_err();
 
             assert_eq!(
@@ -1432,7 +1423,11 @@ mod tests {
             let value = Decimal::from_str("0.525000000000000001").unwrap();
 
             let err = limiter
-                .check_limit_and_update(&mut deps.storage, "denoma", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denoma".to_string(), value)],
+                    block_time,
+                )
                 .unwrap_err();
 
             assert_eq!(
@@ -1451,7 +1446,11 @@ mod tests {
 
             let value = Decimal::from_str("0.525").unwrap();
             limiter
-                .check_limit_and_update(&mut deps.storage, "denoma", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denoma".to_string(), value)],
+                    block_time,
+                )
                 .unwrap();
 
             assert_eq!(
@@ -1480,7 +1479,11 @@ mod tests {
             let block_time = Timestamp::from_nanos(1661231280000000000);
             let value = Decimal::percent(40);
             limiter
-                .check_limit_and_update(&mut deps.storage, "denomb", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denomb".to_string(), value)],
+                    block_time,
+                )
                 .unwrap();
 
             assert_eq!(
@@ -1491,7 +1494,11 @@ mod tests {
             let block_time = block_time.plus_minutes(10); // -> + 10 mins
             let value = Decimal::percent(45);
             limiter
-                .check_limit_and_update(&mut deps.storage, "denomb", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denomb".to_string(), value)],
+                    block_time,
+                )
                 .unwrap();
 
             assert_eq!(
@@ -1502,7 +1509,11 @@ mod tests {
             let block_time = block_time.plus_minutes(60); // -> + 70 mins
             let value = Decimal::from_str("0.500000000000000001").unwrap();
             let err = limiter
-                .check_limit_and_update(&mut deps.storage, "denomb", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denomb".to_string(), value)],
+                    block_time,
+                )
                 .unwrap_err();
 
             assert_eq!(
@@ -1521,7 +1532,11 @@ mod tests {
 
             let value = Decimal::percent(40);
             limiter
-                .check_limit_and_update(&mut deps.storage, "denomb", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denomb".to_string(), value)],
+                    block_time,
+                )
                 .unwrap();
 
             // 1st division stiil there
@@ -1533,7 +1548,11 @@ mod tests {
             let block_time = block_time.plus_minutes(10); // -> + 80 mins
             let value = Decimal::from_str("0.491666666666666667").unwrap();
             let err = limiter
-                .check_limit_and_update(&mut deps.storage, "denomb", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denomb".to_string(), value)],
+                    block_time,
+                )
                 .unwrap_err();
 
             assert_eq!(
@@ -1554,7 +1573,11 @@ mod tests {
             let old_divs = list_divisions(&limiter, "denomb", "1h", &deps.storage);
             let value = Decimal::from_str("0.491666666666666666").unwrap();
             limiter
-                .check_limit_and_update(&mut deps.storage, "denomb", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denomb".to_string(), value)],
+                    block_time,
+                )
                 .unwrap();
 
             // 1st division is removed, and add new division
@@ -1593,26 +1616,42 @@ mod tests {
             let block_time = Timestamp::from_nanos(1661231280000000000);
             let value = Decimal::percent(40);
             limiter
-                .check_limit_and_update(&mut deps.storage, "denomb", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denomb".to_string(), value)],
+                    block_time,
+                )
                 .unwrap();
 
             let block_time = block_time.plus_minutes(20); // -> + 20 mins
             let value = Decimal::percent(45);
             limiter
-                .check_limit_and_update(&mut deps.storage, "denomb", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denomb".to_string(), value)],
+                    block_time,
+                )
                 .unwrap();
 
             let block_time = block_time.plus_minutes(30); // -> + 50 mins
             let value = Decimal::percent(46);
             limiter
-                .check_limit_and_update(&mut deps.storage, "denomb", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denomb".to_string(), value)],
+                    block_time,
+                )
                 .unwrap();
 
             let block_time = block_time.plus_minutes(70); // -> + 120 mins
             let value = Decimal::from_str("0.510000000000000001").unwrap();
 
             let err = limiter
-                .check_limit_and_update(&mut deps.storage, "denomb", "1h", block_time, value)
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denomb".to_string(), value)],
+                    block_time,
+                )
                 .unwrap_err();
 
             assert_eq!(
@@ -1621,6 +1660,163 @@ mod tests {
                     denom: String::from("denomb"),
                     upper_limit: Decimal::percent(51),
                     value
+                }
+            );
+        }
+
+        #[test]
+        fn test_multiple_registered_limiters() {
+            let mut deps = mock_dependencies();
+            let limiter = Limiters::new("limiters");
+            let config_1h = WindowConfig {
+                window_size: Uint64::from(3_600_000_000_000u64), // 1 hrs
+                division_count: Uint64::from(2u64),              // 30 mins each
+            };
+
+            let config_1w = WindowConfig {
+                window_size: Uint64::from(25_920_000_000_000u64), // 7 days
+                division_count: Uint64::from(2u64),               // 3.5 days each
+            };
+
+            // Register multiple limiters
+            limiter
+                .register(
+                    &mut deps.storage,
+                    "denoma",
+                    "1h",
+                    config_1h.clone(),
+                    Decimal::percent(10),
+                )
+                .unwrap();
+
+            limiter
+                .register(
+                    &mut deps.storage,
+                    "denoma",
+                    "1w",
+                    config_1w.clone(),
+                    Decimal::percent(5),
+                )
+                .unwrap();
+
+            limiter
+                .register(
+                    &mut deps.storage,
+                    "denomb",
+                    "1h",
+                    config_1h,
+                    Decimal::percent(10),
+                )
+                .unwrap();
+
+            limiter
+                .register(
+                    &mut deps.storage,
+                    "denomb",
+                    "1w",
+                    config_1w,
+                    Decimal::percent(5),
+                )
+                .unwrap();
+
+            // Check limits and update for multiple limiters
+            let block_time = Timestamp::from_nanos(1661231280000000000);
+            let value_a = Decimal::percent(50);
+            let value_b = Decimal::percent(50);
+            limiter
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![
+                        ("denoma".to_string(), value_a),
+                        ("denomb".to_string(), value_b),
+                    ],
+                    block_time,
+                )
+                .unwrap();
+
+            let block_time = block_time.plus_minutes(60); // -> + 60 mins
+            let value = Decimal::from_str("0.600000000000000001").unwrap();
+
+            let err = limiter
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![
+                        ("denoma".to_string(), value),
+                        ("denomb".to_string(), Decimal::one() - value),
+                    ],
+                    block_time,
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::ChangeUpperLimitExceeded {
+                    denom: "denoma".to_string(),
+                    upper_limit: Decimal::from_str("0.6").unwrap(),
+                    value: Decimal::from_str("0.600000000000000001").unwrap(),
+                }
+            );
+
+            let value_a = Decimal::from_str("0.45").unwrap();
+            let value_b = Decimal::one() - value_a;
+
+            limiter
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![
+                        ("denoma".to_string(), value_a),
+                        ("denomb".to_string(), value_b),
+                    ],
+                    block_time,
+                )
+                .unwrap();
+
+            let block_time = block_time.plus_minutes(60); // -> + 120 mins
+
+            // denoma limit for  50% + 45% / 2 = 47.5% -> +5% = 52.5%
+            let value_a = Decimal::from_str("0.525000000000000001").unwrap();
+            let value_b = Decimal::one() - value_a;
+
+            let err = limiter
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![
+                        ("denoma".to_string(), value_a),
+                        ("denomb".to_string(), value_b),
+                    ],
+                    block_time,
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::ChangeUpperLimitExceeded {
+                    denom: "denoma".to_string(),
+                    upper_limit: Decimal::from_str("0.525").unwrap(),
+                    value: Decimal::from_str("0.525000000000000001").unwrap(),
+                }
+            );
+
+            let value_a = Decimal::from_str("0.550000000000000001").unwrap();
+            let value_b = Decimal::one() - value_a;
+
+            let err = limiter
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![
+                        ("denoma".to_string(), value_a),
+                        ("denomb".to_string(), value_b),
+                    ],
+                    block_time,
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::ChangeUpperLimitExceeded {
+                    denom: "denoma".to_string(),
+                    upper_limit: Decimal::from_str("0.55").unwrap(),
+                    value: Decimal::from_str("0.550000000000000001").unwrap(),
                 }
             );
         }
