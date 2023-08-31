@@ -133,12 +133,12 @@ impl CompressedSMADivision {
     /// The above assumptions are guaranteed by the `CompressedSMALimiter`
     pub fn compressed_moving_average(
         latest_removed_division: Option<Self>,
-        divisions: &Vec<CompressedSMADivision>,
+        divisions: &[CompressedSMADivision],
         division_size: Uint64,
         window_size: Uint64,
         block_time: Timestamp,
     ) -> Result<Decimal, ContractError> {
-        let mut divisions = divisions.into_iter();
+        let mut divisions = divisions.iter();
         let window_started_at = backward(block_time.nanos(), window_size)?;
 
         let first_division = divisions.next();

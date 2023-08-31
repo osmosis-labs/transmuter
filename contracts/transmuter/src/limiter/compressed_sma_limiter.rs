@@ -73,17 +73,6 @@ impl CompressedSMALimiter {
         .ensure_window_config_constraint()
     }
 
-    fn set_window_config(mut self, config: WindowConfig) -> Result<Self, ContractError> {
-        // clean up all existing divisions
-        self.divisions.clear();
-
-        // update config
-        self.window_config = config;
-
-        // ensure window config constraint
-        self.ensure_window_config_constraint()
-    }
-
     fn ensure_window_config_constraint(self) -> Result<Self, ContractError> {
         let config = &self.window_config;
         // division count must not exceed MAX_DIVISION_COUNT
@@ -249,28 +238,6 @@ impl<'a> Limiters<'a> {
             .remove(storage, (denom, human_readable_window))
     }
 
-    pub fn set_window_config(
-        &self,
-        storage: &mut dyn Storage,
-        denom: &str,
-        human_readable_window: &str,
-        config: &WindowConfig,
-    ) -> Result<(), ContractError> {
-        self.limiters.update(
-            storage,
-            (denom, human_readable_window),
-            |limiter: Option<CompressedSMALimiter>| -> Result<CompressedSMALimiter, ContractError> {
-                limiter
-                    .ok_or(ContractError::LimiterDoesNotExist {
-                        denom: denom.to_string(),
-                        human_readable_window: human_readable_window.to_string(),
-                    })?
-                    .set_window_config(config.clone())
-            },
-        )?;
-        Ok(())
-    }
-
     pub fn set_boundary_offset(
         &self,
         storage: &mut dyn Storage,
@@ -294,20 +261,6 @@ impl<'a> Limiters<'a> {
             },
         )?;
         Ok(())
-    }
-
-    pub fn get_limiter(
-        &self,
-        storage: &dyn Storage,
-        denom: &str,
-        human_readable_window: &str,
-    ) -> Result<CompressedSMALimiter, ContractError> {
-        self.limiters
-            .may_load(storage, (denom, human_readable_window))?
-            .ok_or_else(|| ContractError::LimiterDoesNotExist {
-                denom: denom.to_string(),
-                human_readable_window: human_readable_window.to_string(),
-            })
     }
 
     pub fn list_limiters_by_denom(
@@ -362,7 +315,7 @@ impl<'a> Limiters<'a> {
 
 #[cfg(test)]
 mod tests {
-    use cosmwasm_std::{testing::mock_dependencies, StdResult};
+    use cosmwasm_std::testing::mock_dependencies;
 
     use super::*;
 
@@ -810,77 +763,6 @@ mod tests {
                         boundary_offset: Decimal::percent(10)
                     }
                 )]
-            );
-        }
-
-        #[test]
-        fn test_clean_up_old_divisions_if_update_config() {
-            let mut deps = mock_dependencies();
-
-            let limiter = Limiters::new("limiters");
-            let config = WindowConfig {
-                window_size: Uint64::from(3_600_000_000_000u64),
-                division_count: Uint64::from(2u64),
-            };
-            limiter
-                .register(
-                    &mut deps.storage,
-                    "denoma",
-                    "1h",
-                    config.clone(),
-                    Decimal::percent(10),
-                )
-                .unwrap();
-
-            let block_time = Timestamp::from_nanos(1661231280000000000);
-
-            let divisions = vec![
-                CompressedSMADivision::new(
-                    block_time.minus_nanos(config.window_size.u64()),
-                    block_time
-                        .minus_nanos(config.window_size.u64())
-                        .plus_minutes(10),
-                    Decimal::percent(20),
-                    Decimal::percent(10),
-                )
-                .unwrap(),
-                CompressedSMADivision::new(
-                    block_time.minus_nanos(
-                        config.window_size.u64() - config.division_size().unwrap().u64(),
-                    ),
-                    block_time
-                        .minus_nanos(
-                            config.window_size.u64() - config.division_size().unwrap().u64(),
-                        )
-                        .plus_minutes(20),
-                    Decimal::percent(30),
-                    Decimal::percent(20),
-                )
-                .unwrap(),
-            ];
-            add_compressed_divisions(
-                &mut deps.storage,
-                &limiter,
-                "denoma",
-                "1h",
-                divisions.clone(),
-            );
-            assert_eq!(
-                list_divisions(&limiter, "denoma", "1h", &deps.storage),
-                divisions
-            );
-
-            let config = WindowConfig {
-                window_size: Uint64::from(3_600_000_000_000u64),
-                division_count: Uint64::from(4u64),
-            };
-            limiter
-                .set_window_config(&mut deps.storage, "denoma", "1h", &config)
-                .unwrap();
-
-            assert_eq!(
-                list_divisions(&limiter, "denoma", "1h", &deps.storage),
-                vec![]
             );
         }
     }
@@ -1833,29 +1715,5 @@ mod tests {
             .load(storage, (denom, humanized_window_size))
             .unwrap()
             .divisions
-    }
-
-    fn add_compressed_divisions(
-        storage: &mut dyn Storage,
-        limiter: &Limiters,
-        denom: &str,
-        humanized_window_size: &str,
-        divisions: impl IntoIterator<Item = CompressedSMADivision>,
-    ) {
-        limiter
-            .limiters
-            .update(
-                storage,
-                (denom, humanized_window_size),
-                |limiter| -> StdResult<_> {
-                    let limiter = limiter.unwrap();
-
-                    Ok(CompressedSMALimiter {
-                        divisions: limiter.divisions.into_iter().chain(divisions).collect(),
-                        ..limiter
-                    })
-                },
-            )
-            .unwrap();
     }
 }
