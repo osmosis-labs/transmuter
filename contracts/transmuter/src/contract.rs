@@ -893,6 +893,7 @@ mod tests {
         let init_msg = InstantiateMsg {
             pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
             admin: Some(admin.to_string()),
+            lp_subdenom: "usomoion".to_string(),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -947,6 +948,7 @@ mod tests {
         let init_msg = InstantiateMsg {
             pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
             admin: Some(admin.to_string()),
+            lp_subdenom: "usomoion".to_string(),
         };
 
         instantiate(deps.as_mut(), mock_env(), mock_info(admin, &[]), init_msg).unwrap();

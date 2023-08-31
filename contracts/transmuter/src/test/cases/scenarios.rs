@@ -408,7 +408,7 @@ fn test_swap() {
     t.assert_account_balances("bob", vec![Coin::new(29_902, COSMOS_USDC)], vec!["uosmo"]);
 
     // swap back with `SwapExactAmountOut`
-    let token_out = Coin::new(1_500, ETH_USDC);
+    let token_out = Coin::new(1_500, AXL_USDC);
 
     cp.swap_exact_amount_out(
         MsgSwapExactAmountOut {
@@ -434,21 +434,21 @@ fn test_swap() {
     assert_eq!(
         total_pool_liquidity,
         vec![
-            Coin::new(29_902, ETH_USDC),
+            Coin::new(29_902, AXL_USDC),
             Coin::new(100_000 - 29_902, COSMOS_USDC),
         ]
     );
 
     // check balances
     t.assert_contract_balances(&[
-        Coin::new(29_902, ETH_USDC),
+        Coin::new(29_902, AXL_USDC),
         Coin::new(100_000 + 100_000 - 29_902, COSMOS_USDC),
     ]);
 
     t.assert_account_balances(
         "bob",
         vec![
-            Coin::new(1_500, ETH_USDC),
+            Coin::new(1_500, AXL_USDC),
             Coin::new(29_902 - 1_500, COSMOS_USDC), // +100_000 due to bank send
         ],
         vec!["uosmo"],
