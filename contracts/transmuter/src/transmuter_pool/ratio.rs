@@ -5,37 +5,37 @@ use crate::ContractError;
 use super::TransmuterPool;
 
 impl TransmuterPool {
-    /// Ratio of the pool asset amount to the total pool asset amount.
-    pub fn ratio(&self, denom: &str) -> Result<Option<Decimal>, ContractError> {
-        let pool_asset = self
+    /// All ratios of each pool assets. Returns pairs of (denom, ratio)
+    /// If total pool asset amount is zero, returns None to signify that
+    /// it makes no sense to calculate ratios, but not an error.
+    pub fn all_ratios(&self) -> Result<Option<Vec<(String, Decimal)>>, ContractError> {
+        let total_pool_asset_amount = self.total_pool_assets()?;
+
+        if total_pool_asset_amount.is_zero() {
+            return Ok(None);
+        }
+
+        let ratios = self
             .pool_assets
             .iter()
-            .find(|pool_asset| pool_asset.denom == denom)
-            .ok_or_else(|| ContractError::InvalidPoolAssetDenom {
-                denom: denom.to_string(),
-            })?;
+            .map(|pool_asset| {
+                let ratio =
+                    Decimal::checked_from_ratio(pool_asset.amount, total_pool_asset_amount)?;
+                Ok((pool_asset.denom.to_string(), ratio))
+            })
+            .collect::<Result<_, ContractError>>()?;
 
-        let total_pool_asset_amount: Uint128 = self
-            .pool_assets
+        Ok(Some(ratios))
+    }
+
+    fn total_pool_assets(&self) -> Result<Uint128, ContractError> {
+        self.pool_assets
             .iter()
             .map(|pool_asset| pool_asset.amount)
             .fold(Ok(Uint128::zero()), |acc, amount| {
-                acc.and_then(|acc| acc.checked_add(amount))
-            })?;
-
-        let ratio = if total_pool_asset_amount.is_zero() {
-            None
-        } else {
-            Some(Decimal::from_ratio(
-                pool_asset.amount,
-                total_pool_asset_amount,
-            ))
-        };
-
-        Ok(ratio)
+                acc.and_then(|acc| acc.checked_add(amount).map_err(Into::into))
+            })
     }
-
-    // TODO: ratio for all pool assets
 }
 
 #[cfg(test)]
@@ -47,75 +47,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_ratio_when_there_are_target_denom() {
+    fn test_all_ratios() {
         let pool = TransmuterPool {
             pool_assets: vec![Coin::new(6000, "axlusdc"), Coin::new(4000, "whusdc")],
         };
 
-        let ratio = pool.ratio("axlusdc").unwrap();
-        assert_eq!(ratio, Some(Decimal::percent(60)));
-
-        let ratio = pool.ratio("whusdc").unwrap();
-        assert_eq!(ratio, Some(Decimal::percent(40)));
+        let ratios = pool.all_ratios().unwrap();
+        assert_eq!(
+            ratios,
+            Some(vec![
+                ("axlusdc".to_string(), Decimal::percent(60)),
+                ("whusdc".to_string(), Decimal::percent(40))
+            ])
+        );
 
         let pool = TransmuterPool {
             pool_assets: vec![Coin::new(0, "axlusdc"), Coin::new(9999, "whusdc")],
         };
 
-        let ratio = pool.ratio("axlusdc").unwrap();
-        assert_eq!(ratio, Some(Decimal::percent(0)));
-
-        let ratio = pool.ratio("whusdc").unwrap();
-        assert_eq!(ratio, Some(Decimal::percent(100)));
-
-        let pool = TransmuterPool {
-            pool_assets: vec![
-                Coin::new(2, "axlusdc"),
-                Coin::new(9999, "whusdc"),
-                Coin::new(9999, "xusdc"),
-            ],
-        };
-
-        let ratio = pool.ratio("axlusdc").unwrap();
-        assert_eq!(ratio, Some(Decimal::from_str("0.0001").unwrap()));
-
-        let ratio = pool.ratio("whusdc").unwrap();
-        assert_eq!(ratio, Some(Decimal::from_str("0.49995").unwrap()));
-
-        let ratio = pool.ratio("xusdc").unwrap();
-        assert_eq!(ratio, Some(Decimal::from_str("0.49995").unwrap()));
-    }
-
-    #[test]
-    fn test_ratio_when_there_are_no_target_denom() {
-        let pool = TransmuterPool {
-            pool_assets: vec![
-                Coin::new(2, "axlusdc"),
-                Coin::new(9999, "whusdc"),
-                Coin::new(9999, "xusdc"),
-            ],
-        };
-
-        let err = pool.ratio("random").unwrap_err();
-
+        let ratios = pool.all_ratios().unwrap();
         assert_eq!(
-            err,
-            ContractError::InvalidPoolAssetDenom {
-                denom: "random".to_string()
-            }
+            ratios,
+            Some(vec![
+                ("axlusdc".to_string(), Decimal::percent(0)),
+                ("whusdc".to_string(), Decimal::percent(100))
+            ])
+        );
+
+        let pool = TransmuterPool {
+            pool_assets: vec![
+                Coin::new(2, "axlusdc"),
+                Coin::new(9999, "whusdc"),
+                Coin::new(9999, "xusdc"),
+            ],
+        };
+
+        let ratios = pool.all_ratios().unwrap();
+        assert_eq!(
+            ratios,
+            Some(vec![
+                ("axlusdc".to_string(), Decimal::from_str("0.0001").unwrap()),
+                ("whusdc".to_string(), Decimal::from_str("0.49995").unwrap()),
+                ("xusdc".to_string(), Decimal::from_str("0.49995").unwrap())
+            ])
         );
     }
 
     #[test]
-    fn test_ratio_when_total_pool_asset_amount_is_zero() {
+    fn test_all_ratios_when_total_pool_assets_is_zero() {
         let pool = TransmuterPool {
             pool_assets: vec![Coin::new(0, "axlusdc"), Coin::new(0, "whusdc")],
         };
 
-        let ratio = pool.ratio("axlusdc").unwrap();
-        assert_eq!(ratio, None);
-
-        let ratio = pool.ratio("whusdc").unwrap();
-        assert_eq!(ratio, None);
+        let ratios = pool.all_ratios().unwrap();
+        assert_eq!(ratios, None);
     }
 }
