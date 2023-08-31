@@ -14,7 +14,7 @@ fn test_create_pool() {
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec!["denom1".to_string(), "denom2".to_string()],
             admin: None,
-            lp_subdenom: "denomx".to_string(),
+            alloyed_asset_subdenom: "denomx".to_string(),
         })
         .build(&app);
 
@@ -24,7 +24,7 @@ fn test_create_pool() {
 
     assert_eq!(
         share_denom,
-        format!("factory/{}/denomx", t.contract.contract_addr)
+        format!("factory/{}/alloyed/denomx", t.contract.contract_addr)
     );
 
     // get pool assets

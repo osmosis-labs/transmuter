@@ -17,7 +17,7 @@ const WH_ETH: &str = "ibc/WHETH";
 fn test_admin_set_denom_metadata() {
     let app = OsmosisTestApp::new();
 
-    let lp_subdenom = "transmuter/eth";
+    let alloyed_asset_subdenom = "eth";
     let t = TestEnvBuilder::new()
         .with_account("alice", vec![Coin::new(1_500, AXL_ETH)])
         .with_account("bob", vec![Coin::new(1_500, WH_ETH)])
@@ -27,7 +27,7 @@ fn test_admin_set_denom_metadata() {
         )
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![AXL_ETH.to_string(), WH_ETH.to_string()],
-            lp_subdenom: lp_subdenom.to_string(),
+            alloyed_asset_subdenom: alloyed_asset_subdenom.to_string(),
             admin: None,
         })
         .with_admin("admin")
@@ -38,7 +38,10 @@ fn test_admin_set_denom_metadata() {
         t.contract.query(&QueryMsg::GetShareDenom {}).unwrap();
 
     assert_eq!(
-        format!("factory/{}/{}", t.contract.contract_addr, lp_subdenom),
+        format!(
+            "factory/{}/alloyed/{}",
+            t.contract.contract_addr, alloyed_asset_subdenom
+        ),
         share_denom
     );
 

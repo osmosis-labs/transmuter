@@ -30,6 +30,9 @@ const SWAP_FEE: Decimal = Decimal::zero();
 
 const CREATE_LP_DENOM_REPLY_ID: u64 = 1;
 
+/// Prefix for alloyed asset denom
+const ALLOYED_PREFIX: &str = "alloyed";
+
 pub struct Transmuter<'a> {
     pub(crate) active_status: Item<'a, bool>,
     pub(crate) pool: Item<'a, TransmuterPool>,
@@ -58,7 +61,7 @@ impl Transmuter<'_> {
         &self,
         ctx: (DepsMut, Env, MessageInfo),
         pool_asset_denoms: Vec<String>,
-        lp_subdenom: String,
+        alloyed_asset_subdenom: String,
         admin: Option<String>,
     ) -> Result<Response, ContractError> {
         let (deps, env, _info) = ctx;
@@ -83,7 +86,7 @@ impl Transmuter<'_> {
         let msg_create_lp_denom = SubMsg::reply_on_success(
             MsgCreateDenom {
                 sender: env.contract.address.to_string(),
-                subdenom: lp_subdenom,
+                subdenom: format!("{}/{}", ALLOYED_PREFIX, alloyed_asset_subdenom),
             },
             CREATE_LP_DENOM_REPLY_ID,
         );
@@ -741,7 +744,7 @@ mod tests {
         let admin = "admin";
         let init_msg = InstantiateMsg {
             pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
-            lp_subdenom: "uosmouion".to_string(),
+            alloyed_asset_subdenom: "uosmouion".to_string(),
             admin: Some(admin.to_string()),
         };
         let env = mock_env();
@@ -893,7 +896,7 @@ mod tests {
         let init_msg = InstantiateMsg {
             pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
             admin: Some(admin.to_string()),
-            lp_subdenom: "usomoion".to_string(),
+            alloyed_asset_subdenom: "usomoion".to_string(),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -948,7 +951,7 @@ mod tests {
         let init_msg = InstantiateMsg {
             pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
             admin: Some(admin.to_string()),
-            lp_subdenom: "usomoion".to_string(),
+            alloyed_asset_subdenom: "usomoion".to_string(),
         };
 
         instantiate(deps.as_mut(), mock_env(), mock_info(admin, &[]), init_msg).unwrap();

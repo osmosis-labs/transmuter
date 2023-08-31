@@ -47,7 +47,7 @@ fn test_join_pool() {
         )
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
-            lp_subdenom: "transmuter/poolshare".to_string(),
+            alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
             admin: None,
         })
         .build(&app);
@@ -210,7 +210,7 @@ fn test_swap() {
         .with_account("provider", vec![Coin::new(200_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
-            lp_subdenom: "transmuter/poolshare".to_string(),
+            alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
             admin: None,
         })
         .build(&app);
@@ -466,7 +466,7 @@ fn test_exit_pool() {
         .with_account("provider_2", vec![Coin::new(100_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
-            lp_subdenom: "transmuter/poolshare".to_string(),
+            alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
             admin: None,
         })
         .build(&app);
@@ -674,7 +674,7 @@ fn test_3_pool_swap() {
                 AXL_DAI.to_string(),
                 COSMOS_USDC.to_string(),
             ],
-            lp_subdenom: "transmuter/poolshare".to_string(),
+            alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
             admin: None,
         })
         .build(&app);
@@ -878,7 +878,7 @@ fn test_3_pool_swap() {
 fn test_swap_lp_denom() {
     let app = OsmosisTestApp::new();
 
-    let lp_subdenom = "transmuter/eth";
+    let alloyed_asset_subdenom = "eth";
     let t = TestEnvBuilder::new()
         .with_account("alice", vec![Coin::new(1_500, AXL_ETH)])
         .with_account("bob", vec![Coin::new(1_500, WH_ETH)])
@@ -888,7 +888,7 @@ fn test_swap_lp_denom() {
         )
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![AXL_ETH.to_string(), WH_ETH.to_string()],
-            lp_subdenom: lp_subdenom.to_string(),
+            alloyed_asset_subdenom: alloyed_asset_subdenom.to_string(),
             admin: None,
         })
         .build(&app);
@@ -898,7 +898,10 @@ fn test_swap_lp_denom() {
         t.contract.query(&QueryMsg::GetShareDenom {}).unwrap();
 
     assert_eq!(
-        format!("factory/{}/{}", t.contract.contract_addr, lp_subdenom),
+        format!(
+            "factory/{}/alloyed/{}",
+            t.contract.contract_addr, alloyed_asset_subdenom
+        ),
         share_denom
     );
 }
