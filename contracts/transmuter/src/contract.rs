@@ -268,17 +268,17 @@ impl Transmuter<'_> {
             ContractError::AtLeastSingleTokenExpected {}
         );
 
-        // update pool
-        self.pool
-            .update(deps.storage, |mut pool| -> Result<_, ContractError> {
-                pool.join_pool(&info.funds)?;
-                Ok(pool)
-            })?;
+        // join pool
+        let mut pool = self.pool.load(deps.storage)?;
+        pool.join_pool(&info.funds)?;
 
-        // TODO:
-        // - ensure updated pool ratio does not exceed limit
-        //   - list all (denom, ratio) pairs
-        //   - each pair, check against its limiters (check_and_update_limiters(Vec<(denom, ratio)>)
+        // check and update limiters only if pool assets are not zero
+        if let Some(ratios) = pool.all_ratios()? {
+            self.limiters
+                .check_limits_and_update(deps.storage, ratios, env.block.time)?;
+        }
+
+        self.pool.save(deps.storage, &pool)?;
 
         // mint lp tokens
         let share_denom = self.shares.get_share_denom(deps.storage)?;
@@ -348,16 +348,16 @@ impl Transmuter<'_> {
         );
 
         // exit pool
-        self.pool
-            .update(deps.storage, |mut pool| -> Result<_, ContractError> {
-                pool.exit_pool(&tokens_out)?;
-                Ok(pool)
-            })?;
+        let mut pool = self.pool.load(deps.storage)?;
+        pool.exit_pool(&tokens_out)?;
 
-        // TODO:
-        // - ensure updated pool ratio does not exceed limit
-        //   - list all (denom, ratio) pairs
-        //   - each pair, check against its limiters (check_and_update_limiters(Vec<(denom, ratio)>))
+        // check and update limiters only if pool assets are not zero
+        if let Some(ratios) = pool.all_ratios()? {
+            self.limiters
+                .check_limits_and_update(deps.storage, ratios, env.block.time)?;
+        }
+
+        self.pool.save(deps.storage, &pool)?;
 
         let bank_send_msg = BankMsg::Send {
             to_address: info.sender.to_string(),
