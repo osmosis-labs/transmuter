@@ -111,7 +111,8 @@ impl Transmuter<'_> {
         }
     }
 
-    // TODO: test this
+    // === executes ===
+
     #[msg(exec)]
     fn register_limiter(
         &self,
@@ -147,9 +148,7 @@ impl Transmuter<'_> {
             boundary_offset,
         )?;
 
-        Ok(Response::new()
-            .add_attribute("method", "register_limiter")
-            .add_attributes(attrs))
+        Ok(Response::new().add_attributes(attrs))
     }
 
     #[msg(exec)]
@@ -174,9 +173,7 @@ impl Transmuter<'_> {
         self.limiters
             .deregister(deps.storage, &denom, &human_readable_window);
 
-        Ok(Response::new()
-            .add_attribute("method", "deregister_limiter")
-            .add_attributes(attrs))
+        Ok(Response::new().add_attributes(attrs))
     }
 
     #[msg(exec)]
@@ -208,21 +205,8 @@ impl Transmuter<'_> {
             boundary_offset,
         )?;
 
-        Ok(Response::new()
-            .add_attribute("method", "set_boundary_offset")
-            .add_attributes(attrs))
+        Ok(Response::new().add_attributes(attrs))
     }
-
-    #[msg(query)]
-    fn list_limiters(&self, ctx: (Deps, Env)) -> Result<ListLimitersResponse, ContractError> {
-        let (deps, _env) = ctx;
-
-        let limiters = self.limiters.list_limiters(deps.storage)?;
-
-        Ok(ListLimitersResponse { limiters })
-    }
-
-    // === end fns to test ===
 
     #[msg(exec)]
     pub fn set_lp_denom_metadata(
@@ -392,6 +376,17 @@ impl Transmuter<'_> {
             .add_attribute("method", method)
             .add_message(burn_msg)
             .add_message(bank_send_msg))
+    }
+
+    // === queries ===
+
+    #[msg(query)]
+    fn list_limiters(&self, ctx: (Deps, Env)) -> Result<ListLimitersResponse, ContractError> {
+        let (deps, _env) = ctx;
+
+        let limiters = self.limiters.list_limiters(deps.storage)?;
+
+        Ok(ListLimitersResponse { limiters })
     }
 
     #[msg(query)]
@@ -736,8 +731,8 @@ mod tests {
     use super::*;
     use crate::sudo::SudoMsg;
     use crate::*;
-    use cosmwasm_std::from_binary;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
+    use cosmwasm_std::{attr, from_binary, Uint64};
 
     #[test]
     fn test_set_active_status() {
@@ -940,5 +935,246 @@ mod tests {
         .unwrap();
         let admin: GetAdminResponse = from_binary(&res).unwrap();
         assert_eq!(admin.admin.as_str(), candidate);
+    }
+
+    #[test]
+    fn test_limiter_registration_and_config() {
+        // register limiter
+        let mut deps = mock_dependencies();
+
+        let admin = "admin";
+        let user = "user";
+        let init_msg = InstantiateMsg {
+            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            admin: Some(admin.to_string()),
+        };
+
+        instantiate(deps.as_mut(), mock_env(), mock_info(admin, &[]), init_msg).unwrap();
+
+        // normal user can't register limiter
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(user, &[]),
+            ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+                denom: "uosmo".to_string(),
+                human_readable_window: "1h".to_string(),
+                window_config: WindowConfig {
+                    window_size: Uint64::from(604_800_000_000u64),
+                    division_count: Uint64::from(5u64),
+                },
+                boundary_offset: Decimal::zero(),
+            }),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, ContractError::Unauthorized {});
+
+        // admin can register limiter
+        let window_config_1h = WindowConfig {
+            window_size: Uint64::from(3_600_000_000_000u64),
+            division_count: Uint64::from(5u64),
+        };
+        let res = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(admin, &[]),
+            ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+                denom: "uosmo".to_string(),
+                human_readable_window: "1h".to_string(),
+                window_config: window_config_1h.clone(),
+                boundary_offset: Decimal::zero(),
+            }),
+        )
+        .unwrap();
+
+        let attrs = vec![
+            attr("method", "register_limiter"),
+            attr("denom", "uosmo"),
+            attr("human_readable_window", "1h"),
+            attr("window_size", "3600000000000"),
+            attr("division_count", "5"),
+            attr("boundary_offset", "0"),
+        ];
+
+        assert_eq!(res.attributes, attrs);
+
+        // Query the list of limiters
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
+        let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
+        let limiters: ListLimitersResponse = from_binary(&res).unwrap();
+
+        assert_eq!(
+            limiters.limiters,
+            vec![(
+                (String::from("uosmo"), String::from("1h")),
+                CompressedSMALimiter::new(window_config_1h.clone(), Decimal::zero()).unwrap()
+            )]
+        );
+
+        let window_config_1w = WindowConfig {
+            window_size: Uint64::from(604_800_000_000u64),
+            division_count: Uint64::from(5u64),
+        };
+        let res = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(admin, &[]),
+            ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+                denom: "osmo".to_string(),
+                human_readable_window: "1w".to_string(),
+                window_config: window_config_1w.clone(),
+                boundary_offset: Decimal::zero(),
+            }),
+        )
+        .unwrap();
+
+        let attrs_1w = vec![
+            attr("method", "register_limiter"),
+            attr("denom", "osmo"),
+            attr("human_readable_window", "1w"),
+            attr("window_size", "604800000000"),
+            attr("division_count", "5"),
+            attr("boundary_offset", "0"),
+        ];
+
+        assert_eq!(res.attributes, attrs_1w);
+
+        // Query the list of limiters
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
+        let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
+        let limiters: ListLimitersResponse = from_binary(&res).unwrap();
+
+        assert_eq!(
+            limiters.limiters,
+            vec![
+                (
+                    (String::from("osmo"), String::from("1w")),
+                    CompressedSMALimiter::new(window_config_1w.clone(), Decimal::zero()).unwrap()
+                ),
+                (
+                    (String::from("uosmo"), String::from("1h")),
+                    CompressedSMALimiter::new(window_config_1h, Decimal::zero()).unwrap()
+                )
+            ]
+        );
+
+        // deregister limiter by user is unauthorized
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(user, &[]),
+            ContractExecMsg::Transmuter(ExecMsg::DeregisterLimiter {
+                denom: "uosmo".to_string(),
+                human_readable_window: "1h".to_string(),
+            }),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, ContractError::Unauthorized {});
+
+        // deregister limiter by admin should work
+        let res = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(admin, &[]),
+            ContractExecMsg::Transmuter(ExecMsg::DeregisterLimiter {
+                denom: "uosmo".to_string(),
+                human_readable_window: "1h".to_string(),
+            }),
+        )
+        .unwrap();
+
+        let attrs = vec![
+            attr("method", "deregister_limiter"),
+            attr("denom", "uosmo"),
+            attr("human_readable_window", "1h"),
+        ];
+
+        assert_eq!(res.attributes, attrs);
+
+        // Query the list of limiters
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
+        let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
+        let limiters: ListLimitersResponse = from_binary(&res).unwrap();
+
+        assert_eq!(
+            limiters.limiters,
+            vec![(
+                (String::from("osmo"), String::from("1w")),
+                CompressedSMALimiter::new(window_config_1w.clone(), Decimal::zero()).unwrap()
+            )]
+        );
+
+        // set boundary offset by user is unauthorized
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(user, &[]),
+            ContractExecMsg::Transmuter(ExecMsg::SetBoundaryOffset {
+                denom: "osmo".to_string(),
+                human_readable_window: "1w".to_string(),
+                boundary_offset: Decimal::zero(),
+            }),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, ContractError::Unauthorized {});
+
+        // set boundary offset by admin but for osmo 1h should fail
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(admin, &[]),
+            ContractExecMsg::Transmuter(ExecMsg::SetBoundaryOffset {
+                denom: "osmo".to_string(),
+                human_readable_window: "1h".to_string(),
+                boundary_offset: Decimal::zero(),
+            }),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::LimiterDoesNotExist {
+                denom: "osmo".to_string(),
+                human_readable_window: "1h".to_string()
+            }
+        );
+
+        // set boundary offset by admin for existing limiter should work
+        let res = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(admin, &[]),
+            ContractExecMsg::Transmuter(ExecMsg::SetBoundaryOffset {
+                denom: "osmo".to_string(),
+                human_readable_window: "1w".to_string(),
+                boundary_offset: Decimal::percent(10),
+            }),
+        )
+        .unwrap();
+
+        let attrs = vec![
+            attr("method", "set_boundary_offset"),
+            attr("denom", "osmo"),
+            attr("human_readable_window", "1w"),
+            attr("boundary_offset", "0.1"),
+        ];
+
+        assert_eq!(res.attributes, attrs);
+
+        // Query the list of limiters
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
+        let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
+        let limiters: ListLimitersResponse = from_binary(&res).unwrap();
+
+        assert_eq!(
+            limiters.limiters,
+            vec![(
+                (String::from("osmo"), String::from("1w")),
+                CompressedSMALimiter::new(window_config_1w, Decimal::percent(10)).unwrap()
+            )]
+        );
     }
 }

@@ -60,7 +60,10 @@ pub struct CompressedSMALimiter {
 }
 
 impl CompressedSMALimiter {
-    fn new(window_config: WindowConfig, boundary_offset: Decimal) -> Result<Self, ContractError> {
+    pub fn new(
+        window_config: WindowConfig,
+        boundary_offset: Decimal,
+    ) -> Result<Self, ContractError> {
         Self {
             divisions: vec![],
             latest_value: Decimal::zero(),
