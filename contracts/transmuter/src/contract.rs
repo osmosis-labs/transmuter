@@ -2,7 +2,7 @@ use crate::{
     admin::Admin,
     ensure_admin_authority,
     error::ContractError,
-    limiter::{ChangeLimiter, Limiters, WindowConfig},
+    limiter::{Limiter, Limiters, WindowConfig},
     shares::Shares,
     transmuter_pool::TransmuterPool,
 };
@@ -667,7 +667,7 @@ impl Transmuter<'_> {
 
 #[cw_serde]
 pub struct ListLimitersResponse {
-    pub limiters: Vec<((String, String), ChangeLimiter)>,
+    pub limiters: Vec<((String, String), Limiter)>,
 }
 
 #[cw_serde]
@@ -728,6 +728,7 @@ pub struct GetAdminCandidateResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::limiter::ChangeLimiter;
     use crate::sudo::SudoMsg;
     use crate::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
@@ -1009,7 +1010,9 @@ mod tests {
             limiters.limiters,
             vec![(
                 (String::from("uosmo"), String::from("1h")),
-                ChangeLimiter::new(window_config_1h.clone(), Decimal::zero()).unwrap()
+                Limiter::ChangeLimiter(
+                    ChangeLimiter::new(window_config_1h.clone(), Decimal::zero()).unwrap()
+                )
             )]
         );
 
@@ -1051,11 +1054,15 @@ mod tests {
             vec![
                 (
                     (String::from("osmo"), String::from("1w")),
-                    ChangeLimiter::new(window_config_1w.clone(), Decimal::zero()).unwrap()
+                    Limiter::ChangeLimiter(
+                        ChangeLimiter::new(window_config_1w.clone(), Decimal::zero()).unwrap()
+                    )
                 ),
                 (
                     (String::from("uosmo"), String::from("1h")),
-                    ChangeLimiter::new(window_config_1h, Decimal::zero()).unwrap()
+                    Limiter::ChangeLimiter(
+                        ChangeLimiter::new(window_config_1h, Decimal::zero()).unwrap()
+                    )
                 )
             ]
         );
@@ -1103,7 +1110,9 @@ mod tests {
             limiters.limiters,
             vec![(
                 (String::from("osmo"), String::from("1w")),
-                ChangeLimiter::new(window_config_1w.clone(), Decimal::zero()).unwrap()
+                Limiter::ChangeLimiter(
+                    ChangeLimiter::new(window_config_1w.clone(), Decimal::zero()).unwrap()
+                )
             )]
         );
 
@@ -1174,7 +1183,9 @@ mod tests {
             limiters.limiters,
             vec![(
                 (String::from("osmo"), String::from("1w")),
-                ChangeLimiter::new(window_config_1w, Decimal::percent(10)).unwrap()
+                Limiter::ChangeLimiter(
+                    ChangeLimiter::new(window_config_1w, Decimal::percent(10)).unwrap()
+                )
             )]
         );
     }

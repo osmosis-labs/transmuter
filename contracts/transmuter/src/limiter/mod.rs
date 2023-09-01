@@ -1,5 +1,5 @@
 mod compressed_sma_division;
-mod compressed_sma_limiter;
 mod helpers;
+mod limiters;
 
-pub use compressed_sma_limiter::{ChangeLimiter, Limiters, WindowConfig};
+pub use limiters::{ChangeLimiter, Limiter, Limiters, WindowConfig};

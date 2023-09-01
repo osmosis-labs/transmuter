@@ -36,11 +36,6 @@ impl WindowConfig {
     }
 }
 
-pub struct Limiters<'a> {
-    /// Map of (denom, label) -> CompressedSMALimiter
-    limiters: Map<'a, (&'a str, &'a str), ChangeLimiter>,
-}
-
 /// Limiter that determines limit by upper bound of SMA (Simple Moving Average) of the value.
 /// The data points used for calculating SMA are divided into divisions, which gets compressed
 /// for storage read efficiency, and reduce gas consumption.
@@ -197,6 +192,16 @@ impl ChangeLimiter {
     }
 }
 
+#[cw_serde]
+pub enum Limiter {
+    ChangeLimiter(ChangeLimiter),
+}
+
+pub struct Limiters<'a> {
+    /// Map of (denom, label) -> Limiter
+    limiters: Map<'a, (&'a str, &'a str), Limiter>,
+}
+
 impl<'a> Limiters<'a> {
     pub const fn new(limiters_namespace: &'a str) -> Self {
         Self {
@@ -223,7 +228,7 @@ impl<'a> Limiters<'a> {
             }
         );
 
-        let limiter = ChangeLimiter::new(window_config, boundary_offset)?;
+        let limiter = Limiter::ChangeLimiter(ChangeLimiter::new(window_config, boundary_offset)?);
         self.limiters
             .save(storage, (denom, label), &limiter)
             .map_err(Into::into)
@@ -243,16 +248,19 @@ impl<'a> Limiters<'a> {
         self.limiters.update(
             storage,
             (denom, label),
-            |limiter: Option<ChangeLimiter>| -> Result<ChangeLimiter, ContractError> {
+            |limiter: Option<Limiter>| -> Result<Limiter, ContractError> {
                 let limiter = limiter.ok_or(ContractError::LimiterDoesNotExist {
                     denom: denom.to_string(),
                     label: label.to_string(),
                 })?;
 
-                Ok(ChangeLimiter {
-                    boundary_offset,
-                    ..limiter
-                })
+                // check if the limiter is a ChangeLimiter
+                match limiter {
+                    Limiter::ChangeLimiter(limiter) => Ok(Limiter::ChangeLimiter(ChangeLimiter {
+                        boundary_offset,
+                        ..limiter
+                    })),
+                }
             },
         )?;
         Ok(())
@@ -262,7 +270,7 @@ impl<'a> Limiters<'a> {
         &self,
         storage: &dyn Storage,
         denom: &str,
-    ) -> Result<Vec<(String, ChangeLimiter)>, ContractError> {
+    ) -> Result<Vec<(String, Limiter)>, ContractError> {
         // there is no need to limit, since the number of limiters is expected to be small
         self.limiters
             .prefix(denom)
@@ -275,7 +283,7 @@ impl<'a> Limiters<'a> {
     pub fn list_limiters(
         &self,
         storage: &dyn Storage,
-    ) -> Result<Vec<((String, String), ChangeLimiter)>, ContractError> {
+    ) -> Result<Vec<((String, String), Limiter)>, ContractError> {
         // there is no need to limit, since the number of limiters is expected to be small
         self.limiters
             .range(storage, None, None, cosmwasm_std::Order::Ascending)
@@ -293,9 +301,16 @@ impl<'a> Limiters<'a> {
             let limiters = self.list_limiters_by_denom(storage, denom.as_str())?;
 
             for (label, limiter) in limiters {
-                let limiter = limiter
-                    .ensure_upper_limit(block_time, denom.as_str(), value)?
-                    .update(block_time, value)?;
+                // match limiter type
+                let limiter = match limiter {
+                    Limiter::ChangeLimiter(limiter) => {
+                        let limiter = limiter
+                            .ensure_upper_limit(block_time, denom.as_str(), value)?
+                            .update(block_time, value)?;
+
+                        Limiter::ChangeLimiter(limiter)
+                    }
+                };
 
                 // save updated limiter
                 self.limiters
@@ -338,7 +353,7 @@ mod tests {
                 limiter.list_limiters(&deps.storage).unwrap(),
                 vec![(
                     ("denoma".to_string(), "1m".to_string()),
-                    ChangeLimiter {
+                    Limiter::ChangeLimiter(ChangeLimiter {
                         divisions: vec![],
                         latest_value: Decimal::zero(),
                         window_config: WindowConfig {
@@ -346,7 +361,7 @@ mod tests {
                             division_count: Uint64::from(5u64),
                         },
                         boundary_offset: Decimal::percent(10)
-                    }
+                    })
                 )]
             );
 
@@ -368,7 +383,7 @@ mod tests {
                 vec![
                     (
                         ("denoma".to_string(), "1h".to_string()),
-                        ChangeLimiter {
+                        Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -376,11 +391,11 @@ mod tests {
                                 division_count: Uint64::from(2u64),
                             },
                             boundary_offset: Decimal::percent(10)
-                        }
+                        })
                     ),
                     (
                         ("denoma".to_string(), "1m".to_string()),
-                        ChangeLimiter {
+                        Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -388,7 +403,7 @@ mod tests {
                                 division_count: Uint64::from(5u64),
                             },
                             boundary_offset: Decimal::percent(10)
-                        }
+                        })
                     )
                 ]
             );
@@ -411,7 +426,7 @@ mod tests {
                 vec![
                     (
                         ("denoma".to_string(), "1h".to_string()),
-                        ChangeLimiter {
+                        Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -419,11 +434,11 @@ mod tests {
                                 division_count: Uint64::from(2u64),
                             },
                             boundary_offset: Decimal::percent(10)
-                        }
+                        })
                     ),
                     (
                         ("denoma".to_string(), "1m".to_string()),
-                        ChangeLimiter {
+                        Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -431,11 +446,11 @@ mod tests {
                                 division_count: Uint64::from(5u64),
                             },
                             boundary_offset: Decimal::percent(10)
-                        }
+                        })
                     ),
                     (
                         ("denomb".to_string(), "1m".to_string()),
-                        ChangeLimiter {
+                        Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -443,11 +458,10 @@ mod tests {
                                 division_count: Uint64::from(5u64),
                             },
                             boundary_offset: Decimal::percent(10)
-                        }
+                        })
                     )
                 ]
             );
-
             // list limiters by denom
             assert_eq!(
                 limiter
@@ -456,7 +470,7 @@ mod tests {
                 vec![
                     (
                         "1h".to_string(),
-                        ChangeLimiter {
+                        Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -464,11 +478,11 @@ mod tests {
                                 division_count: Uint64::from(2u64),
                             },
                             boundary_offset: Decimal::percent(10)
-                        }
+                        })
                     ),
                     (
                         "1m".to_string(),
-                        ChangeLimiter {
+                        Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -476,7 +490,7 @@ mod tests {
                                 division_count: Uint64::from(5u64),
                             },
                             boundary_offset: Decimal::percent(10)
-                        }
+                        })
                     )
                 ]
             );
@@ -487,7 +501,7 @@ mod tests {
                     .unwrap(),
                 vec![(
                     "1m".to_string(),
-                    ChangeLimiter {
+                    Limiter::ChangeLimiter(ChangeLimiter {
                         divisions: vec![],
                         latest_value: Decimal::zero(),
                         window_config: WindowConfig {
@@ -495,7 +509,7 @@ mod tests {
                             division_count: Uint64::from(5u64),
                         },
                         boundary_offset: Decimal::percent(10)
-                    }
+                    })
                 )]
             );
         }
@@ -562,7 +576,7 @@ mod tests {
                 limiter.list_limiters(&deps.storage).unwrap(),
                 vec![(
                     ("denoma".to_string(), "1m".to_string()),
-                    ChangeLimiter {
+                    Limiter::ChangeLimiter(ChangeLimiter {
                         divisions: vec![],
                         latest_value: Decimal::zero(),
                         window_config: WindowConfig {
@@ -570,7 +584,7 @@ mod tests {
                             division_count: Uint64::from(5u64),
                         },
                         boundary_offset: Decimal::percent(10)
-                    }
+                    })
                 )]
             );
 
@@ -592,7 +606,7 @@ mod tests {
                 vec![
                     (
                         ("denoma".to_string(), "1h".to_string()),
-                        ChangeLimiter {
+                        Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -600,11 +614,11 @@ mod tests {
                                 division_count: Uint64::from(2u64),
                             },
                             boundary_offset: Decimal::percent(10)
-                        }
+                        })
                     ),
                     (
                         ("denoma".to_string(), "1m".to_string()),
-                        ChangeLimiter {
+                        Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -612,7 +626,7 @@ mod tests {
                                 division_count: Uint64::from(5u64),
                             },
                             boundary_offset: Decimal::percent(10)
-                        }
+                        })
                     )
                 ]
             );
@@ -623,7 +637,7 @@ mod tests {
                 limiter.list_limiters(&deps.storage).unwrap(),
                 vec![(
                     ("denoma".to_string(), "1h".to_string()),
-                    ChangeLimiter {
+                    Limiter::ChangeLimiter(ChangeLimiter {
                         divisions: vec![],
                         latest_value: Decimal::zero(),
                         window_config: WindowConfig {
@@ -631,7 +645,7 @@ mod tests {
                             division_count: Uint64::from(2u64),
                         },
                         boundary_offset: Decimal::percent(10)
-                    }
+                    })
                 )]
             );
 
@@ -747,7 +761,7 @@ mod tests {
                 limiters,
                 vec![(
                     ("denoma".to_string(), "1m".to_string()),
-                    ChangeLimiter {
+                    Limiter::ChangeLimiter(ChangeLimiter {
                         divisions: vec![],
                         latest_value: Decimal::zero(),
                         window_config: WindowConfig {
@@ -755,7 +769,7 @@ mod tests {
                             division_count: Uint64::from(5u64),
                         },
                         boundary_offset: Decimal::percent(10)
-                    }
+                    })
                 )]
             );
         }
@@ -1704,10 +1718,13 @@ mod tests {
         humanized_window_size: &str,
         storage: &dyn Storage,
     ) -> Vec<CompressedSMADivision> {
-        limiter
+        let limiter = limiter
             .limiters
             .load(storage, (denom, humanized_window_size))
-            .unwrap()
-            .divisions
+            .unwrap();
+
+        match limiter {
+            Limiter::ChangeLimiter(limiter) => limiter.divisions,
+        }
     }
 }
