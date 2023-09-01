@@ -95,6 +95,9 @@ pub enum ContractError {
         value: Decimal,
     },
 
+    #[error("Modifying wrong limiter type: expected: {expected}, actual: {actual}")]
+    WrongLimiterType { expected: String, actual: String },
+
     #[error("{0}")]
     OverflowError(#[from] OverflowError),
 

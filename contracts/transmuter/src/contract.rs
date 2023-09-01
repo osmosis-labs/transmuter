@@ -2,7 +2,7 @@ use crate::{
     admin::Admin,
     ensure_admin_authority,
     error::ContractError,
-    limiter::{Limiter, LimiterParams, Limiters, WindowConfig},
+    limiter::{Limiter, LimiterParams, Limiters},
     shares::Shares,
     transmuter_pool::TransmuterPool,
 };
@@ -744,7 +744,7 @@ pub struct GetAdminCandidateResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::limiter::ChangeLimiter;
+    use crate::limiter::{ChangeLimiter, WindowConfig};
     use crate::sudo::SudoMsg;
     use crate::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
