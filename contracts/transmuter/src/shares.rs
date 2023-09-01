@@ -7,9 +7,9 @@ pub struct Shares<'a> {
 }
 
 impl<'a> Shares<'a> {
-    pub const fn new(namespace: &'a str) -> Self {
+    pub const fn new(share_denom_namespace: &'a str) -> Self {
         Self {
-            share_denom: Item::new(namespace),
+            share_denom: Item::new(share_denom_namespace),
         }
     }
 

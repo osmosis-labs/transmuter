@@ -1,9 +1,9 @@
 use cosmwasm_std::Coin;
-use cw_controllers::AdminResponse;
+
 use osmosis_std::types::cosmos::bank::v1beta1::{
     DenomUnit, Metadata, QueryDenomMetadataRequest, QueryDenomMetadataResponse,
 };
-use osmosis_test_tube::{Account, OsmosisTestApp, Runner};
+use osmosis_test_tube::{OsmosisTestApp, Runner};
 
 use crate::{
     contract::{ExecMsg, GetShareDenomResponse, InstantiateMsg, QueryMsg},
@@ -14,73 +14,10 @@ const AXL_ETH: &str = "ibc/AXLETH";
 const WH_ETH: &str = "ibc/WHETH";
 
 #[test]
-fn test_manage_admin() {
-    let app = OsmosisTestApp::new();
-
-    let lp_subdenom = "transmuter/eth";
-    let t = TestEnvBuilder::new()
-        .with_account("alice", vec![Coin::new(1_500, AXL_ETH)])
-        .with_account(
-            "admin",
-            vec![Coin::new(100_000, AXL_ETH), Coin::new(100_000, WH_ETH)],
-        )
-        .with_instantiate_msg(InstantiateMsg {
-            pool_asset_denoms: vec![AXL_ETH.to_string(), WH_ETH.to_string()],
-            lp_subdenom: lp_subdenom.to_string(),
-            admin: None,
-        })
-        .with_admin("admin")
-        .build(&app);
-
-    // set admin by non admin should fail
-    let err = t
-        .contract
-        .execute(
-            &ExecMsg::UpdateAdmin {
-                admin: Some(t.accounts["alice"].address()),
-            },
-            &[],
-            &t.accounts["alice"],
-        )
-        .unwrap_err();
-
-    assert_contract_err(
-        crate::ContractError::Admin(cw_controllers::AdminError::NotAdmin {}),
-        err,
-    );
-
-    // set admin by admin should succeed
-    t.contract
-        .execute(
-            &ExecMsg::UpdateAdmin {
-                admin: Some(t.accounts["alice"].address()),
-            },
-            &[],
-            &t.accounts["admin"],
-        )
-        .unwrap();
-
-    let AdminResponse { admin } = t.contract.query(&QueryMsg::Admin {}).unwrap();
-    assert_eq!(admin, Some(t.accounts["alice"].address()));
-
-    // remove admin by admin should succeed
-    t.contract
-        .execute(
-            &ExecMsg::UpdateAdmin { admin: None },
-            &[],
-            &t.accounts["alice"],
-        )
-        .unwrap();
-
-    let AdminResponse { admin } = t.contract.query(&QueryMsg::Admin {}).unwrap();
-    assert_eq!(admin, None);
-}
-
-#[test]
 fn test_admin_set_denom_metadata() {
     let app = OsmosisTestApp::new();
 
-    let lp_subdenom = "transmuter/eth";
+    let alloyed_asset_subdenom = "eth";
     let t = TestEnvBuilder::new()
         .with_account("alice", vec![Coin::new(1_500, AXL_ETH)])
         .with_account("bob", vec![Coin::new(1_500, WH_ETH)])
@@ -90,7 +27,7 @@ fn test_admin_set_denom_metadata() {
         )
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![AXL_ETH.to_string(), WH_ETH.to_string()],
-            lp_subdenom: lp_subdenom.to_string(),
+            alloyed_asset_subdenom: alloyed_asset_subdenom.to_string(),
             admin: None,
         })
         .with_admin("admin")
@@ -101,7 +38,10 @@ fn test_admin_set_denom_metadata() {
         t.contract.query(&QueryMsg::GetShareDenom {}).unwrap();
 
     assert_eq!(
-        format!("factory/{}/{}", t.contract.contract_addr, lp_subdenom),
+        format!(
+            "factory/{}/alloyed/{}",
+            t.contract.contract_addr, alloyed_asset_subdenom
+        ),
         share_denom
     );
 
@@ -137,10 +77,7 @@ fn test_admin_set_denom_metadata() {
         )
         .unwrap_err();
 
-    assert_contract_err(
-        crate::ContractError::Admin(cw_controllers::AdminError::NotAdmin {}),
-        err,
-    );
+    assert_contract_err(crate::ContractError::Unauthorized {}, err);
 
     // set denom metadata
     t.contract

@@ -1,14 +1,13 @@
-use cosmwasm_std::{Coin, Decimal, StdError, Uint128};
-use cw_controllers::AdminError;
+use cosmwasm_std::{
+    CheckedFromRatioError, Coin, Decimal, DivideByZeroError, OverflowError, StdError, Uint128,
+    Uint64,
+};
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq)]
 pub enum ContractError {
     #[error("{0}")]
     Std(#[from] StdError),
-
-    #[error("{0}")]
-    Admin(#[from] AdminError),
 
     #[error("Funds must contain exactly one token")]
     SingleTokenExpected {},
@@ -22,11 +21,14 @@ pub enum ContractError {
         expected_denom: Vec<String>,
     },
 
-    #[error("Unable to transmute token with denom: {denom}: expected one of: {expected_denom:?}")]
+    #[error("Unable to transmute token with denom: {denom}: expected one of: {expected_denom:?} or share token")]
     InvalidTransmuteDenom {
         denom: String,
         expected_denom: Vec<String>,
     },
+
+    #[error("Not a pool asset denom: {denom}")]
+    InvalidPoolAssetDenom { denom: String },
 
     #[error("Insufficient pool asset: required: {required}, available: {available}")]
     InsufficientPoolAsset { required: Coin, available: Coin },
@@ -62,4 +64,53 @@ pub enum ContractError {
 
     #[error("The pool is currently inactive")]
     InactivePool {},
+
+    #[error("YUnexpected denom: expected: {expected}, actual: {actual}")]
+    UnexpectedDenom { expected: String, actual: String },
+
+    #[error("Unauthorized")]
+    Unauthorized {},
+
+    #[error("Window must be evenly divisible by division size")]
+    UnevenWindowDivision {},
+
+    #[error("Division count must not exceed {max_division_count}")]
+    DivisionCountExceeded { max_division_count: Uint64 },
+
+    #[error("Time must be monotonically increasing")]
+    NonMonotonicTime {},
+
+    #[error(
+        "Limiter does not exist for denom: {denom}, human_readable_window: {human_readable_window}"
+    )]
+    LimiterDoesNotExist {
+        denom: String,
+        human_readable_window: String,
+    },
+
+    #[error(
+        "Limiter already exists for denom: {denom}, human_readable_window: {human_readable_window}"
+    )]
+    LimiterAlreadyExists {
+        denom: String,
+        human_readable_window: String,
+    },
+
+    #[error(
+        "Change upper limit exceeded for `{denom}`, upper limit is {upper_limit}, but the resulted ratio is {value}"
+    )]
+    ChangeUpperLimitExceeded {
+        denom: String,
+        upper_limit: Decimal,
+        value: Decimal,
+    },
+
+    #[error("{0}")]
+    OverflowError(#[from] OverflowError),
+
+    #[error("{0}")]
+    DivideByZeroError(#[from] DivideByZeroError),
+
+    #[error("{0}")]
+    CheckedFromRatioError(#[from] CheckedFromRatioError),
 }

@@ -4,6 +4,11 @@
 * and run the @cosmwasm/ts-codegen generate command to regenerate this file.
 */
 export type ExecuteMsg = {
+    set_active_status: {
+        active: boolean;
+        [k: string]: unknown;
+    };
+} | {
     join_pool: {
         [k: string]: unknown;
     };
@@ -13,17 +18,12 @@ export type ExecuteMsg = {
         [k: string]: unknown;
     };
 } | {
-    swap_exact_amount_in: {
-        token_in: Coin;
-        token_out_denom: string;
-        token_out_min_amount: Uint128;
+    transfer_admin: {
+        candidate: string;
         [k: string]: unknown;
     };
 } | {
-    swap_exact_amount_out: {
-        token_in_denom: string;
-        token_in_max_amount: Uint128;
-        token_out: Coin;
+    claim_admin: {
         [k: string]: unknown;
     };
 };
@@ -34,12 +34,17 @@ export interface Coin {
     [k: string]: unknown;
 }
 export interface InstantiateMsg {
+    admin?: string | null;
     pool_asset_denoms: string[];
     [k: string]: unknown;
 }
 export type QueryMsg = {
     get_shares: {
         address: string;
+        [k: string]: unknown;
+    };
+} | {
+    get_share_denom: {
         [k: string]: unknown;
     };
 } | {
@@ -78,16 +83,31 @@ export type QueryMsg = {
         token_out: Coin;
         [k: string]: unknown;
     };
+} | {
+    get_admin: {
+        [k: string]: unknown;
+    };
+} | {
+    get_admin_candidate: {
+        [k: string]: unknown;
+    };
 };
 export type Decimal = string;
-export interface AdminResponse {
-    admin?: string | null;
-}
 export interface CalcInAmtGivenOutResponse {
     token_in: Coin;
 }
 export interface CalcOutAmtGivenInResponse {
     token_out: Coin;
+}
+export type Addr = string;
+export interface GetAdminCandidateResponse {
+    admin_candidate?: Addr | null;
+}
+export interface GetAdminResponse {
+    admin: Addr;
+}
+export interface GetShareDenomResponse {
+    share_denom: string;
 }
 export interface GetSharesResponse {
     shares: Uint128;
@@ -103,15 +123,6 @@ export interface GetTotalSharesResponse {
 }
 export interface IsActiveResponse {
     is_active: boolean;
-}
-export interface PoolResponse {
-    pool: TransmuterPool;
-}
-export interface TransmuterPool {
-    pool_assets: Coin[];
-}
-export interface SharesResponse {
-    shares: Uint128;
 }
 export interface SpotPriceResponse {
     spot_price: Decimal;

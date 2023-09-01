@@ -6,20 +6,19 @@ use crate::{
 };
 
 use cosmwasm_std::{to_binary, Coin};
-use osmosis_std::types::osmosis::cosmwasmpool::v1beta1::{
-    ContractInfoByPoolIdRequest, ContractInfoByPoolIdResponse, MsgCreateCosmWasmPool,
+use osmosis_std::types::{
+    cosmos::bank::v1beta1::QueryAllBalancesRequest,
+    cosmwasm::wasm::v1::MsgExecuteContractResponse,
+    osmosis::cosmwasmpool::v1beta1::{
+        ContractInfoByPoolIdRequest, ContractInfoByPoolIdResponse, MsgCreateCosmWasmPool,
+    },
 };
 use osmosis_test_tube::{
-    cosmrs,
     osmosis_std::types::osmosis::cosmwasmpool::v1beta1::UploadCosmWasmPoolCodeAndWhiteListProposal,
     GovWithAppAccess,
 };
 
 use osmosis_test_tube::{
-    cosmrs::proto::{
-        cosmos::bank::v1beta1::QueryAllBalancesRequest,
-        cosmwasm::wasm::v1::MsgExecuteContractResponse,
-    },
     Account, Bank, Module, OsmosisTestApp, RunnerError, RunnerExecuteResult, RunnerResult,
     SigningAccount, Wasm,
 };
@@ -161,6 +160,7 @@ impl<'a> TransmuterContract<'a> {
                 wasm_byte_code: Self::get_wasm_byte_code(),
             },
             signer.address(),
+            false,
             signer,
         )?;
 
@@ -233,11 +233,4 @@ pub fn assert_contract_err(expected: ContractError, actual: RunnerError) {
         }
         _ => panic!("unexpected error, expect execute error but got: {}", actual),
     };
-}
-
-pub fn to_proto_coin(c: &cosmwasm_std::Coin) -> cosmrs::proto::cosmos::base::v1beta1::Coin {
-    cosmrs::proto::cosmos::base::v1beta1::Coin {
-        denom: c.denom.parse().unwrap(),
-        amount: format!("{}", c.amount.u128()),
-    }
 }
