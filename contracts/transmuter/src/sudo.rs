@@ -59,17 +59,17 @@ impl SudoMsg {
                 let (deps, env) = ctx;
                 let sender = deps.api.addr_validate(&sender)?;
 
-                let share_denom = transmuter.shares.get_share_denom(deps.storage)?;
+                let alloyed_denom = transmuter.alloyed_asset.get_alloyed_denom(deps.storage)?;
 
-                // if token in is share denom, swap shares for tokens
-                if token_in.denom == share_denom {
+                // if token in is share denom, swap alloyed asset for tokens
+                if token_in.denom == alloyed_denom {
                     let token_out = Coin::new(token_in.amount.u128(), token_out_denom);
                     let swap_result = to_binary(&SwapExactAmountInResponseData {
                         token_out_amount: token_out.amount,
                     })?;
 
                     return transmuter
-                        .swap_shares_for_tokens(
+                        .swap_alloyed_asset_for_tokens(
                             method,
                             (
                                 deps,
@@ -85,14 +85,14 @@ impl SudoMsg {
                 }
 
                 // if token out is share denom, swap token for shares
-                if token_out_denom == share_denom {
+                if token_out_denom == alloyed_denom {
                     let token_out = Coin::new(token_in.amount.u128(), token_out_denom);
                     let swap_result = to_binary(&SwapExactAmountInResponseData {
                         token_out_amount: token_out.amount,
                     })?;
 
                     return transmuter
-                        .swap_tokens_for_shares(
+                        .swap_tokens_for_alloyed_asset(
                             method,
                             (
                                 deps,
@@ -160,17 +160,17 @@ impl SudoMsg {
 
                 let sender = deps.api.addr_validate(&sender)?;
 
-                let share_denom = transmuter.shares.get_share_denom(deps.storage)?;
+                let alloyed_denom = transmuter.alloyed_asset.get_alloyed_denom(deps.storage)?;
 
                 // if token in is share denom, swap shares for tokens
-                if token_in_denom == share_denom {
+                if token_in_denom == alloyed_denom {
                     let token_in = Coin::new(token_out.amount.u128(), token_in_denom);
                     let swap_result = to_binary(&SwapExactAmountOutResponseData {
                         token_in_amount: token_in.amount,
                     })?;
 
                     return transmuter
-                        .swap_shares_for_tokens(
+                        .swap_alloyed_asset_for_tokens(
                             method,
                             (
                                 deps,
@@ -186,14 +186,14 @@ impl SudoMsg {
                 }
 
                 // if token out is share denom, swap token for shares
-                if token_out.denom == share_denom {
+                if token_out.denom == alloyed_denom {
                     let token_in = Coin::new(token_out.amount.u128(), token_in_denom);
                     let swap_result = to_binary(&SwapExactAmountOutResponseData {
                         token_in_amount: token_in.amount,
                     })?;
 
                     return transmuter
-                        .swap_tokens_for_shares(
+                        .swap_tokens_for_alloyed_asset(
                             method,
                             (
                                 deps,

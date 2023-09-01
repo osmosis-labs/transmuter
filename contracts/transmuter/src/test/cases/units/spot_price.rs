@@ -31,8 +31,8 @@ fn test_spot_price(liquidity: &[Coin]) {
         .unwrap();
 
     transmuter
-        .shares
-        .set_share_denom(
+        .alloyed_asset
+        .set_alloyed_denom(
             &mut deps.storage,
             &"factory/contract_address/transmuter/poolshare".to_string(),
         )

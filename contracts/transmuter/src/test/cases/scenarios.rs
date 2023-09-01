@@ -875,7 +875,7 @@ fn test_3_pool_swap() {
 }
 
 #[test]
-fn test_swap_lp_denom() {
+fn test_swap_alloyed_asset() {
     let app = OsmosisTestApp::new();
 
     let alloyed_asset_subdenom = "eth";
@@ -893,7 +893,7 @@ fn test_swap_lp_denom() {
         })
         .build(&app);
 
-    // pool share denom
+    // alloyed asset denom
     let GetShareDenomResponse { share_denom } =
         t.contract.query(&QueryMsg::GetShareDenom {}).unwrap();
 
