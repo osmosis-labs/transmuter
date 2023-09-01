@@ -1,5 +1,3 @@
-use std::collections::VecDeque;
-
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{ensure, Decimal, Storage, Timestamp, Uint64};
 use cw_storage_plus::Map;
@@ -145,23 +143,23 @@ impl CompressedSMALimiter {
             )?]
         } else {
             // If the division is over, create a new division
-            let mut divisions = VecDeque::from(updated_limiter.divisions);
-            let latest_division = divisions.pop_back().expect("divisions must not be empty");
+            let mut divisions = updated_limiter.divisions;
+            let latest_division = divisions.last().expect("divisions must not be empty");
 
             if latest_division.elapsed_time(block_time)? >= division_size {
                 let started_at = latest_division.next_started_at(division_size, block_time)?;
 
                 let new_division =
                     CompressedSMADivision::new(started_at, block_time, value, prev_value)?;
-                divisions.push_back(latest_division);
-                divisions.push_back(new_division);
-                divisions.into()
+                divisions.push(new_division);
             }
             // else update the current division
             else {
-                divisions.push_back(latest_division.update(block_time, value)?);
-                divisions.into()
+                let last_index = divisions.len() - 1;
+                divisions[last_index] = latest_division.update(block_time, value)?;
             }
+
+            divisions
         };
 
         Ok(updated_limiter)
@@ -173,29 +171,22 @@ impl CompressedSMALimiter {
     ) -> Result<(Option<CompressedSMADivision>, Self), ContractError> {
         let mut latest_removed_division = None;
 
-        let mut divisions = VecDeque::from(self.divisions);
+        let mut divisions = self.divisions;
 
-        while let Some(division) = divisions.front() {
+        while let Some(division) = divisions.get(0) {
             // if window completely passed the division, remove the division
-
             if division.is_outdated(
                 block_time,
                 self.window_config.window_size,
                 self.window_config.division_size()?,
             )? {
-                latest_removed_division = divisions.pop_front();
+                latest_removed_division = Some(divisions.remove(0));
             } else {
                 break;
             }
         }
 
-        Ok((
-            latest_removed_division,
-            Self {
-                divisions: divisions.into(),
-                ..self
-            },
-        ))
+        Ok((latest_removed_division, Self { divisions, ..self }))
     }
 }
 
