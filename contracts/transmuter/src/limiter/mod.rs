@@ -1,4 +1,4 @@
-mod compressed_sma_division;
+mod division;
 mod helpers;
 mod limiters;
 

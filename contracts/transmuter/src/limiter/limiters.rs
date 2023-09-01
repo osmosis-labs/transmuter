@@ -4,7 +4,7 @@ use cw_storage_plus::Map;
 
 use crate::ContractError;
 
-use super::compressed_sma_division::CompressedSMADivision;
+use super::division::Division;
 
 /// Maximum number of divisions allowed in a window.
 /// This limited so that the contract can't be abused by setting a large division count,
@@ -40,14 +40,14 @@ impl WindowConfig {
 /// The data points used for calculating SMA are divided into divisions, which gets compressed
 /// for storage read efficiency, and reduce gas consumption.
 ///
-/// See [`CompressedSMADivision`] for more detail on how the division is compressed and
+/// See [`Division`] for more detail on how the division is compressed and
 /// how SMA is calculated.
 #[cw_serde]
 pub struct ChangeLimiter {
     /// Divisions in the window, divisions are ordered from oldest to newest.
     /// Kept divisions must exist within or overlap with the window, else
     /// they will be cleaned up.
-    divisions: Vec<CompressedSMADivision>,
+    divisions: Vec<Division>,
 
     /// Latest updated value.
     latest_value: Decimal,
@@ -108,7 +108,7 @@ impl ChangeLimiter {
             !updated_limiter.divisions.is_empty() || latest_removed_division.is_some();
 
         if has_any_prev_data_points {
-            let avg = CompressedSMADivision::compressed_moving_average(
+            let avg = Division::compressed_moving_average(
                 latest_removed_division,
                 &updated_limiter.divisions,
                 updated_limiter.window_config.division_size()?,
@@ -140,9 +140,7 @@ impl ChangeLimiter {
         updated_limiter.latest_value = value;
 
         updated_limiter.divisions = if updated_limiter.divisions.is_empty() {
-            vec![CompressedSMADivision::new(
-                block_time, block_time, value, value,
-            )?]
+            vec![Division::new(block_time, block_time, value, value)?]
         } else {
             // If the division is over, create a new division
             let mut divisions = updated_limiter.divisions;
@@ -151,8 +149,7 @@ impl ChangeLimiter {
             if latest_division.elapsed_time(block_time)? >= division_size {
                 let started_at = latest_division.next_started_at(division_size, block_time)?;
 
-                let new_division =
-                    CompressedSMADivision::new(started_at, block_time, value, prev_value)?;
+                let new_division = Division::new(started_at, block_time, value, prev_value)?;
                 divisions.push(new_division);
             }
             // else update the current division
@@ -170,7 +167,7 @@ impl ChangeLimiter {
     fn clean_up_outdated_divisions(
         self,
         block_time: Timestamp,
-    ) -> Result<(Option<CompressedSMADivision>, Self), ContractError> {
+    ) -> Result<(Option<Division>, Self), ContractError> {
         let mut latest_removed_division = None;
 
         let mut divisions = self.divisions;
@@ -808,7 +805,7 @@ mod tests {
             let block_time = Timestamp::from_nanos(1661231280000000000);
 
             let divisions = vec![
-                CompressedSMADivision::new(
+                Division::new(
                     block_time.minus_nanos(config.window_size.u64()),
                     block_time
                         .minus_nanos(config.window_size.u64())
@@ -817,7 +814,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time.minus_nanos(
                         config.window_size.u64() - config.division_size().unwrap().u64(),
                     ),
@@ -851,7 +848,7 @@ mod tests {
 
             let offset_mins = 20;
             let divisions = vec![
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64())
                         .minus_minutes(offset_mins),
@@ -863,7 +860,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64())
                         .plus_nanos(config.division_size().unwrap().u64())
@@ -877,7 +874,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64())
                         .plus_nanos(config.division_size().unwrap().u64() * 2)
@@ -916,7 +913,7 @@ mod tests {
             let block_time = Timestamp::from_nanos(1661231280000000000);
 
             let divisions = vec![
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64())
                         .minus_nanos(config.division_size().unwrap().u64()),
@@ -928,7 +925,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time.minus_nanos(config.window_size.u64()),
                     block_time
                         .minus_nanos(config.window_size.u64())
@@ -937,7 +934,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64())
                         .plus_nanos(config.division_size().unwrap().u64()),
@@ -978,7 +975,7 @@ mod tests {
             let offset_minutes = 0;
 
             let divisions = vec![
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .plus_minutes(offset_minutes),
@@ -990,7 +987,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .plus_nanos(config.division_size().unwrap().u64())
@@ -1004,7 +1001,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .plus_nanos(config.division_size().unwrap().u64() * 2)
@@ -1044,7 +1041,7 @@ mod tests {
             let offset_minutes = 10;
 
             let divisions = vec![
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .plus_minutes(offset_minutes),
@@ -1056,7 +1053,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .plus_nanos(config.division_size().unwrap().u64())
@@ -1070,7 +1067,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .plus_nanos(config.division_size().unwrap().u64() * 2)
@@ -1109,7 +1106,7 @@ mod tests {
             let offset_minutes = 0;
 
             let divisions = vec![
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .minus_nanos(config.division_size().unwrap().u64())
@@ -1123,7 +1120,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .plus_minutes(offset_minutes),
@@ -1135,7 +1132,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .plus_nanos(config.division_size().unwrap().u64())
@@ -1475,7 +1472,7 @@ mod tests {
                 list_divisions(&limiter, "denomb", "1h", &deps.storage),
                 vec![
                     old_divs[1..].to_vec(),
-                    vec![CompressedSMADivision::new(
+                    vec![Division::new(
                         block_time.minus_minutes(5), // @75 (= 15 * 5)
                         block_time,
                         value,
@@ -1717,7 +1714,7 @@ mod tests {
         denom: &str,
         humanized_window_size: &str,
         storage: &dyn Storage,
-    ) -> Vec<CompressedSMADivision> {
+    ) -> Vec<Division> {
         let limiter = limiter
             .limiters
             .load(storage, (denom, humanized_window_size))
