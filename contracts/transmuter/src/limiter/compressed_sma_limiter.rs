@@ -289,7 +289,6 @@ impl<'a> Limiters<'a> {
             let limiters = self.list_limiters_by_denom(storage, denom.as_str())?;
 
             for (human_readable_window, limiter) in limiters {
-                dbg!(denom.as_str(), human_readable_window.as_str(), value);
                 let limiter = limiter
                     .ensure_upper_limit(block_time, denom.as_str(), value)?
                     .update(block_time, value)?;
