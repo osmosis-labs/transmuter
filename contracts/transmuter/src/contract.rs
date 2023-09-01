@@ -121,7 +121,7 @@ impl Transmuter<'_> {
         &self,
         ctx: (DepsMut, Env, MessageInfo),
         denom: String,
-        human_readable_window: String,
+        label: String,
         window_config: WindowConfig,
         boundary_offset: Decimal,
     ) -> Result<Response, ContractError> {
@@ -136,20 +136,15 @@ impl Transmuter<'_> {
         let attrs = vec![
             ("method", "register_limiter"),
             ("denom", &denom),
-            ("human_readable_window", &human_readable_window),
+            ("label", &label),
             ("window_size", &window_size),
             ("division_count", division_count.as_str()),
             ("boundary_offset", boundary_offset_string.as_str()),
         ];
 
         // register limiter
-        self.limiters.register(
-            deps.storage,
-            &denom,
-            &human_readable_window,
-            window_config,
-            boundary_offset,
-        )?;
+        self.limiters
+            .register(deps.storage, &denom, &label, window_config, boundary_offset)?;
 
         Ok(Response::new().add_attributes(attrs))
     }
@@ -159,7 +154,7 @@ impl Transmuter<'_> {
         &self,
         ctx: (DepsMut, Env, MessageInfo),
         denom: String,
-        human_readable_window: String,
+        label: String,
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
@@ -169,12 +164,11 @@ impl Transmuter<'_> {
         let attrs = vec![
             ("method", "deregister_limiter"),
             ("denom", &denom),
-            ("human_readable_window", &human_readable_window),
+            ("label", &label),
         ];
 
         // deregister limiter
-        self.limiters
-            .deregister(deps.storage, &denom, &human_readable_window);
+        self.limiters.deregister(deps.storage, &denom, &label);
 
         Ok(Response::new().add_attributes(attrs))
     }
@@ -184,7 +178,7 @@ impl Transmuter<'_> {
         &self,
         ctx: (DepsMut, Env, MessageInfo),
         denom: String,
-        human_readable_window: String,
+        label: String,
         boundary_offset: Decimal,
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
@@ -196,17 +190,13 @@ impl Transmuter<'_> {
         let attrs = vec![
             ("method", "set_boundary_offset"),
             ("denom", &denom),
-            ("human_readable_window", &human_readable_window),
+            ("label", &label),
             ("boundary_offset", boundary_offset_string.as_str()),
         ];
 
         // set boundary offset
-        self.limiters.set_boundary_offset(
-            deps.storage,
-            &denom,
-            &human_readable_window,
-            boundary_offset,
-        )?;
+        self.limiters
+            .set_boundary_offset(deps.storage, &denom, &label, boundary_offset)?;
 
         Ok(Response::new().add_attributes(attrs))
     }
@@ -963,7 +953,7 @@ mod tests {
             mock_info(user, &[]),
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
                 denom: "uosmo".to_string(),
-                human_readable_window: "1h".to_string(),
+                label: "1h".to_string(),
                 window_config: WindowConfig {
                     window_size: Uint64::from(604_800_000_000u64),
                     division_count: Uint64::from(5u64),
@@ -986,7 +976,7 @@ mod tests {
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
                 denom: "uosmo".to_string(),
-                human_readable_window: "1h".to_string(),
+                label: "1h".to_string(),
                 window_config: window_config_1h.clone(),
                 boundary_offset: Decimal::zero(),
             }),
@@ -996,7 +986,7 @@ mod tests {
         let attrs = vec![
             attr("method", "register_limiter"),
             attr("denom", "uosmo"),
-            attr("human_readable_window", "1h"),
+            attr("label", "1h"),
             attr("window_size", "3600000000000"),
             attr("division_count", "5"),
             attr("boundary_offset", "0"),
@@ -1027,7 +1017,7 @@ mod tests {
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
                 denom: "osmo".to_string(),
-                human_readable_window: "1w".to_string(),
+                label: "1w".to_string(),
                 window_config: window_config_1w.clone(),
                 boundary_offset: Decimal::zero(),
             }),
@@ -1037,7 +1027,7 @@ mod tests {
         let attrs_1w = vec![
             attr("method", "register_limiter"),
             attr("denom", "osmo"),
-            attr("human_readable_window", "1w"),
+            attr("label", "1w"),
             attr("window_size", "604800000000"),
             attr("division_count", "5"),
             attr("boundary_offset", "0"),
@@ -1071,7 +1061,7 @@ mod tests {
             mock_info(user, &[]),
             ContractExecMsg::Transmuter(ExecMsg::DeregisterLimiter {
                 denom: "uosmo".to_string(),
-                human_readable_window: "1h".to_string(),
+                label: "1h".to_string(),
             }),
         )
         .unwrap_err();
@@ -1085,7 +1075,7 @@ mod tests {
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::DeregisterLimiter {
                 denom: "uosmo".to_string(),
-                human_readable_window: "1h".to_string(),
+                label: "1h".to_string(),
             }),
         )
         .unwrap();
@@ -1093,7 +1083,7 @@ mod tests {
         let attrs = vec![
             attr("method", "deregister_limiter"),
             attr("denom", "uosmo"),
-            attr("human_readable_window", "1h"),
+            attr("label", "1h"),
         ];
 
         assert_eq!(res.attributes, attrs);
@@ -1118,7 +1108,7 @@ mod tests {
             mock_info(user, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetBoundaryOffset {
                 denom: "osmo".to_string(),
-                human_readable_window: "1w".to_string(),
+                label: "1w".to_string(),
                 boundary_offset: Decimal::zero(),
             }),
         )
@@ -1133,7 +1123,7 @@ mod tests {
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetBoundaryOffset {
                 denom: "osmo".to_string(),
-                human_readable_window: "1h".to_string(),
+                label: "1h".to_string(),
                 boundary_offset: Decimal::zero(),
             }),
         )
@@ -1143,7 +1133,7 @@ mod tests {
             err,
             ContractError::LimiterDoesNotExist {
                 denom: "osmo".to_string(),
-                human_readable_window: "1h".to_string()
+                label: "1h".to_string()
             }
         );
 
@@ -1154,7 +1144,7 @@ mod tests {
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetBoundaryOffset {
                 denom: "osmo".to_string(),
-                human_readable_window: "1w".to_string(),
+                label: "1w".to_string(),
                 boundary_offset: Decimal::percent(10),
             }),
         )
@@ -1163,7 +1153,7 @@ mod tests {
         let attrs = vec![
             attr("method", "set_boundary_offset"),
             attr("denom", "osmo"),
-            attr("human_readable_window", "1w"),
+            attr("label", "1w"),
             attr("boundary_offset", "0.1"),
         ];
 

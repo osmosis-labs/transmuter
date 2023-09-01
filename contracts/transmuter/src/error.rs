@@ -80,21 +80,11 @@ pub enum ContractError {
     #[error("Time must be monotonically increasing")]
     NonMonotonicTime {},
 
-    #[error(
-        "Limiter does not exist for denom: {denom}, human_readable_window: {human_readable_window}"
-    )]
-    LimiterDoesNotExist {
-        denom: String,
-        human_readable_window: String,
-    },
+    #[error("Limiter does not exist for denom: {denom}, label: {label}")]
+    LimiterDoesNotExist { denom: String, label: String },
 
-    #[error(
-        "Limiter already exists for denom: {denom}, human_readable_window: {human_readable_window}"
-    )]
-    LimiterAlreadyExists {
-        denom: String,
-        human_readable_window: String,
-    },
+    #[error("Limiter already exists for denom: {denom}, label: {label}")]
+    LimiterAlreadyExists { denom: String, label: String },
 
     #[error(
         "Change upper limit exceeded for `{denom}`, upper limit is {upper_limit}, but the resulted ratio is {value}"

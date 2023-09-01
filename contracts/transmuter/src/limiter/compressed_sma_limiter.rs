@@ -37,7 +37,7 @@ impl WindowConfig {
 }
 
 pub struct Limiters<'a> {
-    /// Map of (denom, human_readable_window) -> CompressedSMALimiter
+    /// Map of (denom, label) -> CompressedSMALimiter
     limiters: Map<'a, (&'a str, &'a str), CompressedSMALimiter>,
 }
 #[cw_serde]
@@ -201,48 +201,45 @@ impl<'a> Limiters<'a> {
         &self,
         storage: &mut dyn Storage,
         denom: &str,
-        human_readable_window: &str,
+        label: &str,
         window_config: WindowConfig,
         boundary_offset: Decimal,
     ) -> Result<(), ContractError> {
-        let is_registering_limiter_exists = self
-            .limiters
-            .may_load(storage, (denom, human_readable_window))?
-            .is_some();
+        let is_registering_limiter_exists =
+            self.limiters.may_load(storage, (denom, label))?.is_some();
 
         ensure!(
             !is_registering_limiter_exists,
             ContractError::LimiterAlreadyExists {
                 denom: denom.to_string(),
-                human_readable_window: human_readable_window.to_string()
+                label: label.to_string()
             }
         );
 
         let limiter = CompressedSMALimiter::new(window_config, boundary_offset)?;
         self.limiters
-            .save(storage, (denom, human_readable_window), &limiter)
+            .save(storage, (denom, label), &limiter)
             .map_err(Into::into)
     }
 
-    pub fn deregister(&self, storage: &mut dyn Storage, denom: &str, human_readable_window: &str) {
-        self.limiters
-            .remove(storage, (denom, human_readable_window))
+    pub fn deregister(&self, storage: &mut dyn Storage, denom: &str, label: &str) {
+        self.limiters.remove(storage, (denom, label))
     }
 
     pub fn set_boundary_offset(
         &self,
         storage: &mut dyn Storage,
         denom: &str,
-        human_readable_window: &str,
+        label: &str,
         boundary_offset: Decimal,
     ) -> Result<(), ContractError> {
         self.limiters.update(
             storage,
-            (denom, human_readable_window),
+            (denom, label),
             |limiter: Option<CompressedSMALimiter>| -> Result<CompressedSMALimiter, ContractError> {
                 let limiter = limiter.ok_or(ContractError::LimiterDoesNotExist {
                     denom: denom.to_string(),
-                    human_readable_window: human_readable_window.to_string(),
+                    label: label.to_string(),
                 })?;
 
                 Ok(CompressedSMALimiter {
@@ -288,14 +285,14 @@ impl<'a> Limiters<'a> {
         for (denom, value) in denom_value_pairs {
             let limiters = self.list_limiters_by_denom(storage, denom.as_str())?;
 
-            for (human_readable_window, limiter) in limiters {
+            for (label, limiter) in limiters {
                 let limiter = limiter
                     .ensure_upper_limit(block_time, denom.as_str(), value)?
                     .update(block_time, value)?;
 
                 // save updated limiter
                 self.limiters
-                    .save(storage, (denom.as_str(), &human_readable_window), &limiter)?;
+                    .save(storage, (denom.as_str(), &label), &limiter)?;
             }
         }
 
@@ -531,7 +528,7 @@ mod tests {
                 err,
                 ContractError::LimiterAlreadyExists {
                     denom: "denoma".to_string(),
-                    human_readable_window: "1m".to_string()
+                    label: "1m".to_string()
                 }
             );
         }
