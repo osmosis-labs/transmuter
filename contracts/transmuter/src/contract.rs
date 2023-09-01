@@ -2,7 +2,7 @@ use crate::{
     admin::Admin,
     ensure_admin_authority,
     error::ContractError,
-    limiter::{Limiter, Limiters, WindowConfig},
+    limiter::{Limiter, LimiterParams, Limiters, WindowConfig},
     shares::Shares,
     transmuter_pool::TransmuterPool,
 };
@@ -122,31 +122,47 @@ impl Transmuter<'_> {
         ctx: (DepsMut, Env, MessageInfo),
         denom: String,
         label: String,
-        window_config: WindowConfig,
-        boundary_offset: Decimal,
+        limiter_params: LimiterParams,
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
         // only admin can register limiter
         ensure_admin_authority!(info.sender, self.admin, deps.as_ref());
 
-        let window_size = window_config.window_size.to_string();
-        let division_count = window_config.division_count.to_string();
-        let boundary_offset_string = boundary_offset.to_string();
-        let attrs = vec![
+        let base_attrs = vec![
             ("method", "register_limiter"),
             ("denom", &denom),
             ("label", &label),
-            ("window_size", &window_size),
-            ("division_count", division_count.as_str()),
-            ("boundary_offset", boundary_offset_string.as_str()),
         ];
+        let limiter_attrs = match &limiter_params {
+            LimiterParams::ChangeLimiter {
+                window_config,
+                boundary_offset,
+            } => {
+                let window_size = window_config.window_size.to_string();
+                let division_count = window_config.division_count.to_string();
+                let boundary_offset_string = boundary_offset.to_string();
+
+                vec![
+                    (String::from("limiter_type"), String::from("change_limiter")),
+                    (String::from("window_size"), window_size),
+                    (String::from("division_count"), division_count),
+                    (String::from("boundary_offset"), boundary_offset_string),
+                ]
+            }
+            LimiterParams::StaticLimiter { upper_limit } => vec![
+                (String::from("limiter_type"), String::from("static_limiter")),
+                (String::from("upper_limit"), upper_limit.to_string()),
+            ],
+        };
 
         // register limiter
         self.limiters
-            .register(deps.storage, &denom, &label, window_config, boundary_offset)?;
+            .register(deps.storage, &denom, &label, limiter_params)?;
 
-        Ok(Response::new().add_attributes(attrs))
+        Ok(Response::new()
+            .add_attributes(base_attrs)
+            .add_attributes(limiter_attrs))
     }
 
     #[msg(exec)]
@@ -961,11 +977,13 @@ mod tests {
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
                 denom: "uosmo".to_string(),
                 label: "1h".to_string(),
-                window_config: WindowConfig {
-                    window_size: Uint64::from(604_800_000_000u64),
-                    division_count: Uint64::from(5u64),
+                limiter_params: LimiterParams::ChangeLimiter {
+                    window_config: WindowConfig {
+                        window_size: Uint64::from(604_800_000_000u64),
+                        division_count: Uint64::from(5u64),
+                    },
+                    boundary_offset: Decimal::zero(),
                 },
-                boundary_offset: Decimal::zero(),
             }),
         )
         .unwrap_err();
@@ -984,8 +1002,10 @@ mod tests {
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
                 denom: "uosmo".to_string(),
                 label: "1h".to_string(),
-                window_config: window_config_1h.clone(),
-                boundary_offset: Decimal::zero(),
+                limiter_params: LimiterParams::ChangeLimiter {
+                    window_config: window_config_1h.clone(),
+                    boundary_offset: Decimal::zero(),
+                },
             }),
         )
         .unwrap();
@@ -994,6 +1014,7 @@ mod tests {
             attr("method", "register_limiter"),
             attr("denom", "uosmo"),
             attr("label", "1h"),
+            attr("limiter_type", "change_limiter"),
             attr("window_size", "3600000000000"),
             attr("division_count", "5"),
             attr("boundary_offset", "0"),
@@ -1027,8 +1048,10 @@ mod tests {
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
                 denom: "osmo".to_string(),
                 label: "1w".to_string(),
-                window_config: window_config_1w.clone(),
-                boundary_offset: Decimal::zero(),
+                limiter_params: LimiterParams::ChangeLimiter {
+                    window_config: window_config_1w.clone(),
+                    boundary_offset: Decimal::zero(),
+                },
             }),
         )
         .unwrap();
@@ -1037,6 +1060,7 @@ mod tests {
             attr("method", "register_limiter"),
             attr("denom", "osmo"),
             attr("label", "1w"),
+            attr("limiter_type", "change_limiter"),
             attr("window_size", "604800000000"),
             attr("division_count", "5"),
             attr("boundary_offset", "0"),

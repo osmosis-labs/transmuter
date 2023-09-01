@@ -121,7 +121,7 @@ impl ChangeLimiter {
 
             ensure!(
                 value <= upper_limit,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: denom.to_string(),
                     upper_limit,
                     value,
@@ -189,9 +189,47 @@ impl ChangeLimiter {
     }
 }
 
+/// Limiter that determines limit by upper bound of the value.
+#[cw_serde]
+pub struct StaticLimiter {
+    /// Upper limit of the value
+    upper_limit: Decimal,
+}
+
+impl StaticLimiter {
+    pub fn new(upper_limit: Decimal) -> Self {
+        Self { upper_limit }
+    }
+
+    fn ensure_upper_limit(self, denom: &str, value: Decimal) -> Result<Self, ContractError> {
+        ensure!(
+            value <= self.upper_limit,
+            ContractError::UpperLimitExceeded {
+                denom: denom.to_string(),
+                upper_limit: self.upper_limit,
+                value,
+            }
+        );
+
+        Ok(self)
+    }
+}
+
 #[cw_serde]
 pub enum Limiter {
     ChangeLimiter(ChangeLimiter),
+    StaticLimiter(StaticLimiter),
+}
+
+#[cw_serde]
+pub enum LimiterParams {
+    ChangeLimiter {
+        window_config: WindowConfig,
+        boundary_offset: Decimal,
+    },
+    StaticLimiter {
+        upper_limit: Decimal,
+    },
 }
 
 pub struct Limiters<'a> {
@@ -211,8 +249,7 @@ impl<'a> Limiters<'a> {
         storage: &mut dyn Storage,
         denom: &str,
         label: &str,
-        window_config: WindowConfig,
-        boundary_offset: Decimal,
+        limiter_params: LimiterParams,
     ) -> Result<(), ContractError> {
         let is_registering_limiter_exists =
             self.limiters.may_load(storage, (denom, label))?.is_some();
@@ -225,7 +262,14 @@ impl<'a> Limiters<'a> {
             }
         );
 
-        let limiter = Limiter::ChangeLimiter(ChangeLimiter::new(window_config, boundary_offset)?);
+        let limiter = match limiter_params {
+            LimiterParams::ChangeLimiter {
+                window_config,
+                boundary_offset,
+            } => Limiter::ChangeLimiter(ChangeLimiter::new(window_config, boundary_offset)?),
+            LimiterParams::StaticLimiter { upper_limit } => todo!(),
+        };
+
         self.limiters
             .save(storage, (denom, label), &limiter)
             .map_err(Into::into)
@@ -257,6 +301,7 @@ impl<'a> Limiters<'a> {
                         boundary_offset,
                         ..limiter
                     })),
+                    Limiter::StaticLimiter(_) => todo!(),
                 }
             },
         )?;
@@ -307,6 +352,7 @@ impl<'a> Limiters<'a> {
 
                         Limiter::ChangeLimiter(limiter)
                     }
+                    Limiter::StaticLimiter(_) => todo!(),
                 };
 
                 // save updated limiter
@@ -338,11 +384,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(604_800_000_000u64),
-                        division_count: Uint64::from(5u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap();
 
@@ -367,11 +415,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1h",
-                    WindowConfig {
-                        window_size: Uint64::from(3_600_000_000_000u64),
-                        division_count: Uint64::from(2u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(3_600_000_000_000u64),
+                            division_count: Uint64::from(2u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap();
 
@@ -410,11 +460,13 @@ mod tests {
                     &mut deps.storage,
                     "denomb",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(604_800_000_000u64),
-                        division_count: Uint64::from(5u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap();
 
@@ -521,11 +573,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(604_800_000_000u64),
-                        division_count: Uint64::from(5u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap();
 
@@ -534,11 +588,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(604_800_000_000u64),
-                        division_count: Uint64::from(10u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(10u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap_err();
 
@@ -561,11 +617,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(604_800_000_000u64),
-                        division_count: Uint64::from(5u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap();
 
@@ -590,11 +648,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1h",
-                    WindowConfig {
-                        window_size: Uint64::from(3_600_000_000_000u64),
-                        division_count: Uint64::from(2u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(3_600_000_000_000u64),
+                            division_count: Uint64::from(2u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap();
 
@@ -668,11 +728,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(604_800_000_001u64),
-                        division_count: Uint64::from(9u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_001u64),
+                            division_count: Uint64::from(9u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap_err();
 
@@ -690,11 +752,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(604_800_000_000u64),
-                        division_count: Uint64::from(0u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(0u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap_err();
 
@@ -717,11 +781,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(660_000_000_000u64),
-                        division_count: Uint64::from(11u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(660_000_000_000u64),
+                            division_count: Uint64::from(11u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap_err();
 
@@ -744,11 +810,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(604_800_000_000u64),
-                        division_count: Uint64::from(5u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap();
 
@@ -1181,8 +1249,10 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1h",
-                    config,
-                    Decimal::percent(5),
+                    LimiterParams::ChangeLimiter {
+                        window_config: config,
+                        boundary_offset: Decimal::percent(5),
+                    },
                 )
                 .unwrap();
 
@@ -1233,7 +1303,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denoma".to_string(),
                     upper_limit: Decimal::percent(58),
                     value: Decimal::from_str("0.580000000000000001").unwrap(),
@@ -1259,7 +1329,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denoma".to_string(),
                     upper_limit: Decimal::from_str("0.5875").unwrap(),
                     value: Decimal::from_str("0.587500000000000001").unwrap(),
@@ -1298,7 +1368,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denoma".to_string(),
                     upper_limit: Decimal::from_str("0.56").unwrap(),
                     value: Decimal::from_str("0.560000000000000001").unwrap(),
@@ -1324,7 +1394,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denoma".to_string(),
                     upper_limit: Decimal::from_str("0.525").unwrap(),
                     value: Decimal::from_str("0.525000000000000001").unwrap(),
@@ -1355,7 +1425,15 @@ mod tests {
                 division_count: Uint64::from(4u64),              // 15 mins each
             };
             limiter
-                .register(&mut deps.storage, "denomb", "1h", config, Decimal::zero())
+                .register(
+                    &mut deps.storage,
+                    "denomb",
+                    "1h",
+                    LimiterParams::ChangeLimiter {
+                        window_config: config,
+                        boundary_offset: Decimal::zero(),
+                    },
+                )
                 .unwrap();
 
             limiter
@@ -1410,7 +1488,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denomb".to_string(),
                     upper_limit: Decimal::from_str("0.5").unwrap(),
                     value: Decimal::from_str("0.500000000000000001").unwrap(),
@@ -1444,7 +1522,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denomb".to_string(),
                     upper_limit: Decimal::from_str("0.491666666666666666").unwrap(),
                     value: Decimal::from_str("0.491666666666666667").unwrap(),
@@ -1493,7 +1571,15 @@ mod tests {
                 division_count: Uint64::from(4u64),              // 15 mins each
             };
             limiter
-                .register(&mut deps.storage, "denomb", "1h", config, Decimal::zero())
+                .register(
+                    &mut deps.storage,
+                    "denomb",
+                    "1h",
+                    LimiterParams::ChangeLimiter {
+                        window_config: config,
+                        boundary_offset: Decimal::zero(),
+                    },
+                )
                 .unwrap();
 
             limiter
@@ -1543,7 +1629,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: String::from("denomb"),
                     upper_limit: Decimal::percent(51),
                     value
@@ -1571,8 +1657,10 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1h",
-                    config_1h.clone(),
-                    Decimal::percent(10),
+                    LimiterParams::ChangeLimiter {
+                        window_config: config_1h.clone(),
+                        boundary_offset: Decimal::percent(10),
+                    },
                 )
                 .unwrap();
 
@@ -1581,8 +1669,10 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1w",
-                    config_1w.clone(),
-                    Decimal::percent(5),
+                    LimiterParams::ChangeLimiter {
+                        window_config: config_1w.clone(),
+                        boundary_offset: Decimal::percent(5),
+                    },
                 )
                 .unwrap();
 
@@ -1591,8 +1681,10 @@ mod tests {
                     &mut deps.storage,
                     "denomb",
                     "1h",
-                    config_1h,
-                    Decimal::percent(10),
+                    LimiterParams::ChangeLimiter {
+                        window_config: config_1h,
+                        boundary_offset: Decimal::percent(10),
+                    },
                 )
                 .unwrap();
 
@@ -1601,8 +1693,10 @@ mod tests {
                     &mut deps.storage,
                     "denomb",
                     "1w",
-                    config_1w,
-                    Decimal::percent(5),
+                    LimiterParams::ChangeLimiter {
+                        window_config: config_1w,
+                        boundary_offset: Decimal::percent(5),
+                    },
                 )
                 .unwrap();
 
@@ -1637,7 +1731,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denoma".to_string(),
                     upper_limit: Decimal::from_str("0.6").unwrap(),
                     value: Decimal::from_str("0.600000000000000001").unwrap(),
@@ -1677,7 +1771,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denoma".to_string(),
                     upper_limit: Decimal::from_str("0.525").unwrap(),
                     value: Decimal::from_str("0.525000000000000001").unwrap(),
@@ -1700,7 +1794,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denoma".to_string(),
                     upper_limit: Decimal::from_str("0.55").unwrap(),
                     value: Decimal::from_str("0.550000000000000001").unwrap(),
@@ -1722,6 +1816,7 @@ mod tests {
 
         match limiter {
             Limiter::ChangeLimiter(limiter) => limiter.divisions,
+            Limiter::StaticLimiter(_) => panic!("not a change limiter"),
         }
     }
 }
