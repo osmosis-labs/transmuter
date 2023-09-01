@@ -4,7 +4,7 @@ use cw_storage_plus::Map;
 
 use crate::ContractError;
 
-use super::compressed_sma_division::CompressedSMADivision;
+use super::division::Division;
 
 /// Maximum number of divisions allowed in a window.
 /// This limited so that the contract can't be abused by setting a large division count,
@@ -40,14 +40,14 @@ impl WindowConfig {
 /// The data points used for calculating SMA are divided into divisions, which gets compressed
 /// for storage read efficiency, and reduce gas consumption.
 ///
-/// See [`CompressedSMADivision`] for more detail on how the division is compressed and
+/// See [`Division`] for more detail on how the division is compressed and
 /// how SMA is calculated.
 #[cw_serde]
 pub struct ChangeLimiter {
     /// Divisions in the window, divisions are ordered from oldest to newest.
     /// Kept divisions must exist within or overlap with the window, else
     /// they will be cleaned up.
-    divisions: Vec<CompressedSMADivision>,
+    divisions: Vec<Division>,
 
     /// Latest updated value.
     latest_value: Decimal,
@@ -108,7 +108,7 @@ impl ChangeLimiter {
             !updated_limiter.divisions.is_empty() || latest_removed_division.is_some();
 
         if has_any_prev_data_points {
-            let avg = CompressedSMADivision::compressed_moving_average(
+            let avg = Division::compressed_moving_average(
                 latest_removed_division,
                 &updated_limiter.divisions,
                 updated_limiter.window_config.division_size()?,
@@ -121,7 +121,7 @@ impl ChangeLimiter {
 
             ensure!(
                 value <= upper_limit,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: denom.to_string(),
                     upper_limit,
                     value,
@@ -140,9 +140,7 @@ impl ChangeLimiter {
         updated_limiter.latest_value = value;
 
         updated_limiter.divisions = if updated_limiter.divisions.is_empty() {
-            vec![CompressedSMADivision::new(
-                block_time, block_time, value, value,
-            )?]
+            vec![Division::new(block_time, block_time, value, value)?]
         } else {
             // If the division is over, create a new division
             let mut divisions = updated_limiter.divisions;
@@ -151,8 +149,7 @@ impl ChangeLimiter {
             if latest_division.elapsed_time(block_time)? >= division_size {
                 let started_at = latest_division.next_started_at(division_size, block_time)?;
 
-                let new_division =
-                    CompressedSMADivision::new(started_at, block_time, value, prev_value)?;
+                let new_division = Division::new(started_at, block_time, value, prev_value)?;
                 divisions.push(new_division);
             }
             // else update the current division
@@ -170,7 +167,7 @@ impl ChangeLimiter {
     fn clean_up_outdated_divisions(
         self,
         block_time: Timestamp,
-    ) -> Result<(Option<CompressedSMADivision>, Self), ContractError> {
+    ) -> Result<(Option<Division>, Self), ContractError> {
         let mut latest_removed_division = None;
 
         let mut divisions = self.divisions;
@@ -192,9 +189,51 @@ impl ChangeLimiter {
     }
 }
 
+/// Limiter that determines limit by upper bound of the value.
+#[cw_serde]
+pub struct StaticLimiter {
+    /// Upper limit of the value
+    upper_limit: Decimal,
+}
+
+impl StaticLimiter {
+    pub fn new(upper_limit: Decimal) -> Self {
+        Self { upper_limit }
+    }
+
+    fn ensure_upper_limit(self, denom: &str, value: Decimal) -> Result<Self, ContractError> {
+        ensure!(
+            value <= self.upper_limit,
+            ContractError::UpperLimitExceeded {
+                denom: denom.to_string(),
+                upper_limit: self.upper_limit,
+                value,
+            }
+        );
+
+        Ok(self)
+    }
+
+    fn set_upper_limit(self, upper_limit: Decimal) -> Self {
+        Self { upper_limit }
+    }
+}
+
 #[cw_serde]
 pub enum Limiter {
     ChangeLimiter(ChangeLimiter),
+    StaticLimiter(StaticLimiter),
+}
+
+#[cw_serde]
+pub enum LimiterParams {
+    ChangeLimiter {
+        window_config: WindowConfig,
+        boundary_offset: Decimal,
+    },
+    StaticLimiter {
+        upper_limit: Decimal,
+    },
 }
 
 pub struct Limiters<'a> {
@@ -214,8 +253,7 @@ impl<'a> Limiters<'a> {
         storage: &mut dyn Storage,
         denom: &str,
         label: &str,
-        window_config: WindowConfig,
-        boundary_offset: Decimal,
+        limiter_params: LimiterParams,
     ) -> Result<(), ContractError> {
         let is_registering_limiter_exists =
             self.limiters.may_load(storage, (denom, label))?.is_some();
@@ -228,7 +266,16 @@ impl<'a> Limiters<'a> {
             }
         );
 
-        let limiter = Limiter::ChangeLimiter(ChangeLimiter::new(window_config, boundary_offset)?);
+        let limiter = match limiter_params {
+            LimiterParams::ChangeLimiter {
+                window_config,
+                boundary_offset,
+            } => Limiter::ChangeLimiter(ChangeLimiter::new(window_config, boundary_offset)?),
+            LimiterParams::StaticLimiter { upper_limit } => {
+                Limiter::StaticLimiter(StaticLimiter::new(upper_limit))
+            }
+        };
+
         self.limiters
             .save(storage, (denom, label), &limiter)
             .map_err(Into::into)
@@ -238,7 +285,8 @@ impl<'a> Limiters<'a> {
         self.limiters.remove(storage, (denom, label))
     }
 
-    pub fn set_boundary_offset(
+    /// Set boundary offset for a [`ChangeLimiter`] only, otherwise it will fail.
+    pub fn set_change_limiter_boundary_offset(
         &self,
         storage: &mut dyn Storage,
         denom: &str,
@@ -260,6 +308,42 @@ impl<'a> Limiters<'a> {
                         boundary_offset,
                         ..limiter
                     })),
+                    Limiter::StaticLimiter(_) => Err(ContractError::WrongLimiterType {
+                        expected: "change_limiter".to_string(),
+                        actual: "static_limiter".to_string(),
+                    }),
+                }
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Set upper limit for a [`StaticLimiter`] only, otherwise it will fail.
+    pub fn set_static_limiter_upper_limit(
+        &self,
+        storage: &mut dyn Storage,
+        denom: &str,
+        label: &str,
+        upper_limit: Decimal,
+    ) -> Result<(), ContractError> {
+        self.limiters.update(
+            storage,
+            (denom, label),
+            |limiter: Option<Limiter>| -> Result<Limiter, ContractError> {
+                let limiter = limiter.ok_or(ContractError::LimiterDoesNotExist {
+                    denom: denom.to_string(),
+                    label: label.to_string(),
+                })?;
+
+                // check if the limiter is a StaticLimiter
+                match limiter {
+                    Limiter::StaticLimiter(limiter) => {
+                        Ok(Limiter::StaticLimiter(limiter.set_upper_limit(upper_limit)))
+                    }
+                    Limiter::ChangeLimiter(_) => Err(ContractError::WrongLimiterType {
+                        expected: "static_limiter".to_string(),
+                        actual: "change_limiter".to_string(),
+                    }),
                 }
             },
         )?;
@@ -303,12 +387,13 @@ impl<'a> Limiters<'a> {
             for (label, limiter) in limiters {
                 // match limiter type
                 let limiter = match limiter {
-                    Limiter::ChangeLimiter(limiter) => {
-                        let limiter = limiter
+                    Limiter::ChangeLimiter(limiter) => Limiter::ChangeLimiter(
+                        limiter
                             .ensure_upper_limit(block_time, denom.as_str(), value)?
-                            .update(block_time, value)?;
-
-                        Limiter::ChangeLimiter(limiter)
+                            .update(block_time, value)?,
+                    ),
+                    Limiter::StaticLimiter(limiter) => {
+                        Limiter::StaticLimiter(limiter.ensure_upper_limit(denom.as_str(), value)?)
                     }
                 };
 
@@ -341,11 +426,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(604_800_000_000u64),
-                        division_count: Uint64::from(5u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap();
 
@@ -370,11 +457,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1h",
-                    WindowConfig {
-                        window_size: Uint64::from(3_600_000_000_000u64),
-                        division_count: Uint64::from(2u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(3_600_000_000_000u64),
+                            division_count: Uint64::from(2u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap();
 
@@ -413,11 +502,25 @@ mod tests {
                     &mut deps.storage,
                     "denomb",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(604_800_000_000u64),
-                        division_count: Uint64::from(5u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
+                )
+                .unwrap();
+
+            // register static limiter
+            limiter
+                .register(
+                    &mut deps.storage,
+                    "denoma",
+                    "static",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(10),
+                    },
                 )
                 .unwrap();
 
@@ -449,6 +552,12 @@ mod tests {
                         })
                     ),
                     (
+                        ("denoma".to_string(), "static".to_string()),
+                        Limiter::StaticLimiter(StaticLimiter {
+                            upper_limit: Decimal::percent(10)
+                        })
+                    ),
+                    (
                         ("denomb".to_string(), "1m".to_string()),
                         Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
@@ -462,6 +571,7 @@ mod tests {
                     )
                 ]
             );
+
             // list limiters by denom
             assert_eq!(
                 limiter
@@ -490,6 +600,12 @@ mod tests {
                                 division_count: Uint64::from(5u64),
                             },
                             boundary_offset: Decimal::percent(10)
+                        })
+                    ),
+                    (
+                        "static".to_string(),
+                        Limiter::StaticLimiter(StaticLimiter {
+                            upper_limit: Decimal::percent(10)
                         })
                     )
                 ]
@@ -524,11 +640,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(604_800_000_000u64),
-                        division_count: Uint64::from(5u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap();
 
@@ -537,11 +655,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(604_800_000_000u64),
-                        division_count: Uint64::from(10u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(10u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap_err();
 
@@ -564,11 +684,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(604_800_000_000u64),
-                        division_count: Uint64::from(5u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap();
 
@@ -593,11 +715,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1h",
-                    WindowConfig {
-                        window_size: Uint64::from(3_600_000_000_000u64),
-                        division_count: Uint64::from(2u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(3_600_000_000_000u64),
+                            division_count: Uint64::from(2u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap();
 
@@ -671,11 +795,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(604_800_000_001u64),
-                        division_count: Uint64::from(9u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_001u64),
+                            division_count: Uint64::from(9u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap_err();
 
@@ -693,11 +819,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(604_800_000_000u64),
-                        division_count: Uint64::from(0u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(0u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap_err();
 
@@ -720,11 +848,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(660_000_000_000u64),
-                        division_count: Uint64::from(11u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(660_000_000_000u64),
+                            division_count: Uint64::from(11u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap_err();
 
@@ -747,11 +877,13 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1m",
-                    WindowConfig {
-                        window_size: Uint64::from(604_800_000_000u64),
-                        division_count: Uint64::from(5u64),
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
                     },
-                    Decimal::percent(10),
                 )
                 .unwrap();
 
@@ -808,7 +940,7 @@ mod tests {
             let block_time = Timestamp::from_nanos(1661231280000000000);
 
             let divisions = vec![
-                CompressedSMADivision::new(
+                Division::new(
                     block_time.minus_nanos(config.window_size.u64()),
                     block_time
                         .minus_nanos(config.window_size.u64())
@@ -817,7 +949,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time.minus_nanos(
                         config.window_size.u64() - config.division_size().unwrap().u64(),
                     ),
@@ -851,7 +983,7 @@ mod tests {
 
             let offset_mins = 20;
             let divisions = vec![
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64())
                         .minus_minutes(offset_mins),
@@ -863,7 +995,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64())
                         .plus_nanos(config.division_size().unwrap().u64())
@@ -877,7 +1009,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64())
                         .plus_nanos(config.division_size().unwrap().u64() * 2)
@@ -916,7 +1048,7 @@ mod tests {
             let block_time = Timestamp::from_nanos(1661231280000000000);
 
             let divisions = vec![
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64())
                         .minus_nanos(config.division_size().unwrap().u64()),
@@ -928,7 +1060,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time.minus_nanos(config.window_size.u64()),
                     block_time
                         .minus_nanos(config.window_size.u64())
@@ -937,7 +1069,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64())
                         .plus_nanos(config.division_size().unwrap().u64()),
@@ -978,7 +1110,7 @@ mod tests {
             let offset_minutes = 0;
 
             let divisions = vec![
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .plus_minutes(offset_minutes),
@@ -990,7 +1122,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .plus_nanos(config.division_size().unwrap().u64())
@@ -1004,7 +1136,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .plus_nanos(config.division_size().unwrap().u64() * 2)
@@ -1044,7 +1176,7 @@ mod tests {
             let offset_minutes = 10;
 
             let divisions = vec![
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .plus_minutes(offset_minutes),
@@ -1056,7 +1188,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .plus_nanos(config.division_size().unwrap().u64())
@@ -1070,7 +1202,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .plus_nanos(config.division_size().unwrap().u64() * 2)
@@ -1109,7 +1241,7 @@ mod tests {
             let offset_minutes = 0;
 
             let divisions = vec![
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .minus_nanos(config.division_size().unwrap().u64())
@@ -1123,7 +1255,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .plus_minutes(offset_minutes),
@@ -1135,7 +1267,7 @@ mod tests {
                     Decimal::percent(10),
                 )
                 .unwrap(),
-                CompressedSMADivision::new(
+                Division::new(
                     block_time
                         .minus_nanos(config.window_size.u64() * 2)
                         .plus_nanos(config.division_size().unwrap().u64())
@@ -1171,7 +1303,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn test_no_clean_up_outdated() {
+        fn test_change_limiter_no_clean_up_outdated() {
             let mut deps = mock_dependencies();
             let limiter = Limiters::new("limiters");
             let config = WindowConfig {
@@ -1184,8 +1316,10 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1h",
-                    config,
-                    Decimal::percent(5),
+                    LimiterParams::ChangeLimiter {
+                        window_config: config,
+                        boundary_offset: Decimal::percent(5),
+                    },
                 )
                 .unwrap();
 
@@ -1236,7 +1370,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denoma".to_string(),
                     upper_limit: Decimal::percent(58),
                     value: Decimal::from_str("0.580000000000000001").unwrap(),
@@ -1262,7 +1396,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denoma".to_string(),
                     upper_limit: Decimal::from_str("0.5875").unwrap(),
                     value: Decimal::from_str("0.587500000000000001").unwrap(),
@@ -1301,7 +1435,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denoma".to_string(),
                     upper_limit: Decimal::from_str("0.56").unwrap(),
                     value: Decimal::from_str("0.560000000000000001").unwrap(),
@@ -1327,7 +1461,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denoma".to_string(),
                     upper_limit: Decimal::from_str("0.525").unwrap(),
                     value: Decimal::from_str("0.525000000000000001").unwrap(),
@@ -1350,7 +1484,7 @@ mod tests {
         }
 
         #[test]
-        fn test_with_clean_up_outdated() {
+        fn test_change_limiter_with_clean_up_outdated() {
             let mut deps = mock_dependencies();
             let limiter = Limiters::new("limiters");
             let config = WindowConfig {
@@ -1358,11 +1492,24 @@ mod tests {
                 division_count: Uint64::from(4u64),              // 15 mins each
             };
             limiter
-                .register(&mut deps.storage, "denomb", "1h", config, Decimal::zero())
+                .register(
+                    &mut deps.storage,
+                    "denomb",
+                    "1h",
+                    LimiterParams::ChangeLimiter {
+                        window_config: config,
+                        boundary_offset: Decimal::zero(),
+                    },
+                )
                 .unwrap();
 
             limiter
-                .set_boundary_offset(&mut deps.storage, "denomb", "1h", Decimal::percent(5))
+                .set_change_limiter_boundary_offset(
+                    &mut deps.storage,
+                    "denomb",
+                    "1h",
+                    Decimal::percent(5),
+                )
                 .unwrap();
 
             // divs are clean, there will set no limit to it
@@ -1413,7 +1560,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denomb".to_string(),
                     upper_limit: Decimal::from_str("0.5").unwrap(),
                     value: Decimal::from_str("0.500000000000000001").unwrap(),
@@ -1447,7 +1594,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denomb".to_string(),
                     upper_limit: Decimal::from_str("0.491666666666666666").unwrap(),
                     value: Decimal::from_str("0.491666666666666667").unwrap(),
@@ -1475,7 +1622,7 @@ mod tests {
                 list_divisions(&limiter, "denomb", "1h", &deps.storage),
                 vec![
                     old_divs[1..].to_vec(),
-                    vec![CompressedSMADivision::new(
+                    vec![Division::new(
                         block_time.minus_minutes(5), // @75 (= 15 * 5)
                         block_time,
                         value,
@@ -1488,7 +1635,7 @@ mod tests {
         }
 
         #[test]
-        fn test_with_skipped_windows() {
+        fn test_change_limiter_with_skipped_windows() {
             let mut deps = mock_dependencies();
             let limiter = Limiters::new("limiters");
             let config = WindowConfig {
@@ -1496,11 +1643,24 @@ mod tests {
                 division_count: Uint64::from(4u64),              // 15 mins each
             };
             limiter
-                .register(&mut deps.storage, "denomb", "1h", config, Decimal::zero())
+                .register(
+                    &mut deps.storage,
+                    "denomb",
+                    "1h",
+                    LimiterParams::ChangeLimiter {
+                        window_config: config,
+                        boundary_offset: Decimal::zero(),
+                    },
+                )
                 .unwrap();
 
             limiter
-                .set_boundary_offset(&mut deps.storage, "denomb", "1h", Decimal::percent(5))
+                .set_change_limiter_boundary_offset(
+                    &mut deps.storage,
+                    "denomb",
+                    "1h",
+                    Decimal::percent(5),
+                )
                 .unwrap();
 
             let block_time = Timestamp::from_nanos(1661231280000000000);
@@ -1546,12 +1706,129 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: String::from("denomb"),
                     upper_limit: Decimal::percent(51),
                     value
                 }
             );
+        }
+
+        #[test]
+        fn test_static_limiter() {
+            let mut deps = mock_dependencies();
+            let limiter = Limiters::new("limiters");
+
+            limiter
+                .register(
+                    &mut deps.storage,
+                    "denoma",
+                    "1h",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(60),
+                    },
+                )
+                .unwrap();
+
+            limiter
+                .register(
+                    &mut deps.storage,
+                    "denomb",
+                    "1h",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(70),
+                    },
+                )
+                .unwrap();
+
+            let block_time = Timestamp::from_nanos(1661231280000000000);
+            let value_a = Decimal::percent(40);
+            let value_b = Decimal::percent(45);
+
+            limiter
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![
+                        ("denoma".to_string(), value_a),
+                        ("denomb".to_string(), value_b),
+                    ],
+                    block_time,
+                )
+                .unwrap();
+
+            let value_a = Decimal::from_str("0.600000000000000001").unwrap();
+            let value_b = Decimal::one() - value_a;
+
+            let err = limiter
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![
+                        ("denoma".to_string(), value_a),
+                        ("denomb".to_string(), value_b),
+                    ],
+                    block_time,
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::UpperLimitExceeded {
+                    denom: "denoma".to_string(),
+                    upper_limit: Decimal::from_str("0.6").unwrap(),
+                    value: Decimal::from_str("0.600000000000000001").unwrap(),
+                }
+            );
+
+            let value_b = Decimal::from_str("0.700000000000000001").unwrap();
+            let value_a = Decimal::one() - value_b;
+
+            let err = limiter
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![
+                        ("denoma".to_string(), value_a),
+                        ("denomb".to_string(), value_b),
+                    ],
+                    block_time,
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::UpperLimitExceeded {
+                    denom: "denomb".to_string(),
+                    upper_limit: Decimal::from_str("0.7").unwrap(),
+                    value: Decimal::from_str("0.700000000000000001").unwrap(),
+                }
+            );
+
+            let value_a = Decimal::from_str("0.6").unwrap();
+            let value_b = Decimal::one() - value_a;
+
+            limiter
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![
+                        ("denoma".to_string(), value_a),
+                        ("denomb".to_string(), value_b),
+                    ],
+                    block_time,
+                )
+                .unwrap();
+
+            let value_b = Decimal::from_str("0.7").unwrap();
+            let value_a = Decimal::one() - value_b;
+
+            limiter
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![
+                        ("denoma".to_string(), value_a),
+                        ("denomb".to_string(), value_b),
+                    ],
+                    block_time,
+                )
+                .unwrap();
         }
 
         #[test]
@@ -1574,8 +1851,10 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1h",
-                    config_1h.clone(),
-                    Decimal::percent(10),
+                    LimiterParams::ChangeLimiter {
+                        window_config: config_1h.clone(),
+                        boundary_offset: Decimal::percent(10),
+                    },
                 )
                 .unwrap();
 
@@ -1584,8 +1863,10 @@ mod tests {
                     &mut deps.storage,
                     "denoma",
                     "1w",
-                    config_1w.clone(),
-                    Decimal::percent(5),
+                    LimiterParams::ChangeLimiter {
+                        window_config: config_1w.clone(),
+                        boundary_offset: Decimal::percent(5),
+                    },
                 )
                 .unwrap();
 
@@ -1594,8 +1875,10 @@ mod tests {
                     &mut deps.storage,
                     "denomb",
                     "1h",
-                    config_1h,
-                    Decimal::percent(10),
+                    LimiterParams::ChangeLimiter {
+                        window_config: config_1h,
+                        boundary_offset: Decimal::percent(10),
+                    },
                 )
                 .unwrap();
 
@@ -1604,8 +1887,21 @@ mod tests {
                     &mut deps.storage,
                     "denomb",
                     "1w",
-                    config_1w,
-                    Decimal::percent(5),
+                    LimiterParams::ChangeLimiter {
+                        window_config: config_1w,
+                        boundary_offset: Decimal::percent(5),
+                    },
+                )
+                .unwrap();
+
+            limiter
+                .register(
+                    &mut deps.storage,
+                    "denomb",
+                    "static",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(55),
+                    },
                 )
                 .unwrap();
 
@@ -1640,10 +1936,33 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denoma".to_string(),
                     upper_limit: Decimal::from_str("0.6").unwrap(),
                     value: Decimal::from_str("0.600000000000000001").unwrap(),
+                }
+            );
+
+            let value_b = Decimal::from_str("0.550000000000000001").unwrap();
+            let value_a = Decimal::one() - value_b;
+
+            let err = limiter
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![
+                        ("denoma".to_string(), value_a),
+                        ("denomb".to_string(), value_b),
+                    ],
+                    block_time,
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::UpperLimitExceeded {
+                    denom: "denomb".to_string(),
+                    upper_limit: Decimal::from_str("0.55").unwrap(),
+                    value: Decimal::from_str("0.550000000000000001").unwrap(),
                 }
             );
 
@@ -1680,7 +1999,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denoma".to_string(),
                     upper_limit: Decimal::from_str("0.525").unwrap(),
                     value: Decimal::from_str("0.525000000000000001").unwrap(),
@@ -1703,28 +2022,164 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::ChangeUpperLimitExceeded {
+                ContractError::UpperLimitExceeded {
                     denom: "denoma".to_string(),
                     upper_limit: Decimal::from_str("0.55").unwrap(),
                     value: Decimal::from_str("0.550000000000000001").unwrap(),
                 }
             );
         }
+
+        mod modifying_limiter {
+            use super::*;
+
+            #[test]
+            fn test_set_boundary_offset() {
+                let mut deps = mock_dependencies();
+                let limiters = Limiters::new("limiters");
+                let config = WindowConfig {
+                    window_size: Uint64::from(3_600_000_000_000u64), // 1 hrs
+                    division_count: Uint64::from(4u64),              // 15 mins each
+                };
+                limiters
+                    .register(
+                        &mut deps.storage,
+                        "denomc",
+                        "1h",
+                        LimiterParams::ChangeLimiter {
+                            window_config: config,
+                            boundary_offset: Decimal::percent(10),
+                        },
+                    )
+                    .unwrap();
+
+                limiters
+                    .register(
+                        &mut deps.storage,
+                        "denomc",
+                        "static",
+                        LimiterParams::StaticLimiter {
+                            upper_limit: Decimal::percent(60),
+                        },
+                    )
+                    .unwrap();
+
+                limiters
+                    .set_change_limiter_boundary_offset(
+                        &mut deps.storage,
+                        "denomc",
+                        "1h",
+                        Decimal::percent(20),
+                    )
+                    .unwrap();
+
+                let limiter = match limiters
+                    .limiters
+                    .load(&deps.storage, ("denomc", "1h"))
+                    .unwrap()
+                {
+                    Limiter::ChangeLimiter(limiter) => limiter,
+                    Limiter::StaticLimiter(_) => panic!("not a change limiter"),
+                };
+
+                let boundary_offset = limiter.boundary_offset;
+
+                assert_eq!(boundary_offset, Decimal::percent(20));
+
+                let err = limiters
+                    .set_change_limiter_boundary_offset(
+                        &mut deps.storage,
+                        "denomc",
+                        "static",
+                        Decimal::percent(20),
+                    )
+                    .unwrap_err();
+
+                assert_eq!(
+                    err,
+                    ContractError::WrongLimiterType {
+                        expected: "change_limiter".to_string(),
+                        actual: "static_limiter".to_string()
+                    }
+                );
+            }
+
+            #[test]
+            fn test_set_upper_limit() {
+                let mut deps = mock_dependencies();
+                let limiters = Limiters::new("limiters");
+                let config = WindowConfig {
+                    window_size: Uint64::from(3_600_000_000_000u64), // 1 hrs
+                    division_count: Uint64::from(4u64),              // 15 mins each
+                };
+                limiters
+                    .register(
+                        &mut deps.storage,
+                        "denomc",
+                        "1h",
+                        LimiterParams::ChangeLimiter {
+                            window_config: config,
+                            boundary_offset: Decimal::percent(10),
+                        },
+                    )
+                    .unwrap();
+
+                limiters
+                    .register(
+                        &mut deps.storage,
+                        "denomc",
+                        "static",
+                        LimiterParams::StaticLimiter {
+                            upper_limit: Decimal::percent(60),
+                        },
+                    )
+                    .unwrap();
+
+                let upper_limit = Decimal::percent(70);
+                limiters
+                    .set_static_limiter_upper_limit(
+                        &mut deps.storage,
+                        "denomc",
+                        "static",
+                        upper_limit,
+                    )
+                    .unwrap();
+
+                let limiter = match limiters
+                    .limiters
+                    .load(&deps.storage, ("denomc", "static"))
+                    .unwrap()
+                {
+                    Limiter::StaticLimiter(limiter) => limiter,
+                    Limiter::ChangeLimiter(_) => panic!("not a static limiter"),
+                };
+
+                assert_eq!(limiter.upper_limit, upper_limit);
+
+                let err = limiters
+                    .set_static_limiter_upper_limit(&mut deps.storage, "denomc", "1h", upper_limit)
+                    .unwrap_err();
+
+                assert_eq!(
+                    err,
+                    ContractError::WrongLimiterType {
+                        expected: "static_limiter".to_string(),
+                        actual: "change_limiter".to_string()
+                    }
+                );
+            }
+        }
     }
 
     fn list_divisions(
-        limiter: &Limiters,
+        limiters: &Limiters,
         denom: &str,
-        humanized_window_size: &str,
+        window: &str,
         storage: &dyn Storage,
-    ) -> Vec<CompressedSMADivision> {
-        let limiter = limiter
-            .limiters
-            .load(storage, (denom, humanized_window_size))
-            .unwrap();
-
-        match limiter {
+    ) -> Vec<Division> {
+        match limiters.limiters.load(storage, (denom, window)).unwrap() {
             Limiter::ChangeLimiter(limiter) => limiter.divisions,
+            Limiter::StaticLimiter(_) => panic!("not a change limiter"),
         }
     }
 }

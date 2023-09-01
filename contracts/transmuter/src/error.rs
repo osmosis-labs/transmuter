@@ -87,13 +87,16 @@ pub enum ContractError {
     LimiterAlreadyExists { denom: String, label: String },
 
     #[error(
-        "Change upper limit exceeded for `{denom}`, upper limit is {upper_limit}, but the resulted ratio is {value}"
+        "Upper limit exceeded for `{denom}`, upper limit is {upper_limit}, but the resulted weight is {value}"
     )]
-    ChangeUpperLimitExceeded {
+    UpperLimitExceeded {
         denom: String,
         upper_limit: Decimal,
         value: Decimal,
     },
+
+    #[error("Modifying wrong limiter type: expected: {expected}, actual: {actual}")]
+    WrongLimiterType { expected: String, actual: String },
 
     #[error("{0}")]
     OverflowError(#[from] OverflowError),
