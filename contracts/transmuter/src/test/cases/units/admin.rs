@@ -69,7 +69,7 @@ fn test_admin_set_denom_metadata() {
     let err = t
         .contract
         .execute(
-            &ExecMsg::SetLpDenomMetadata {
+            &ExecMsg::SetAlloyedDenomMetadata {
                 metadata: metadata_to_set.clone(),
             },
             &[],
@@ -82,7 +82,7 @@ fn test_admin_set_denom_metadata() {
     // set denom metadata
     t.contract
         .execute(
-            &ExecMsg::SetLpDenomMetadata {
+            &ExecMsg::SetAlloyedDenomMetadata {
                 metadata: metadata_to_set.clone(),
             },
             &[],

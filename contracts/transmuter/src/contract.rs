@@ -1,9 +1,9 @@
 use crate::{
     admin::Admin,
+    alloyed_asset::AlloyedAsset,
     ensure_admin_authority,
     error::ContractError,
     limiter::{Limiter, LimiterParams, Limiters},
-    shares::Shares,
     transmuter_pool::TransmuterPool,
 };
 use cosmwasm_schema::cw_serde;
@@ -28,7 +28,7 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Swap fee is hardcoded to zero intentionally.
 const SWAP_FEE: Decimal = Decimal::zero();
 
-const CREATE_LP_DENOM_REPLY_ID: u64 = 1;
+const CREATE_ALLOYED_DENOM_REPLY_ID: u64 = 1;
 
 /// Prefix for alloyed asset denom
 const ALLOYED_PREFIX: &str = "alloyed";
@@ -36,7 +36,7 @@ const ALLOYED_PREFIX: &str = "alloyed";
 pub struct Transmuter<'a> {
     pub(crate) active_status: Item<'a, bool>,
     pub(crate) pool: Item<'a, TransmuterPool>,
-    pub(crate) shares: Shares<'a>,
+    pub(crate) alloyed_asset: AlloyedAsset<'a>,
     pub(crate) admin: Admin<'a>,
     pub(crate) limiters: Limiters<'a>,
 }
@@ -49,7 +49,7 @@ impl Transmuter<'_> {
         Self {
             active_status: Item::new("active_status"),
             pool: Item::new("pool"),
-            shares: Shares::new("share_denom"),
+            alloyed_asset: AlloyedAsset::new("alloyed_denom"),
             admin: Admin::new("admin"),
             limiters: Limiters::new("limiters"),
         }
@@ -82,33 +82,33 @@ impl Transmuter<'_> {
         // set active status to true
         self.active_status.save(deps.storage, &true)?;
 
-        // create lp denom
-        let msg_create_lp_denom = SubMsg::reply_on_success(
+        // create alloyed denom
+        let msg_create_alloyed_denom = SubMsg::reply_on_success(
             MsgCreateDenom {
                 sender: env.contract.address.to_string(),
                 subdenom: format!("{}/{}", ALLOYED_PREFIX, alloyed_asset_subdenom),
             },
-            CREATE_LP_DENOM_REPLY_ID,
+            CREATE_ALLOYED_DENOM_REPLY_ID,
         );
 
         Ok(Response::new()
             .add_attribute("method", "instantiate")
             .add_attribute("contract_name", CONTRACT_NAME)
             .add_attribute("contract_version", CONTRACT_VERSION)
-            .add_submessage(msg_create_lp_denom))
+            .add_submessage(msg_create_alloyed_denom))
     }
 
     pub fn reply(&self, ctx: (DepsMut, Env), msg: Reply) -> Result<Response, ContractError> {
         let (deps, _env) = ctx;
 
         match msg.id {
-            CREATE_LP_DENOM_REPLY_ID => {
+            CREATE_ALLOYED_DENOM_REPLY_ID => {
                 // register created token denom
                 let MsgCreateDenomResponse { new_token_denom } = msg.result.try_into()?;
-                self.shares
-                    .set_share_denom(deps.storage, &new_token_denom)?;
+                self.alloyed_asset
+                    .set_alloyed_denom(deps.storage, &new_token_denom)?;
 
-                Ok(Response::new().add_attribute("pool_share_denom", new_token_denom))
+                Ok(Response::new().add_attribute("alloyed_denom", new_token_denom))
             }
             _ => Err(StdError::not_found(format!("No reply handler found for: {:?}", msg)).into()),
         }
@@ -250,7 +250,7 @@ impl Transmuter<'_> {
     }
 
     #[msg(exec)]
-    pub fn set_lp_denom_metadata(
+    pub fn set_alloyed_denom_metadata(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
         metadata: Metadata,
@@ -266,7 +266,7 @@ impl Transmuter<'_> {
         };
 
         Ok(Response::new()
-            .add_attribute("method", "set_lp_denom_metadata")
+            .add_attribute("method", "set_alloyed_denom_metadata")
             .add_message(msg_set_denom_metadata))
     }
 
@@ -293,10 +293,10 @@ impl Transmuter<'_> {
     /// Token used to join pool is sent to the contract via `funds` in `MsgExecuteContract`.
     #[msg(exec)]
     pub fn join_pool(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
-        self.swap_tokens_for_shares("join_pool", ctx)
+        self.swap_tokens_for_alloyed_asset("join_pool", ctx)
     }
 
-    pub fn swap_tokens_for_shares(
+    pub fn swap_tokens_for_alloyed_asset(
         &self,
         method: &str,
         ctx: (DepsMut, Env, MessageInfo),
@@ -324,12 +324,12 @@ impl Transmuter<'_> {
 
         self.pool.save(deps.storage, &pool)?;
 
-        // mint lp tokens
-        let share_denom = self.shares.get_share_denom(deps.storage)?;
-        let new_shares = Shares::calc_shares(&info.funds)?;
+        // mint alloyed asset
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+        let new_shares = AlloyedAsset::calc_amount_to_mint(&info.funds)?;
         let mint_msg = MsgMint {
             sender: env.contract.address.to_string(),
-            amount: Some(Coin::new(new_shares.u128(), share_denom).into()),
+            amount: Some(Coin::new(new_shares.u128(), alloyed_denom).into()),
             mint_to_address: info.sender.to_string(),
         };
 
@@ -347,10 +347,10 @@ impl Transmuter<'_> {
         ctx: (DepsMut, Env, MessageInfo),
         tokens_out: Vec<Coin>,
     ) -> Result<Response, ContractError> {
-        self.swap_shares_for_tokens("exit_pool", ctx, tokens_out)
+        self.swap_alloyed_asset_for_tokens("exit_pool", ctx, tokens_out)
     }
 
-    pub fn swap_shares_for_tokens(
+    pub fn swap_alloyed_asset_for_tokens(
         &self,
         method: &str,
         ctx: (DepsMut, Env, MessageInfo),
@@ -358,20 +358,22 @@ impl Transmuter<'_> {
     ) -> Result<Response, ContractError> {
         let (deps, env, info) = ctx;
 
-        let share_denom = self.shares.get_share_denom(deps.storage)?;
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
 
-        // if funds contains one coin and is share token, use that as sender's share
+        // if funds contains one coin and is alloyed asset, use that as sender's share
         let (sender_shares, burn_from_address) = if info.funds.is_empty() {
-            let sender_shares = self.shares.get_share(deps.as_ref(), &info.sender)?;
+            let sender_shares = self
+                .alloyed_asset
+                .get_balance(deps.as_ref(), &info.sender)?;
             let burn_from_address = info.sender.to_string();
             (sender_shares, burn_from_address)
         } else {
             ensure!(info.funds.len() == 1, ContractError::SingleTokenExpected {});
             ensure!(
-                info.funds[0].denom == share_denom,
+                info.funds[0].denom == alloyed_denom,
                 ContractError::UnexpectedDenom {
                     expected: info.funds[0].clone().denom,
-                    actual: share_denom
+                    actual: alloyed_denom
                 }
             );
 
@@ -381,7 +383,7 @@ impl Transmuter<'_> {
         };
 
         // check if sender's shares is enough
-        let required_shares = Shares::calc_shares(&tokens_out)?;
+        let required_shares = AlloyedAsset::calc_amount_to_mint(&tokens_out)?;
 
         ensure!(
             sender_shares >= required_shares,
@@ -411,11 +413,11 @@ impl Transmuter<'_> {
             amount: tokens_out,
         };
 
-        // burn lp tokens
-        let share_denom = self.shares.get_share_denom(deps.storage)?;
+        // burn alloyed assets
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
         let burn_msg = MsgBurn {
             sender: env.contract.address.to_string(),
-            amount: Some(Coin::new(required_shares.u128(), share_denom).into()),
+            amount: Some(Coin::new(required_shares.u128(), alloyed_denom).into()),
             burn_from_address,
         };
 
@@ -445,8 +447,8 @@ impl Transmuter<'_> {
         let (deps, _env) = ctx;
         Ok(GetSharesResponse {
             shares: self
-                .shares
-                .get_share(deps, &deps.api.addr_validate(&address)?)?,
+                .alloyed_asset
+                .get_balance(deps, &deps.api.addr_validate(&address)?)?,
         })
     }
 
@@ -457,7 +459,18 @@ impl Transmuter<'_> {
     ) -> Result<GetShareDenomResponse, ContractError> {
         let (deps, _env) = ctx;
         Ok(GetShareDenomResponse {
-            share_denom: self.shares.get_share_denom(deps.storage)?,
+            share_denom: self.alloyed_asset.get_alloyed_denom(deps.storage)?,
+        })
+    }
+
+    #[msg(query)]
+    pub(crate) fn get_alloyed_denom(
+        &self,
+        ctx: (Deps, Env),
+    ) -> Result<GetAlloyedDenomResponse, ContractError> {
+        let (deps, _env) = ctx;
+        Ok(GetAlloyedDenomResponse {
+            alloyed_denom: self.alloyed_asset.get_alloyed_denom(deps.storage)?,
         })
     }
 
@@ -483,7 +496,7 @@ impl Transmuter<'_> {
         ctx: (Deps, Env),
     ) -> Result<GetTotalSharesResponse, ContractError> {
         let (deps, _env) = ctx;
-        let total_shares = self.shares.get_total_shares(deps)?;
+        let total_shares = self.alloyed_asset.get_total_supply(deps)?;
         Ok(GetTotalSharesResponse { total_shares })
     }
 
@@ -729,6 +742,11 @@ pub struct GetShareDenomResponse {
 }
 
 #[cw_serde]
+pub struct GetAlloyedDenomResponse {
+    pub alloyed_denom: String,
+}
+
+#[cw_serde]
 pub struct GetSwapFeeResponse {
     pub swap_fee: Decimal,
 }
@@ -798,13 +816,13 @@ mod tests {
         // Instantiate the contract.
         instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap();
 
-        // Manually set share denom
-        let share_denom = "uosmo".to_string();
+        // Manually set alloyed denom
+        let alloyed_denom = "uosmo".to_string();
 
         let transmuter = Transmuter::new();
         transmuter
-            .shares
-            .set_share_denom(&mut deps.storage, &share_denom)
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &alloyed_denom)
             .unwrap();
 
         // Check the initial active status.
