@@ -38,10 +38,17 @@ impl WindowConfig {
 
 pub struct Limiters<'a> {
     /// Map of (denom, label) -> CompressedSMALimiter
-    limiters: Map<'a, (&'a str, &'a str), CompressedSMALimiter>,
+    limiters: Map<'a, (&'a str, &'a str), ChangeLimiter>,
 }
+
+/// Limiter that determines limit by upper bound of SMA (Simple Moving Average) of the value.
+/// The data points used for calculating SMA are divided into divisions, which gets compressed
+/// for storage read efficiency, and reduce gas consumption.
+///
+/// See [`CompressedSMADivision`] for more detail on how the division is compressed and
+/// how SMA is calculated.
 #[cw_serde]
-pub struct CompressedSMALimiter {
+pub struct ChangeLimiter {
     /// Divisions in the window, divisions are ordered from oldest to newest.
     /// Kept divisions must exist within or overlap with the window, else
     /// they will be cleaned up.
@@ -57,7 +64,7 @@ pub struct CompressedSMALimiter {
     boundary_offset: Decimal,
 }
 
-impl CompressedSMALimiter {
+impl ChangeLimiter {
     pub fn new(
         window_config: WindowConfig,
         boundary_offset: Decimal,
@@ -216,7 +223,7 @@ impl<'a> Limiters<'a> {
             }
         );
 
-        let limiter = CompressedSMALimiter::new(window_config, boundary_offset)?;
+        let limiter = ChangeLimiter::new(window_config, boundary_offset)?;
         self.limiters
             .save(storage, (denom, label), &limiter)
             .map_err(Into::into)
@@ -236,13 +243,13 @@ impl<'a> Limiters<'a> {
         self.limiters.update(
             storage,
             (denom, label),
-            |limiter: Option<CompressedSMALimiter>| -> Result<CompressedSMALimiter, ContractError> {
+            |limiter: Option<ChangeLimiter>| -> Result<ChangeLimiter, ContractError> {
                 let limiter = limiter.ok_or(ContractError::LimiterDoesNotExist {
                     denom: denom.to_string(),
                     label: label.to_string(),
                 })?;
 
-                Ok(CompressedSMALimiter {
+                Ok(ChangeLimiter {
                     boundary_offset,
                     ..limiter
                 })
@@ -255,7 +262,7 @@ impl<'a> Limiters<'a> {
         &self,
         storage: &dyn Storage,
         denom: &str,
-    ) -> Result<Vec<(String, CompressedSMALimiter)>, ContractError> {
+    ) -> Result<Vec<(String, ChangeLimiter)>, ContractError> {
         // there is no need to limit, since the number of limiters is expected to be small
         self.limiters
             .prefix(denom)
@@ -268,7 +275,7 @@ impl<'a> Limiters<'a> {
     pub fn list_limiters(
         &self,
         storage: &dyn Storage,
-    ) -> Result<Vec<((String, String), CompressedSMALimiter)>, ContractError> {
+    ) -> Result<Vec<((String, String), ChangeLimiter)>, ContractError> {
         // there is no need to limit, since the number of limiters is expected to be small
         self.limiters
             .range(storage, None, None, cosmwasm_std::Order::Ascending)
@@ -331,7 +338,7 @@ mod tests {
                 limiter.list_limiters(&deps.storage).unwrap(),
                 vec![(
                     ("denoma".to_string(), "1m".to_string()),
-                    CompressedSMALimiter {
+                    ChangeLimiter {
                         divisions: vec![],
                         latest_value: Decimal::zero(),
                         window_config: WindowConfig {
@@ -361,7 +368,7 @@ mod tests {
                 vec![
                     (
                         ("denoma".to_string(), "1h".to_string()),
-                        CompressedSMALimiter {
+                        ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -373,7 +380,7 @@ mod tests {
                     ),
                     (
                         ("denoma".to_string(), "1m".to_string()),
-                        CompressedSMALimiter {
+                        ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -404,7 +411,7 @@ mod tests {
                 vec![
                     (
                         ("denoma".to_string(), "1h".to_string()),
-                        CompressedSMALimiter {
+                        ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -416,7 +423,7 @@ mod tests {
                     ),
                     (
                         ("denoma".to_string(), "1m".to_string()),
-                        CompressedSMALimiter {
+                        ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -428,7 +435,7 @@ mod tests {
                     ),
                     (
                         ("denomb".to_string(), "1m".to_string()),
-                        CompressedSMALimiter {
+                        ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -449,7 +456,7 @@ mod tests {
                 vec![
                     (
                         "1h".to_string(),
-                        CompressedSMALimiter {
+                        ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -461,7 +468,7 @@ mod tests {
                     ),
                     (
                         "1m".to_string(),
-                        CompressedSMALimiter {
+                        ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -480,7 +487,7 @@ mod tests {
                     .unwrap(),
                 vec![(
                     "1m".to_string(),
-                    CompressedSMALimiter {
+                    ChangeLimiter {
                         divisions: vec![],
                         latest_value: Decimal::zero(),
                         window_config: WindowConfig {
@@ -555,7 +562,7 @@ mod tests {
                 limiter.list_limiters(&deps.storage).unwrap(),
                 vec![(
                     ("denoma".to_string(), "1m".to_string()),
-                    CompressedSMALimiter {
+                    ChangeLimiter {
                         divisions: vec![],
                         latest_value: Decimal::zero(),
                         window_config: WindowConfig {
@@ -585,7 +592,7 @@ mod tests {
                 vec![
                     (
                         ("denoma".to_string(), "1h".to_string()),
-                        CompressedSMALimiter {
+                        ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -597,7 +604,7 @@ mod tests {
                     ),
                     (
                         ("denoma".to_string(), "1m".to_string()),
-                        CompressedSMALimiter {
+                        ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
                             window_config: WindowConfig {
@@ -616,7 +623,7 @@ mod tests {
                 limiter.list_limiters(&deps.storage).unwrap(),
                 vec![(
                     ("denoma".to_string(), "1h".to_string()),
-                    CompressedSMALimiter {
+                    ChangeLimiter {
                         divisions: vec![],
                         latest_value: Decimal::zero(),
                         window_config: WindowConfig {
@@ -740,7 +747,7 @@ mod tests {
                 limiters,
                 vec![(
                     ("denoma".to_string(), "1m".to_string()),
-                    CompressedSMALimiter {
+                    ChangeLimiter {
                         divisions: vec![],
                         latest_value: Decimal::zero(),
                         window_config: WindowConfig {
@@ -759,7 +766,7 @@ mod tests {
 
         #[test]
         fn test_empty_divisions() {
-            let limiter = CompressedSMALimiter {
+            let limiter = ChangeLimiter {
                 divisions: vec![],
                 latest_value: Decimal::zero(),
                 window_config: WindowConfig {
@@ -810,7 +817,7 @@ mod tests {
                 )
                 .unwrap(),
             ];
-            let limiter = CompressedSMALimiter {
+            let limiter = ChangeLimiter {
                 divisions: divisions.clone(),
                 latest_value: Decimal::percent(30),
                 window_config: config,
@@ -871,7 +878,7 @@ mod tests {
                 )
                 .unwrap(),
             ];
-            let limiter = CompressedSMALimiter {
+            let limiter = ChangeLimiter {
                 divisions: divisions.clone(),
                 latest_value: Decimal::percent(30),
                 window_config: config,
@@ -929,7 +936,7 @@ mod tests {
                 )
                 .unwrap(),
             ];
-            let limiter = CompressedSMALimiter {
+            let limiter = ChangeLimiter {
                 divisions: divisions.clone(),
                 latest_value: Decimal::percent(30),
                 window_config: config,
@@ -998,7 +1005,7 @@ mod tests {
                 )
                 .unwrap(),
             ];
-            let limiter = CompressedSMALimiter {
+            let limiter = ChangeLimiter {
                 divisions: divisions.clone(),
                 latest_value: Decimal::percent(30),
                 window_config: config,
@@ -1065,7 +1072,7 @@ mod tests {
                 .unwrap(),
             ];
 
-            let limiter = CompressedSMALimiter {
+            let limiter = ChangeLimiter {
                 divisions: divisions.clone(),
                 latest_value: Decimal::percent(30),
                 window_config: config,
@@ -1129,7 +1136,7 @@ mod tests {
                 )
                 .unwrap(),
             ];
-            let limiter = CompressedSMALimiter {
+            let limiter = ChangeLimiter {
                 divisions: divisions.clone(),
                 latest_value: Decimal::percent(30),
                 window_config: config,

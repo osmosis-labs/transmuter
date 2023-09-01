@@ -2,7 +2,7 @@ use crate::{
     admin::Admin,
     ensure_admin_authority,
     error::ContractError,
-    limiter::{CompressedSMALimiter, Limiters, WindowConfig},
+    limiter::{ChangeLimiter, Limiters, WindowConfig},
     shares::Shares,
     transmuter_pool::TransmuterPool,
 };
@@ -667,7 +667,7 @@ impl Transmuter<'_> {
 
 #[cw_serde]
 pub struct ListLimitersResponse {
-    pub limiters: Vec<((String, String), CompressedSMALimiter)>,
+    pub limiters: Vec<((String, String), ChangeLimiter)>,
 }
 
 #[cw_serde]
@@ -1009,7 +1009,7 @@ mod tests {
             limiters.limiters,
             vec![(
                 (String::from("uosmo"), String::from("1h")),
-                CompressedSMALimiter::new(window_config_1h.clone(), Decimal::zero()).unwrap()
+                ChangeLimiter::new(window_config_1h.clone(), Decimal::zero()).unwrap()
             )]
         );
 
@@ -1051,11 +1051,11 @@ mod tests {
             vec![
                 (
                     (String::from("osmo"), String::from("1w")),
-                    CompressedSMALimiter::new(window_config_1w.clone(), Decimal::zero()).unwrap()
+                    ChangeLimiter::new(window_config_1w.clone(), Decimal::zero()).unwrap()
                 ),
                 (
                     (String::from("uosmo"), String::from("1h")),
-                    CompressedSMALimiter::new(window_config_1h, Decimal::zero()).unwrap()
+                    ChangeLimiter::new(window_config_1h, Decimal::zero()).unwrap()
                 )
             ]
         );
@@ -1103,7 +1103,7 @@ mod tests {
             limiters.limiters,
             vec![(
                 (String::from("osmo"), String::from("1w")),
-                CompressedSMALimiter::new(window_config_1w.clone(), Decimal::zero()).unwrap()
+                ChangeLimiter::new(window_config_1w.clone(), Decimal::zero()).unwrap()
             )]
         );
 
@@ -1174,7 +1174,7 @@ mod tests {
             limiters.limiters,
             vec![(
                 (String::from("osmo"), String::from("1w")),
-                CompressedSMALimiter::new(window_config_1w, Decimal::percent(10)).unwrap()
+                ChangeLimiter::new(window_config_1w, Decimal::percent(10)).unwrap()
             )]
         );
     }
