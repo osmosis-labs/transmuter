@@ -123,10 +123,10 @@ impl SudoMsg {
                 );
 
                 // check and update limiters only if pool assets are not zero
-                if let Some(ratios) = pool.all_ratios()? {
+                if let Some(denom_weight_pairs) = pool.weights()? {
                     transmuter.limiters.check_limits_and_update(
                         deps.storage,
-                        ratios,
+                        denom_weight_pairs,
                         env.block.time,
                     )?;
                 }
@@ -223,10 +223,10 @@ impl SudoMsg {
                 );
 
                 // check and update limiters only if pool assets are not zero
-                if let Some(ratios) = pool.all_ratios()? {
+                if let Some(denom_weight_pairs) = pool.weights()? {
                     transmuter.limiters.check_limits_and_update(
                         deps.storage,
-                        ratios,
+                        denom_weight_pairs,
                         env.block.time,
                     )?;
                 }

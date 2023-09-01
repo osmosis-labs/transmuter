@@ -266,9 +266,12 @@ impl Transmuter<'_> {
         pool.join_pool(&info.funds)?;
 
         // check and update limiters only if pool assets are not zero
-        if let Some(ratios) = pool.all_ratios()? {
-            self.limiters
-                .check_limits_and_update(deps.storage, ratios, env.block.time)?;
+        if let Some(denom_weight_pairs) = pool.weights()? {
+            self.limiters.check_limits_and_update(
+                deps.storage,
+                denom_weight_pairs,
+                env.block.time,
+            )?;
         }
 
         self.pool.save(deps.storage, &pool)?;
@@ -345,9 +348,12 @@ impl Transmuter<'_> {
         pool.exit_pool(&tokens_out)?;
 
         // check and update limiters only if pool assets are not zero
-        if let Some(ratios) = pool.all_ratios()? {
-            self.limiters
-                .check_limits_and_update(deps.storage, ratios, env.block.time)?;
+        if let Some(denom_weight_pairs) = pool.weights()? {
+            self.limiters.check_limits_and_update(
+                deps.storage,
+                denom_weight_pairs,
+                env.block.time,
+            )?;
         }
 
         self.pool.save(deps.storage, &pool)?;
