@@ -213,6 +213,10 @@ impl StaticLimiter {
 
         Ok(self)
     }
+
+    fn set_upper_limit(self, upper_limit: Decimal) -> Self {
+        Self { upper_limit }
+    }
 }
 
 #[cw_serde]
@@ -281,7 +285,8 @@ impl<'a> Limiters<'a> {
         self.limiters.remove(storage, (denom, label))
     }
 
-    pub fn set_boundary_offset(
+    /// Set boundary offset for a [`ChangeLimiter`] only, otherwise it will fail.
+    pub fn set_change_limiter_boundary_offset(
         &self,
         storage: &mut dyn Storage,
         denom: &str,
@@ -306,6 +311,38 @@ impl<'a> Limiters<'a> {
                     Limiter::StaticLimiter(_) => Err(ContractError::WrongLimiterType {
                         expected: "change_limiter".to_string(),
                         actual: "static_limiter".to_string(),
+                    }),
+                }
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Set upper limit for a [`StaticLimiter`] only, otherwise it will fail.
+    pub fn set_static_limiter_upper_limit(
+        &self,
+        storage: &mut dyn Storage,
+        denom: &str,
+        label: &str,
+        upper_limit: Decimal,
+    ) -> Result<(), ContractError> {
+        self.limiters.update(
+            storage,
+            (denom, label),
+            |limiter: Option<Limiter>| -> Result<Limiter, ContractError> {
+                let limiter = limiter.ok_or(ContractError::LimiterDoesNotExist {
+                    denom: denom.to_string(),
+                    label: label.to_string(),
+                })?;
+
+                // check if the limiter is a StaticLimiter
+                match limiter {
+                    Limiter::StaticLimiter(limiter) => {
+                        Ok(Limiter::StaticLimiter(limiter.set_upper_limit(upper_limit)))
+                    }
+                    Limiter::ChangeLimiter(_) => Err(ContractError::WrongLimiterType {
+                        expected: "static_limiter".to_string(),
+                        actual: "change_limiter".to_string(),
                     }),
                 }
             },
@@ -1467,7 +1504,12 @@ mod tests {
                 .unwrap();
 
             limiter
-                .set_boundary_offset(&mut deps.storage, "denomb", "1h", Decimal::percent(5))
+                .set_change_limiter_boundary_offset(
+                    &mut deps.storage,
+                    "denomb",
+                    "1h",
+                    Decimal::percent(5),
+                )
                 .unwrap();
 
             // divs are clean, there will set no limit to it
@@ -1613,7 +1655,12 @@ mod tests {
                 .unwrap();
 
             limiter
-                .set_boundary_offset(&mut deps.storage, "denomb", "1h", Decimal::percent(5))
+                .set_change_limiter_boundary_offset(
+                    &mut deps.storage,
+                    "denomb",
+                    "1h",
+                    Decimal::percent(5),
+                )
                 .unwrap();
 
             let block_time = Timestamp::from_nanos(1661231280000000000);
@@ -2018,7 +2065,12 @@ mod tests {
                     .unwrap();
 
                 limiters
-                    .set_boundary_offset(&mut deps.storage, "denomc", "1h", Decimal::percent(20))
+                    .set_change_limiter_boundary_offset(
+                        &mut deps.storage,
+                        "denomc",
+                        "1h",
+                        Decimal::percent(20),
+                    )
                     .unwrap();
 
                 let limiter = match limiters
@@ -2035,7 +2087,7 @@ mod tests {
                 assert_eq!(boundary_offset, Decimal::percent(20));
 
                 let err = limiters
-                    .set_boundary_offset(
+                    .set_change_limiter_boundary_offset(
                         &mut deps.storage,
                         "denomc",
                         "static",
@@ -2051,18 +2103,81 @@ mod tests {
                     }
                 );
             }
+
+            #[test]
+            fn test_set_upper_limit() {
+                let mut deps = mock_dependencies();
+                let limiters = Limiters::new("limiters");
+                let config = WindowConfig {
+                    window_size: Uint64::from(3_600_000_000_000u64), // 1 hrs
+                    division_count: Uint64::from(4u64),              // 15 mins each
+                };
+                limiters
+                    .register(
+                        &mut deps.storage,
+                        "denomc",
+                        "1h",
+                        LimiterParams::ChangeLimiter {
+                            window_config: config,
+                            boundary_offset: Decimal::percent(10),
+                        },
+                    )
+                    .unwrap();
+
+                limiters
+                    .register(
+                        &mut deps.storage,
+                        "denomc",
+                        "static",
+                        LimiterParams::StaticLimiter {
+                            upper_limit: Decimal::percent(60),
+                        },
+                    )
+                    .unwrap();
+
+                let upper_limit = Decimal::percent(70);
+                limiters
+                    .set_static_limiter_upper_limit(
+                        &mut deps.storage,
+                        "denomc",
+                        "static",
+                        upper_limit,
+                    )
+                    .unwrap();
+
+                let limiter = match limiters
+                    .limiters
+                    .load(&deps.storage, ("denomc", "static"))
+                    .unwrap()
+                {
+                    Limiter::StaticLimiter(limiter) => limiter,
+                    Limiter::ChangeLimiter(_) => panic!("not a static limiter"),
+                };
+
+                assert_eq!(limiter.upper_limit, upper_limit);
+
+                let err = limiters
+                    .set_static_limiter_upper_limit(&mut deps.storage, "denomc", "1h", upper_limit)
+                    .unwrap_err();
+
+                assert_eq!(
+                    err,
+                    ContractError::WrongLimiterType {
+                        expected: "static_limiter".to_string(),
+                        actual: "change_limiter".to_string()
+                    }
+                );
+            }
         }
     }
 
     fn list_divisions(
-        limiter: &Limiters,
+        limiters: &Limiters,
         denom: &str,
-        label: &str,
+        window: &str,
         storage: &dyn Storage,
     ) -> Vec<Division> {
-        let limiter = limiter.limiters.load(storage, (denom, label)).unwrap();
-
-        match limiter {
+        match limiters.limiters.load(storage, (denom, window)).unwrap() {
             Limiter::ChangeLimiter(limiter) => limiter.divisions,
             Limiter::StaticLimiter(_) => panic!("not a change limiter"),
         }
