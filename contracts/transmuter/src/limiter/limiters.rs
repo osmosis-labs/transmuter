@@ -350,14 +350,14 @@ impl<'a> Limiters<'a> {
             for (label, limiter) in limiters {
                 // match limiter type
                 let limiter = match limiter {
-                    Limiter::ChangeLimiter(limiter) => {
-                        let limiter = limiter
+                    Limiter::ChangeLimiter(limiter) => Limiter::ChangeLimiter(
+                        limiter
                             .ensure_upper_limit(block_time, denom.as_str(), value)?
-                            .update(block_time, value)?;
-
-                        Limiter::ChangeLimiter(limiter)
+                            .update(block_time, value)?,
+                    ),
+                    Limiter::StaticLimiter(limiter) => {
+                        Limiter::StaticLimiter(limiter.ensure_upper_limit(denom.as_str(), value)?)
                     }
-                    Limiter::StaticLimiter(_) => todo!(),
                 };
 
                 // save updated limiter
@@ -1266,7 +1266,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn test_no_clean_up_outdated() {
+        fn test_change_limiter_no_clean_up_outdated() {
             let mut deps = mock_dependencies();
             let limiter = Limiters::new("limiters");
             let config = WindowConfig {
@@ -1447,7 +1447,7 @@ mod tests {
         }
 
         #[test]
-        fn test_with_clean_up_outdated() {
+        fn test_change_limiter_with_clean_up_outdated() {
             let mut deps = mock_dependencies();
             let limiter = Limiters::new("limiters");
             let config = WindowConfig {
@@ -1593,7 +1593,7 @@ mod tests {
         }
 
         #[test]
-        fn test_with_skipped_windows() {
+        fn test_change_limiter_with_skipped_windows() {
             let mut deps = mock_dependencies();
             let limiter = Limiters::new("limiters");
             let config = WindowConfig {
@@ -1668,6 +1668,123 @@ mod tests {
         }
 
         #[test]
+        fn test_static_limiter() {
+            let mut deps = mock_dependencies();
+            let limiter = Limiters::new("limiters");
+
+            limiter
+                .register(
+                    &mut deps.storage,
+                    "denoma",
+                    "1h",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(60),
+                    },
+                )
+                .unwrap();
+
+            limiter
+                .register(
+                    &mut deps.storage,
+                    "denomb",
+                    "1h",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(70),
+                    },
+                )
+                .unwrap();
+
+            let block_time = Timestamp::from_nanos(1661231280000000000);
+            let value_a = Decimal::percent(40);
+            let value_b = Decimal::percent(45);
+
+            limiter
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![
+                        ("denoma".to_string(), value_a),
+                        ("denomb".to_string(), value_b),
+                    ],
+                    block_time,
+                )
+                .unwrap();
+
+            let value_a = Decimal::from_str("0.600000000000000001").unwrap();
+            let value_b = Decimal::one() - value_a;
+
+            let err = limiter
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![
+                        ("denoma".to_string(), value_a),
+                        ("denomb".to_string(), value_b),
+                    ],
+                    block_time,
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::UpperLimitExceeded {
+                    denom: "denoma".to_string(),
+                    upper_limit: Decimal::from_str("0.6").unwrap(),
+                    value: Decimal::from_str("0.600000000000000001").unwrap(),
+                }
+            );
+
+            let value_b = Decimal::from_str("0.700000000000000001").unwrap();
+            let value_a = Decimal::one() - value_b;
+
+            let err = limiter
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![
+                        ("denoma".to_string(), value_a),
+                        ("denomb".to_string(), value_b),
+                    ],
+                    block_time,
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::UpperLimitExceeded {
+                    denom: "denomb".to_string(),
+                    upper_limit: Decimal::from_str("0.7").unwrap(),
+                    value: Decimal::from_str("0.700000000000000001").unwrap(),
+                }
+            );
+
+            let value_a = Decimal::from_str("0.6").unwrap();
+            let value_b = Decimal::one() - value_a;
+
+            limiter
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![
+                        ("denoma".to_string(), value_a),
+                        ("denomb".to_string(), value_b),
+                    ],
+                    block_time,
+                )
+                .unwrap();
+
+            let value_b = Decimal::from_str("0.7").unwrap();
+            let value_a = Decimal::one() - value_b;
+
+            limiter
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![
+                        ("denoma".to_string(), value_a),
+                        ("denomb".to_string(), value_b),
+                    ],
+                    block_time,
+                )
+                .unwrap();
+        }
+
+        #[test]
         fn test_multiple_registered_limiters() {
             let mut deps = mock_dependencies();
             let limiter = Limiters::new("limiters");
@@ -1730,6 +1847,17 @@ mod tests {
                 )
                 .unwrap();
 
+            limiter
+                .register(
+                    &mut deps.storage,
+                    "denomb",
+                    "static",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(55),
+                    },
+                )
+                .unwrap();
+
             // Check limits and update for multiple limiters
             let block_time = Timestamp::from_nanos(1661231280000000000);
             let value_a = Decimal::percent(50);
@@ -1765,6 +1893,29 @@ mod tests {
                     denom: "denoma".to_string(),
                     upper_limit: Decimal::from_str("0.6").unwrap(),
                     value: Decimal::from_str("0.600000000000000001").unwrap(),
+                }
+            );
+
+            let value_b = Decimal::from_str("0.550000000000000001").unwrap();
+            let value_a = Decimal::one() - value_b;
+
+            let err = limiter
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![
+                        ("denoma".to_string(), value_a),
+                        ("denomb".to_string(), value_b),
+                    ],
+                    block_time,
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::UpperLimitExceeded {
+                    denom: "denomb".to_string(),
+                    upper_limit: Decimal::from_str("0.55").unwrap(),
+                    value: Decimal::from_str("0.550000000000000001").unwrap(),
                 }
             );
 
@@ -1833,8 +1984,6 @@ mod tests {
         }
 
         mod modifying_limiter {
-            use std::sync::Arc;
-
             use super::*;
 
             #[test]
