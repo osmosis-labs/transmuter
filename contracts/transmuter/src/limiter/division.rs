@@ -271,7 +271,10 @@ impl Division {
                 //   |              window               |
                 //
                 // ==============================================
-                let missing_period = elapsed_time(window_started_at, first_div_started_at.nanos())?;
+
+                // missing period is 0 if first division started before window start
+                let missing_period = elapsed_time(window_started_at, first_div_started_at.nanos())
+                    .unwrap_or(Uint64::zero());
                 let missing_integral = latest_removed_division
                     .latest_value
                     .checked_mul(from_uint(missing_period))?;
@@ -301,7 +304,10 @@ impl Division {
                 //   ^ start at window start
                 //                                      ^ end at block time
                 let started_at = window_started_at.max(first_div_started_at.nanos().into());
+
+                // TODO: handle special case where total_elapsed_time == 0?
                 let total_elapsed_time = elapsed_time(started_at, block_time.nanos())?;
+
                 integral
                     .checked_div(from_uint(total_elapsed_time))
                     .map_err(Into::into)
@@ -328,6 +334,7 @@ impl Division {
 
         let new_integral_range = elapsed_time(window_stared_at, self.updated_at.nanos())?;
 
+        // TODO: handle current_integral_range == 0
         let division_average_before_latest_update = self
             .integral
             .checked_div(from_uint(current_integral_range))?;

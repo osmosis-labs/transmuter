@@ -1,17 +1,18 @@
-use std::vec;
+use std::{str::FromStr, vec};
 
 use crate::{
     contract::{
         ExecMsg, GetShareDenomResponse, GetSharesResponse, GetTotalPoolLiquidityResponse,
-        GetTotalSharesResponse, InstantiateMsg, QueryMsg,
+        GetTotalSharesResponse, InstantiateMsg, ListLimitersResponse, QueryMsg,
     },
+    limiter::{ChangeLimiter, Limiter, LimiterParams, StaticLimiter, WindowConfig},
     test::{
         modules::cosmwasm_pool::CosmwasmPool,
         test_env::{assert_contract_err, TestEnvBuilder},
     },
     ContractError,
 };
-use cosmwasm_std::{Coin, Uint128};
+use cosmwasm_std::{Coin, Decimal, Uint128, Uint64};
 
 use osmosis_std::types::{
     cosmos::bank::v1beta1::MsgSend,
@@ -47,7 +48,7 @@ fn test_join_pool() {
         )
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
-            alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
+            alloyed_asset_subdenom: "usdc".to_string(),
             admin: None,
         })
         .build(&app);
@@ -210,7 +211,7 @@ fn test_swap() {
         .with_account("provider", vec![Coin::new(200_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
-            alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
+            alloyed_asset_subdenom: "usdc".to_string(),
             admin: None,
         })
         .build(&app);
@@ -466,7 +467,7 @@ fn test_exit_pool() {
         .with_account("provider_2", vec![Coin::new(100_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
-            alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
+            alloyed_asset_subdenom: "usdc".to_string(),
             admin: None,
         })
         .build(&app);
@@ -674,7 +675,7 @@ fn test_3_pool_swap() {
                 AXL_DAI.to_string(),
                 COSMOS_USDC.to_string(),
             ],
-            alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
+            alloyed_asset_subdenom: "usdc".to_string(),
             admin: None,
         })
         .build(&app);
@@ -903,5 +904,342 @@ fn test_swap_alloyed_asset() {
             t.contract.contract_addr, alloyed_asset_subdenom
         ),
         share_denom
+    );
+}
+
+#[test]
+fn test_limiters() {
+    let app = OsmosisTestApp::new();
+    let cp = CosmwasmPool::new(&app);
+
+    let admin = app
+        .init_account(&[Coin::new(100_000u128, "uosmo")])
+        .unwrap();
+
+    let t = TestEnvBuilder::new()
+        .with_account(
+            "alice",
+            vec![
+                Coin::new(1_000_000, AXL_USDC),
+                Coin::new(1_000_000, COSMOS_USDC),
+            ],
+        )
+        .with_account(
+            "bob",
+            vec![
+                Coin::new(1_000_000, AXL_USDC),
+                Coin::new(1_000_000, COSMOS_USDC),
+            ],
+        )
+        .with_account("admin", vec![])
+        .with_account(
+            "provider",
+            vec![
+                Coin::new(1_000_000, AXL_USDC),
+                Coin::new(1_000_000, COSMOS_USDC),
+            ],
+        )
+        .with_instantiate_msg(InstantiateMsg {
+            pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
+            alloyed_asset_subdenom: "usdc".to_string(),
+            admin: Some(admin.address()),
+        })
+        .build(&app);
+
+    // register limiters
+    let config_1h = WindowConfig {
+        window_size: Uint64::from(3_600_000_000_000u64), // 1 hrs
+        division_count: Uint64::from(2u64),              // 30 mins each
+    };
+
+    let config_1w = WindowConfig {
+        window_size: Uint64::from(25_920_000_000_000u64), // 7 days
+        division_count: Uint64::from(2u64),               // 3.5 days each
+    };
+
+    t.contract
+        .execute(
+            &ExecMsg::RegisterLimiter {
+                denom: AXL_USDC.to_string(),
+                label: "1h".to_string(),
+                limiter_params: LimiterParams::ChangeLimiter {
+                    window_config: config_1h.clone(),
+                    boundary_offset: Decimal::percent(10),
+                },
+            },
+            &[],
+            &t.accounts["admin"],
+        )
+        .unwrap();
+
+    t.contract
+        .execute(
+            &ExecMsg::RegisterLimiter {
+                denom: AXL_USDC.to_string(),
+                label: "1w".to_string(),
+                limiter_params: LimiterParams::ChangeLimiter {
+                    window_config: config_1w.clone(),
+                    boundary_offset: Decimal::percent(5),
+                },
+            },
+            &[],
+            &t.accounts["admin"],
+        )
+        .unwrap();
+
+    t.contract
+        .execute(
+            &ExecMsg::RegisterLimiter {
+                denom: COSMOS_USDC.to_string(),
+                label: "1h".to_string(),
+                limiter_params: LimiterParams::ChangeLimiter {
+                    window_config: config_1h.clone(),
+                    boundary_offset: Decimal::percent(10),
+                },
+            },
+            &[],
+            &t.accounts["admin"],
+        )
+        .unwrap();
+
+    t.contract
+        .execute(
+            &ExecMsg::RegisterLimiter {
+                denom: COSMOS_USDC.to_string(),
+                label: "1w".to_string(),
+                limiter_params: LimiterParams::ChangeLimiter {
+                    window_config: config_1w.clone(),
+                    boundary_offset: Decimal::percent(5),
+                },
+            },
+            &[],
+            &t.accounts["admin"],
+        )
+        .unwrap();
+
+    t.contract
+        .execute(
+            &ExecMsg::RegisterLimiter {
+                denom: COSMOS_USDC.to_string(),
+                label: "static".to_string(),
+                limiter_params: LimiterParams::StaticLimiter {
+                    upper_limit: Decimal::percent(55),
+                },
+            },
+            &[],
+            &t.accounts["admin"],
+        )
+        .unwrap();
+
+    // list all limiters
+    let ListLimitersResponse { limiters } = t.contract.query(&QueryMsg::ListLimiters {}).unwrap();
+    // assert that queried limiters = assigned limiters
+    assert_eq!(
+        limiters,
+        vec![
+            (
+                (AXL_USDC.to_string(), "1h".to_string()),
+                Limiter::ChangeLimiter(
+                    ChangeLimiter::new(config_1h.clone(), Decimal::percent(10)).unwrap()
+                )
+            ),
+            (
+                (AXL_USDC.to_string(), "1w".to_string()),
+                Limiter::ChangeLimiter(
+                    ChangeLimiter::new(config_1w.clone(), Decimal::percent(5)).unwrap()
+                )
+            ),
+            (
+                (COSMOS_USDC.to_string(), "1h".to_string()),
+                Limiter::ChangeLimiter(
+                    ChangeLimiter::new(config_1h, Decimal::percent(10)).unwrap()
+                )
+            ),
+            (
+                (COSMOS_USDC.to_string(), "1w".to_string()),
+                Limiter::ChangeLimiter(ChangeLimiter::new(config_1w, Decimal::percent(5)).unwrap())
+            ),
+            (
+                (COSMOS_USDC.to_string(), "static".to_string()),
+                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(55)))
+            ),
+        ]
+    );
+
+    // join pool - weight = 50:50
+    t.contract
+        .execute(
+            &ExecMsg::JoinPool {},
+            &[
+                Coin::new(500_000, AXL_USDC),
+                Coin::new(500_000, COSMOS_USDC),
+            ],
+            &t.accounts["provider"],
+        )
+        .unwrap();
+
+    app.increase_time(60 * 60); // -> + 60 mins
+
+    // swap 100_001 AXL_USDC to COSMOS_USDC
+    let err = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["alice"].address(),
+                token_in: Some(Coin::new(100_001, AXL_USDC).into()),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: COSMOS_USDC.to_string(),
+                }],
+                token_out_min_amount: Uint128::from(100_001u128).to_string(),
+            },
+            &t.accounts["alice"],
+        )
+        .unwrap_err();
+
+    assert_contract_err(
+        ContractError::UpperLimitExceeded {
+            denom: AXL_USDC.to_string(),
+            upper_limit: Decimal::from_str("0.6").unwrap(),
+            value: Decimal::from_str("0.600001").unwrap(),
+        },
+        err,
+    );
+
+    // swap exact amount out 50_001 COSMOS_USDC to AXL_USDC
+    let err = cp
+        .swap_exact_amount_out(
+            MsgSwapExactAmountOut {
+                sender: t.accounts["alice"].address(),
+                token_out: Some(Coin::new(50_001, AXL_USDC).into()),
+                routes: vec![SwapAmountOutRoute {
+                    pool_id: t.contract.pool_id,
+                    token_in_denom: COSMOS_USDC.to_string(),
+                }],
+                token_in_max_amount: Uint128::from(50_001u128).to_string(),
+            },
+            &t.accounts["alice"],
+        )
+        .unwrap_err();
+
+    assert_contract_err(
+        ContractError::UpperLimitExceeded {
+            denom: COSMOS_USDC.to_string(),
+            upper_limit: Decimal::from_str("0.55").unwrap(),
+            value: Decimal::from_str("0.550001").unwrap(),
+        },
+        err,
+    );
+
+    // swap 50_000 COSMOS_USDC to AXL_USDC
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["alice"].address(),
+            token_in: Some(Coin::new(50_000, COSMOS_USDC).into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: AXL_USDC.to_string(),
+            }],
+            token_out_min_amount: Uint128::from(50_000u128).to_string(),
+        },
+        &t.accounts["alice"],
+    )
+    .unwrap();
+
+    app.increase_time(60 * 60); // -> + 120 mins
+
+    // exit pool 200_000 COSMOSUSDC
+    let err = t
+        .contract
+        .execute(
+            &ExecMsg::ExitPool {
+                tokens_out: vec![Coin::new(200_000, COSMOS_USDC)],
+            },
+            &[],
+            &t.accounts["provider"],
+        )
+        .unwrap_err();
+
+    assert_contract_err(
+        ContractError::UpperLimitExceeded {
+            denom: AXL_USDC.to_string(),
+            upper_limit: Decimal::from_str("0.55").unwrap(),
+            value: Decimal::from_str("0.5625").unwrap(),
+        },
+        err,
+    );
+
+    // join pool 200_000 AXL_USDC
+    let err = t
+        .contract
+        .execute(
+            &ExecMsg::JoinPool {},
+            &[Coin::new(200_000, AXL_USDC)],
+            &t.accounts["provider"],
+        )
+        .unwrap_err();
+
+    assert_contract_err(
+        ContractError::UpperLimitExceeded {
+            denom: AXL_USDC.to_string(),
+            upper_limit: Decimal::from_str("0.525034626038781163").unwrap(),
+            value: Decimal::from_str("0.5416666666666666").unwrap(),
+        },
+        err,
+    );
+
+    // query share denom
+    let GetShareDenomResponse { share_denom } =
+        t.contract.query(&QueryMsg::GetShareDenom {}).unwrap();
+
+    let alloyed_denom = share_denom;
+
+    // swap amount in alloyed denom to AXL_USDC
+    let err = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["provider"].address(),
+                token_in: Some(Coin::new(200_000, alloyed_denom.clone()).into()),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: AXL_USDC.to_string(),
+                }],
+                token_out_min_amount: Uint128::from(200_000u128).to_string(),
+            },
+            &t.accounts["provider"],
+        )
+        .unwrap_err();
+
+    assert_contract_err(
+        ContractError::UpperLimitExceeded {
+            denom: COSMOS_USDC.to_string(),
+            upper_limit: Decimal::from_str("0.65").unwrap(),
+            value: Decimal::from_str("0.6875").unwrap(),
+        },
+        err,
+    );
+
+    // swap amount out COSMOS_USDC -> alloyed denom
+    let err = cp
+        .swap_exact_amount_out(
+            MsgSwapExactAmountOut {
+                sender: t.accounts["provider"].address(),
+                token_out: Some(Coin::new(200_000, alloyed_denom).into()),
+                routes: vec![SwapAmountOutRoute {
+                    pool_id: t.contract.pool_id,
+                    token_in_denom: COSMOS_USDC.to_string(),
+                }],
+                token_in_max_amount: Uint128::from(200_000u128).to_string(),
+            },
+            &t.accounts["provider"],
+        )
+        .unwrap_err();
+
+    assert_contract_err(
+        ContractError::UpperLimitExceeded {
+            denom: COSMOS_USDC.to_string(),
+            upper_limit: Decimal::from_str("0.575").unwrap(),
+            value: Decimal::from_str("0.625").unwrap(),
+        },
+        err,
     );
 }

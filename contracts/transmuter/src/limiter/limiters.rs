@@ -91,6 +91,10 @@ impl ChangeLimiter {
             ContractError::UnevenWindowDivision {}
         );
 
+        // TODO:
+        // - ensure division count is not 0
+        // - ensure window size is not 0
+
         Ok(self)
     }
 
