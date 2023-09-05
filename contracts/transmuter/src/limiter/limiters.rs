@@ -75,6 +75,13 @@ impl ChangeLimiter {
 
     fn ensure_window_config_constraint(self) -> Result<Self, ContractError> {
         let config = &self.window_config;
+
+        // window size must be greater than zero
+        ensure!(
+            config.window_size > Uint64::zero(),
+            ContractError::ZeroWindowSize {}
+        );
+
         // division count must not exceed MAX_DIVISION_COUNT
         ensure!(
             config.division_count <= MAX_DIVISION_COUNT,
@@ -90,10 +97,6 @@ impl ChangeLimiter {
             is_window_evenly_dividable,
             ContractError::UnevenWindowDivision {}
         );
-
-        // TODO:
-        // - ensure division count is not 0
-        // - ensure window size is not 0
 
         Ok(self)
     }
@@ -839,6 +842,30 @@ mod tests {
                     604_800_000_000u64
                 )))
             );
+        }
+
+        #[test]
+        fn test_fail_due_to_window_size_is_zero() {
+            let mut deps = mock_dependencies();
+
+            let limiter = Limiters::new("limiters");
+
+            let err = limiter
+                .register(
+                    &mut deps.storage,
+                    "denoma",
+                    "1m",
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::zero(),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
+                    },
+                )
+                .unwrap_err();
+
+            assert_eq!(err, ContractError::ZeroWindowSize {});
         }
 
         #[test]

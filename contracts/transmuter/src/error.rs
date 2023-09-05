@@ -71,6 +71,9 @@ pub enum ContractError {
     #[error("Unauthorized")]
     Unauthorized {},
 
+    #[error("Window size must be greater than zero")]
+    ZeroWindowSize {},
+
     #[error("Window must be evenly divisible by division size")]
     UnevenWindowDivision {},
 
