@@ -58,3 +58,56 @@ impl<'a> AlloyedAsset<'a> {
         Ok(total)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use cosmwasm_std::testing::mock_dependencies;
+
+    use super::*;
+
+    #[test]
+    fn test_alloyed_assets_balance_and_supply() {
+        let alloyed_assets = AlloyedAsset::new("alloyed_assets");
+        let mut deps = mock_dependencies();
+
+        let alloyed_denom = "alloyed_denom".to_string();
+        alloyed_assets
+            .set_alloyed_denom(&mut deps.storage, &alloyed_denom)
+            .unwrap();
+
+        deps.querier.update_balance(
+            "osmo1addr1",
+            vec![Coin {
+                denom: alloyed_denom.clone(),
+                amount: Uint128::from(400_000_000_000_000_000_000u128),
+            }],
+        );
+
+        deps.querier.update_balance(
+            "osmo1addr2",
+            vec![Coin {
+                denom: alloyed_denom.clone(),
+                amount: Uint128::from(600_000_000_000_000_000_000u128),
+            }],
+        );
+
+        assert_eq!(
+            alloyed_assets
+                .get_balance(deps.as_ref(), &Addr::unchecked("osmo1addr1"))
+                .unwrap(),
+            Uint128::from(400_000_000_000_000_000_000u128)
+        );
+
+        assert_eq!(
+            alloyed_assets
+                .get_balance(deps.as_ref(), &Addr::unchecked("osmo1addr2"))
+                .unwrap(),
+            Uint128::from(600_000_000_000_000_000_000u128)
+        );
+
+        assert_eq!(
+            alloyed_assets.get_total_supply(deps.as_ref()).unwrap(),
+            Uint128::from(1_000_000_000_000_000_000_000u128)
+        );
+    }
+}
