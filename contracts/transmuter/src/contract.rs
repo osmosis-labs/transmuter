@@ -1704,7 +1704,7 @@ mod tests {
         let total_pool_liquidity: GetTotalPoolLiquidityResponse = from_binary(&res).unwrap();
         assert_eq!(
             total_pool_liquidity.total_pool_liquidity,
-            vec![Coin::new(1000, "uion"), Coin::new(1000, "uosmo")]
+            vec![Coin::new(1000, "uosmo"), Coin::new(1000, "uion")]
         );
 
         // Join pool
@@ -1745,7 +1745,7 @@ mod tests {
 
         assert_eq!(
             total_pool_liquidity.total_pool_liquidity,
-            vec![Coin::new(2000, "uion"), Coin::new(1000, "uosmo")]
+            vec![Coin::new(1000, "uosmo"), Coin::new(2000, "uion")]
         );
     }
 
