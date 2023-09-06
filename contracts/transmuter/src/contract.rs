@@ -344,7 +344,7 @@ impl Transmuter<'_> {
         pool.join_pool(tokens_in)?;
 
         let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
-        let out_amount = AlloyedAsset::calc_amount_to_mint(tokens_in)?;
+        let out_amount = AlloyedAsset::amount_from(tokens_in)?;
         let alloyed_asset_out = Coin::new(out_amount.u128(), alloyed_denom);
 
         Ok((pool, alloyed_asset_out))
@@ -376,48 +376,14 @@ impl Transmuter<'_> {
     ) -> Result<Response, ContractError> {
         let (deps, env, info) = ctx;
 
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
-
-        let (sender_shares, burn_from_address) = match burn_alloyed_asset_from {
-            BurnAlloyedAssetFrom::SenderAccount => {
-                ensure!(info.funds.is_empty(), ContractError::EmptyFundsExpected {});
-
-                let sender_shares = self
-                    .alloyed_asset
-                    .get_balance(deps.as_ref(), &info.sender)?;
-                let burn_from_address = info.sender.to_string();
-                (sender_shares, burn_from_address)
-            }
-            BurnAlloyedAssetFrom::SentFunds => {
-                ensure!(info.funds.len() == 1, ContractError::SingleTokenExpected {});
-                ensure!(
-                    info.funds[0].denom == alloyed_denom,
-                    ContractError::UnexpectedDenom {
-                        expected: info.funds[0].clone().denom,
-                        actual: alloyed_denom
-                    }
-                );
-
-                let sender_shares = info.funds[0].amount;
-                let burn_from_address = env.contract.address.to_string();
-                (sender_shares, burn_from_address)
-            }
-        };
-
-        // check if sender's shares is enough
-        let required_shares = AlloyedAsset::calc_amount_to_mint(&tokens_out)?;
-
-        ensure!(
-            sender_shares >= required_shares,
-            ContractError::InsufficientShares {
-                required: required_shares,
-                available: sender_shares
-            }
-        );
-
-        // exit pool
-        let mut pool = self.pool.load(deps.storage)?;
-        pool.exit_pool(&tokens_out)?;
+        let (pool, alloyed_asset_to_burn, burn_from_address) = self
+            .calc_swap_alloyed_asset_for_tokens(
+                deps.as_ref(),
+                &env,
+                &info,
+                burn_alloyed_asset_from,
+                &tokens_out,
+            )?;
 
         // check and update limiters only if pool assets are not zero
         if let Some(denom_weight_pairs) = pool.weights()? {
@@ -438,7 +404,7 @@ impl Transmuter<'_> {
         // burn alloyed assets
         let burn_msg = MsgBurn {
             sender: env.contract.address.to_string(),
-            amount: Some(Coin::new(required_shares.u128(), alloyed_denom).into()),
+            amount: Some(alloyed_asset_to_burn.into()),
             burn_from_address,
         };
 
@@ -446,6 +412,62 @@ impl Transmuter<'_> {
             .add_attribute("method", method)
             .add_message(burn_msg)
             .add_message(bank_send_msg))
+    }
+
+    fn calc_swap_alloyed_asset_for_tokens(
+        &self,
+        deps: Deps,
+        env: &Env,
+        info: &MessageInfo,
+        burn_alloyed_asset_from: BurnAlloyedAssetFrom,
+        tokens_out: &[Coin],
+    ) -> Result<(TransmuterPool, Coin, String), ContractError> {
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+
+        let (alloyed_asset_available, burn_from_address) = match burn_alloyed_asset_from {
+            BurnAlloyedAssetFrom::SenderAccount => {
+                ensure!(info.funds.is_empty(), ContractError::EmptyFundsExpected {});
+
+                let alloyed_asset_available = self.alloyed_asset.get_balance(deps, &info.sender)?;
+                let burn_from_address = info.sender.to_string();
+                (alloyed_asset_available, burn_from_address)
+            }
+            BurnAlloyedAssetFrom::SentFunds => {
+                ensure!(info.funds.len() == 1, ContractError::SingleTokenExpected {});
+                ensure!(
+                    info.funds[0].denom == alloyed_denom,
+                    ContractError::UnexpectedDenom {
+                        expected: info.funds[0].clone().denom,
+                        actual: alloyed_denom
+                    }
+                );
+
+                let alloyed_asset_available = info.funds[0].amount;
+                let burn_from_address = env.contract.address.to_string();
+                (alloyed_asset_available, burn_from_address)
+            }
+        };
+
+        // check if sender's allooed asset balance is enough
+        let alloyed_asset_to_burn = AlloyedAsset::amount_from(tokens_out)?;
+
+        ensure!(
+            alloyed_asset_available >= alloyed_asset_to_burn,
+            ContractError::InsufficientShares {
+                required: alloyed_asset_to_burn,
+                available: alloyed_asset_available
+            }
+        );
+
+        // exit pool
+        let mut pool = self.pool.load(deps.storage)?;
+        pool.exit_pool(tokens_out)?;
+
+        Ok((
+            pool,
+            Coin::new(alloyed_asset_to_burn.u128(), alloyed_denom),
+            burn_from_address,
+        ))
     }
 
     // === queries ===
@@ -627,9 +649,36 @@ impl Transmuter<'_> {
             }
         );
 
+        // ensure token in denom and token out denom are not the same
+        ensure!(
+            token_out_denom != token_in.denom,
+            StdError::generic_err("token_in_denom and token_out_denom cannot be the same")
+        );
+
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(ctx.0.storage)?;
+
+        let token_out = Coin::new(token_in.amount.u128(), token_out_denom);
+        let mut pool = self.pool.load(ctx.0.storage)?;
+
+        // In case where token_in_denom or token_out_denom is alloyed_denom:
+
+        if token_in.denom == alloyed_denom {
+            // token_in_denom == alloyed_denom: is the same as exit pool
+            // so we ensure that exit pool has no problem
+            pool.exit_pool(&[token_out.clone()])?;
+            return Ok((pool, token_out));
+        }
+
+        if token_out.denom == alloyed_denom {
+            // token_out_denom == alloyed_denom: is the same as join pool
+            // so we ensure that join pool has no problem
+            pool.join_pool(&[token_in])?;
+            return Ok((pool, token_out));
+        }
+
         let mut pool = self.pool.load(deps.storage)?;
 
-        let token_out = pool.transmute(&token_in, &token_out_denom)?;
+        let token_out = pool.transmute(&token_in, &token_out.denom)?;
 
         Ok((pool, token_out))
     }
@@ -642,12 +691,7 @@ impl Transmuter<'_> {
         token_in_denom: String,
         swap_fee: Decimal,
     ) -> Result<CalcInAmtGivenOutResponse, ContractError> {
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(ctx.0.storage)?;
-        if token_in_denom == alloyed_denom || token_out.denom == alloyed_denom {
-            let token_in = Coin::new(token_out.amount.u128(), token_in_denom);
-            return Ok(CalcInAmtGivenOutResponse { token_in });
-        }
-
+        // else we call do_calc_in_amt_given_out to ensure constraint on the pool
         let (_pool, token_in) =
             self.do_calc_in_amt_given_out(ctx, token_out, token_in_denom, swap_fee)?;
 
@@ -675,9 +719,33 @@ impl Transmuter<'_> {
             }
         );
 
-        let token_in = Coin::new(token_out.amount.into(), token_in_denom);
+        // ensure token in denom and token out denom are not the same
+        ensure!(
+            token_out.denom != token_in_denom,
+            StdError::generic_err("token_in_denom and token_out_denom cannot be the same")
+        );
 
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(ctx.0.storage)?;
+
+        let token_in = Coin::new(token_out.amount.u128(), token_in_denom);
         let mut pool = self.pool.load(deps.storage)?;
+
+        // In case where token_in_denom or token_out_denom is alloyed_denom:
+
+        if token_in.denom == alloyed_denom {
+            // token_in_denom == alloyed_denom: is the same as exit pool
+            // so we ensure that exit pool has no problem
+            pool.exit_pool(&[token_out])?;
+            return Ok((pool, token_in));
+        }
+
+        if token_out.denom == alloyed_denom {
+            // token_out_denom == alloyed_denom: is the same as join pool
+            // so we ensure that join pool has no problem
+            pool.join_pool(&[token_in.clone()])?;
+            return Ok((pool, token_in));
+        }
+
         let actual_token_out = pool.transmute(&token_in, &token_out.denom)?;
 
         // ensure that actual_token_out is equal to token_out
@@ -1951,7 +2019,404 @@ mod tests {
         assert_eq!(spot_price.spot_price, Decimal::one());
     }
 
-    // test
-    // - calc_out_amt_given_in* (need update)
-    // - calc_in_amt_given_out*
+    #[test]
+    fn test_calc_out_amt_given_in() {
+        let mut deps = mock_dependencies();
+
+        let admin = "admin";
+        let init_msg = InstantiateMsg {
+            pool_asset_denoms: vec!["axlusdc".to_string(), "whusdc".to_string()],
+            admin: Some(admin.to_string()),
+            alloyed_asset_subdenom: "alloyedusdc".to_string(),
+        };
+        let env = mock_env();
+        let info = mock_info(admin, &[]);
+
+        // Instantiate the contract.
+        instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
+
+        // Manually reply
+        let alloyed_denom = "alloyedusdc";
+
+        reply(
+            deps.as_mut(),
+            env.clone(),
+            Reply {
+                id: 1,
+                result: SubMsgResult::Ok(SubMsgResponse {
+                    events: vec![],
+                    data: Some(
+                        MsgCreateDenomResponse {
+                            new_token_denom: alloyed_denom.to_string(),
+                        }
+                        .into(),
+                    ),
+                }),
+            },
+        )
+        .unwrap();
+
+        // join pool
+        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(
+                admin,
+                &[Coin::new(1000, "axlusdc"), Coin::new(2000, "whusdc")],
+            ),
+            join_pool_msg,
+        )
+        .unwrap();
+
+        struct Case {
+            name: String,
+            token_in: Coin,
+            token_out_denom: String,
+            swap_fee: Decimal,
+            expected: Result<CalcOutAmtGivenInResponse, ContractError>,
+        }
+
+        for Case {
+            name,
+            token_in,
+            token_out_denom,
+            swap_fee,
+            expected,
+        } in vec![
+            Case {
+                name: String::from("axlusdc to whusdc - ok"),
+                token_in: Coin::new(1000, "axlusdc"),
+                token_out_denom: "whusdc".to_string(),
+                swap_fee: Decimal::zero(),
+                expected: Ok(CalcOutAmtGivenInResponse {
+                    token_out: Coin::new(1000, "whusdc"),
+                }),
+            },
+            Case {
+                name: String::from("whusdc to axlusdc - ok"),
+                token_in: Coin::new(1000, "whusdc"),
+                token_out_denom: "axlusdc".to_string(),
+                swap_fee: Decimal::zero(),
+                expected: Ok(CalcOutAmtGivenInResponse {
+                    token_out: Coin::new(1000, "axlusdc"),
+                }),
+            },
+            Case {
+                name: String::from("whusdc to axlusdc - token out not enough"),
+                token_in: Coin::new(1001, "whusdc"),
+                token_out_denom: "axlusdc".to_string(),
+                swap_fee: Decimal::zero(),
+                expected: Err(ContractError::InsufficientPoolAsset {
+                    required: Coin::new(1001, "axlusdc"),
+                    available: Coin::new(1000, "axlusdc"),
+                }),
+            },
+            Case {
+                name: String::from("same denom error (pool asset)"),
+                token_in: Coin::new(1000, "axlusdc"),
+                token_out_denom: "axlusdc".to_string(),
+                swap_fee: Decimal::zero(),
+                expected: Err(StdError::generic_err(
+                    "token_in_denom and token_out_denom cannot be the same",
+                )
+                .into()),
+            },
+            Case {
+                name: String::from("same denom error (alloyed asset)"),
+                token_in: Coin::new(1000, "alloyedusdc"),
+                token_out_denom: "alloyedusdc".to_string(),
+                swap_fee: Decimal::zero(),
+                expected: Err(StdError::generic_err(
+                    "token_in_denom and token_out_denom cannot be the same",
+                )
+                .into()),
+            },
+            Case {
+                name: String::from("alloyedusdc to axlusdc - ok"),
+                token_in: Coin::new(1000, "alloyedusdc"),
+                token_out_denom: "axlusdc".to_string(),
+                swap_fee: Decimal::zero(),
+                expected: Ok(CalcOutAmtGivenInResponse {
+                    token_out: Coin::new(1000, "axlusdc"),
+                }),
+            },
+            Case {
+                name: String::from("alloyedusdc to whusdc - ok"),
+                token_in: Coin::new(1000, "alloyedusdc"),
+                token_out_denom: "whusdc".to_string(),
+                swap_fee: Decimal::zero(),
+                expected: Ok(CalcOutAmtGivenInResponse {
+                    token_out: Coin::new(1000, "whusdc"),
+                }),
+            },
+            Case {
+                name: String::from("alloyedusdc to axlusdc - token out not enough"),
+                token_in: Coin::new(1001, "alloyedusdc"),
+                token_out_denom: "axlusdc".to_string(),
+                swap_fee: Decimal::zero(),
+                expected: Err(ContractError::InsufficientPoolAsset {
+                    required: Coin::new(1001, "axlusdc"),
+                    available: Coin::new(1000, "axlusdc"),
+                }),
+            },
+            Case {
+                name: String::from("axlusdc to alloyedusdc - ok"),
+                token_in: Coin::new(1000, "axlusdc"),
+                token_out_denom: "alloyedusdc".to_string(),
+                swap_fee: Decimal::zero(),
+                expected: Ok(CalcOutAmtGivenInResponse {
+                    token_out: Coin::new(1000, "alloyedusdc"),
+                }),
+            },
+            Case {
+                name: String::from("whusdc to alloyedusdc - ok"),
+                token_in: Coin::new(1000, "whusdc"),
+                token_out_denom: "alloyedusdc".to_string(),
+                swap_fee: Decimal::zero(),
+                expected: Ok(CalcOutAmtGivenInResponse {
+                    token_out: Coin::new(1000, "alloyedusdc"),
+                }),
+            },
+            Case {
+                name: String::from("invalid swap fee"),
+                token_in: Coin::new(1000, "axlusdc"),
+                token_out_denom: "whusdc".to_string(),
+                swap_fee: Decimal::percent(1),
+                expected: Err(ContractError::InvalidSwapFee {
+                    expected: Decimal::zero(),
+                    actual: Decimal::percent(1),
+                }),
+            },
+            Case {
+                name: String::from("invalid swap fee (alloyed asset as token in)"),
+                token_in: Coin::new(1000, "alloyedusdc"),
+                token_out_denom: "whusdc".to_string(),
+                swap_fee: Decimal::percent(1),
+                expected: Err(ContractError::InvalidSwapFee {
+                    expected: Decimal::zero(),
+                    actual: Decimal::percent(1),
+                }),
+            },
+            Case {
+                name: String::from("invalid swap fee (alloyed asset as token out)"),
+                token_in: Coin::new(1000, "axlusdc"),
+                token_out_denom: "alloyedusdc".to_string(),
+                swap_fee: Decimal::percent(2),
+                expected: Err(ContractError::InvalidSwapFee {
+                    expected: Decimal::zero(),
+                    actual: Decimal::percent(2),
+                }),
+            },
+        ] {
+            let res = query(
+                deps.as_ref(),
+                env.clone(),
+                ContractQueryMsg::Transmuter(QueryMsg::CalcOutAmtGivenIn {
+                    token_in: token_in.clone(),
+                    token_out_denom: token_out_denom.clone(),
+                    swap_fee,
+                }),
+            )
+            .map(|value| from_binary(&value).unwrap());
+
+            assert_eq!(res, expected, "case: {}", name);
+        }
+    }
+
+    #[test]
+    fn test_calc_in_amt_given_out() {
+        let mut deps = mock_dependencies();
+
+        let admin = "admin";
+        let init_msg = InstantiateMsg {
+            pool_asset_denoms: vec!["axlusdc".to_string(), "whusdc".to_string()],
+            admin: Some(admin.to_string()),
+            alloyed_asset_subdenom: "alloyedusdc".to_string(),
+        };
+        let env = mock_env();
+        let info = mock_info(admin, &[]);
+
+        // Instantiate the contract.
+        instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
+
+        // Manually reply
+        let alloyed_denom = "alloyedusdc";
+
+        reply(
+            deps.as_mut(),
+            env.clone(),
+            Reply {
+                id: 1,
+                result: SubMsgResult::Ok(SubMsgResponse {
+                    events: vec![],
+                    data: Some(
+                        MsgCreateDenomResponse {
+                            new_token_denom: alloyed_denom.to_string(),
+                        }
+                        .into(),
+                    ),
+                }),
+            },
+        )
+        .unwrap();
+
+        // join pool
+        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(
+                admin,
+                &[Coin::new(1000, "axlusdc"), Coin::new(2000, "whusdc")],
+            ),
+            join_pool_msg,
+        )
+        .unwrap();
+
+        struct Case {
+            name: String,
+            token_in_denom: String,
+            token_out: Coin,
+            swap_fee: Decimal,
+            expected: Result<CalcInAmtGivenOutResponse, ContractError>,
+        }
+
+        for Case {
+            name,
+            token_in_denom,
+            token_out,
+            swap_fee,
+            expected,
+        } in vec![
+            Case {
+                name: String::from("axlusdc to whusdc - ok"),
+                token_in_denom: "axlusdc".to_string(),
+                token_out: Coin::new(1000, "whusdc"),
+                swap_fee: Decimal::zero(),
+                expected: Ok(CalcInAmtGivenOutResponse {
+                    token_in: Coin::new(1000, "axlusdc"),
+                }),
+            },
+            Case {
+                name: String::from("whusdc to axlusdc - ok"),
+                token_in_denom: "whusdc".to_string(),
+                token_out: Coin::new(1000, "axlusdc"),
+                swap_fee: Decimal::zero(),
+                expected: Ok(CalcInAmtGivenOutResponse {
+                    token_in: Coin::new(1000, "whusdc"),
+                }),
+            },
+            Case {
+                name: String::from("whusdc to axlusdc - token out not enough"),
+                token_in_denom: "whusdc".to_string(),
+                token_out: Coin::new(1001, "axlusdc"),
+                swap_fee: Decimal::zero(),
+                expected: Err(ContractError::InsufficientPoolAsset {
+                    required: Coin::new(1001, "axlusdc"),
+                    available: Coin::new(1000, "axlusdc"),
+                }),
+            },
+            Case {
+                name: String::from("same denom error (pool asset)"),
+                token_in_denom: "axlusdc".to_string(),
+                token_out: Coin::new(1000, "axlusdc"),
+                swap_fee: Decimal::zero(),
+                expected: Err(StdError::generic_err(
+                    "token_in_denom and token_out_denom cannot be the same",
+                )
+                .into()),
+            },
+            Case {
+                name: String::from("same denom error (alloyed asset)"),
+                token_in_denom: "alloyedusdc".to_string(),
+                token_out: Coin::new(1000, "alloyedusdc"),
+                swap_fee: Decimal::zero(),
+                expected: Err(StdError::generic_err(
+                    "token_in_denom and token_out_denom cannot be the same",
+                )
+                .into()),
+            },
+            Case {
+                name: String::from("alloyedusdc to axlusdc - ok"),
+                token_in_denom: "alloyedusdc".to_string(),
+                token_out: Coin::new(1000, "axlusdc"),
+                swap_fee: Decimal::zero(),
+                expected: Ok(CalcInAmtGivenOutResponse {
+                    token_in: Coin::new(1000, "alloyedusdc"),
+                }),
+            },
+            Case {
+                name: String::from("alloyedusdc to whusdc - ok"),
+                token_in_denom: "alloyedusdc".to_string(),
+                token_out: Coin::new(1000, "whusdc"),
+                swap_fee: Decimal::zero(),
+                expected: Ok(CalcInAmtGivenOutResponse {
+                    token_in: Coin::new(1000, "alloyedusdc"),
+                }),
+            },
+            Case {
+                name: String::from("alloyedusdc to axlusdc - token out not enough"),
+                token_in_denom: "alloyedusdc".to_string(),
+                token_out: Coin::new(1001, "axlusdc"),
+                swap_fee: Decimal::zero(),
+                expected: Err(ContractError::InsufficientPoolAsset {
+                    required: Coin::new(1001, "axlusdc"),
+                    available: Coin::new(1000, "axlusdc"),
+                }),
+            },
+            Case {
+                name: String::from("pool asset to alloyed asset - ok"),
+                token_in_denom: "axlusdc".to_string(),
+                token_out: Coin::new(1000, "alloyedusdc"),
+                swap_fee: Decimal::zero(),
+                expected: Ok(CalcInAmtGivenOutResponse {
+                    token_in: Coin::new(1000, "axlusdc"),
+                }),
+            },
+            Case {
+                name: String::from("invalid swap fee"),
+                token_in_denom: "whusdc".to_string(),
+                token_out: Coin::new(1000, "axlusdc"),
+                swap_fee: Decimal::percent(1),
+                expected: Err(ContractError::InvalidSwapFee {
+                    expected: Decimal::zero(),
+                    actual: Decimal::percent(1),
+                }),
+            },
+            Case {
+                name: String::from("invalid swap fee (alloyed asset as token in)"),
+                token_in_denom: "alloyedusdc".to_string(),
+                token_out: Coin::new(1000, "axlusdc"),
+                swap_fee: Decimal::percent(1),
+                expected: Err(ContractError::InvalidSwapFee {
+                    expected: Decimal::zero(),
+                    actual: Decimal::percent(1),
+                }),
+            },
+            Case {
+                name: String::from("invalid swap fee (alloyed asset as token out)"),
+                token_in_denom: "whusdc".to_string(),
+                token_out: Coin::new(1000, "alloyedusdc"),
+                swap_fee: Decimal::percent(2),
+                expected: Err(ContractError::InvalidSwapFee {
+                    expected: Decimal::zero(),
+                    actual: Decimal::percent(2),
+                }),
+            },
+        ] {
+            let res = query(
+                deps.as_ref(),
+                env.clone(),
+                ContractQueryMsg::Transmuter(QueryMsg::CalcInAmtGivenOut {
+                    token_in_denom: token_in_denom.clone(),
+                    token_out: token_out.clone(),
+                    swap_fee,
+                }),
+            )
+            .map(|value| from_binary(&value).unwrap());
+
+            assert_eq!(res, expected, "case: {}", name);
+        }
+    }
 }

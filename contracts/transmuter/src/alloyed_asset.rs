@@ -49,8 +49,8 @@ impl<'a> AlloyedAsset<'a> {
             .map(|coin| coin.amount)
     }
 
-    /// calculate the amount of alloyed asset to mint
-    pub fn calc_amount_to_mint(tokens: &[Coin]) -> StdResult<Uint128> {
+    /// calculate the amount of alloyed asset to mint/burn
+    pub fn amount_from(tokens: &[Coin]) -> StdResult<Uint128> {
         let mut total = Uint128::zero();
         for coin in tokens {
             total = total.checked_add(coin.amount)?;
