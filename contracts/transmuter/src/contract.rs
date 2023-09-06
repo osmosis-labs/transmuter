@@ -623,7 +623,7 @@ impl Transmuter<'_> {
         swap_fee: Decimal,
     ) -> Result<CalcOutAmtGivenInResponse, ContractError> {
         let (_pool, token_out) =
-            self.do_calc_out_amt_given_in(ctx, token_in, token_out_denom, swap_fee)?;
+            self.do_calc_out_amt_given_in(ctx, token_in, &token_out_denom, swap_fee)?;
 
         Ok(CalcOutAmtGivenInResponse { token_out })
     }
@@ -632,7 +632,7 @@ impl Transmuter<'_> {
         &self,
         ctx: (Deps, Env),
         token_in: Coin,
-        token_out_denom: String,
+        token_out_denom: &str,
         swap_fee: Decimal,
     ) -> Result<(TransmuterPool, Coin), ContractError> {
         let (deps, env) = ctx;
