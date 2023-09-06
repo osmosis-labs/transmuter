@@ -818,7 +818,7 @@ mod tests {
     use crate::sudo::SudoMsg;
     use crate::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{attr, from_binary, Uint64};
+    use cosmwasm_std::{attr, from_binary, SubMsgResponse, SubMsgResult, Uint64};
 
     #[test]
     fn test_set_active_status() {
@@ -1522,8 +1522,104 @@ mod tests {
         )
     }
 
+    #[test]
+    fn test_exit_pool() {
+        let mut deps = mock_dependencies();
+
+        let admin = "admin";
+        let user = "user";
+        let init_msg = InstantiateMsg {
+            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            admin: Some(admin.to_string()),
+            alloyed_asset_subdenom: "usomoion".to_string(),
+        };
+        let env = mock_env();
+        let info = mock_info(admin, &[]);
+
+        // Instantiate the contract.
+        instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap();
+
+        // Manually reply
+        let alloyed_denom = "usomoion";
+
+        reply(
+            deps.as_mut(),
+            env.clone(),
+            Reply {
+                id: 1,
+                result: SubMsgResult::Ok(SubMsgResponse {
+                    events: vec![],
+                    data: Some(
+                        MsgCreateDenomResponse {
+                            new_token_denom: alloyed_denom.to_string(),
+                        }
+                        .into(),
+                    ),
+                }),
+            },
+        )
+        .unwrap();
+
+        // User tries to exit pool
+        let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
+            tokens_out: vec![Coin::new(1000, "uion"), Coin::new(1000, "uosmo")],
+        });
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(user, &[]),
+            exit_pool_msg,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::InsufficientShares {
+                required: 2000u128.into(),
+                available: Uint128::zero()
+            }
+        );
+        // User tries to join pool
+        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(user, &[Coin::new(1000, "uion"), Coin::new(1000, "uosmo")]),
+            join_pool_msg,
+        );
+        assert!(res.is_ok());
+
+        deps.querier
+            .update_balance(user, vec![Coin::new(2000, alloyed_denom)]);
+
+        // User tries to exit pool again
+        let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
+            tokens_out: vec![Coin::new(1000, "uion"), Coin::new(1000, "uosmo")],
+        });
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(user, &[]),
+            exit_pool_msg,
+        )
+        .unwrap();
+
+        let expected = Response::new()
+            .add_attribute("method", "exit_pool")
+            .add_message(MsgBurn {
+                sender: env.contract.address.to_string(),
+                amount: Some(Coin::new(2000u128, alloyed_denom).into()),
+                burn_from_address: user.to_string(),
+            })
+            .add_message(BankMsg::Send {
+                to_address: user.to_string(),
+                amount: vec![Coin::new(1000, "uion"), Coin::new(1000, "uosmo")],
+            });
+
+        assert_eq!(res, expected);
+    }
+
     // test
-    // - exit_pool
     // - get_shares
     // - get_share_denom
     // - get_alloyed_denom
