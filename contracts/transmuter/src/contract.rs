@@ -1619,12 +1619,139 @@ mod tests {
         assert_eq!(res, expected);
     }
 
+    #[test]
+    fn test_shares_and_liquidity() {
+        let mut deps = mock_dependencies();
+
+        let admin = "admin";
+        let user_1 = "user_1";
+        let user_2 = "user_2";
+        let init_msg = InstantiateMsg {
+            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            admin: Some(admin.to_string()),
+            alloyed_asset_subdenom: "usomoion".to_string(),
+        };
+        let env = mock_env();
+        let info = mock_info(admin, &[]);
+
+        // Instantiate the contract.
+        instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
+
+        // Manually reply
+        let alloyed_denom = "usomoion";
+
+        reply(
+            deps.as_mut(),
+            env.clone(),
+            Reply {
+                id: 1,
+                result: SubMsgResult::Ok(SubMsgResponse {
+                    events: vec![],
+                    data: Some(
+                        MsgCreateDenomResponse {
+                            new_token_denom: alloyed_denom.to_string(),
+                        }
+                        .into(),
+                    ),
+                }),
+            },
+        )
+        .unwrap();
+
+        // Join pool
+        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(user_1, &[Coin::new(1000, "uion"), Coin::new(1000, "uosmo")]),
+            join_pool_msg,
+        )
+        .unwrap();
+
+        // Update alloyed asset denom balance for user
+        deps.querier
+            .update_balance(user_1, vec![Coin::new(2000, "usomoion")]);
+
+        // Query the shares of the user
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetShares {
+                address: user_1.to_string(),
+            }),
+        )
+        .unwrap();
+        let shares: GetSharesResponse = from_binary(&res).unwrap();
+        assert_eq!(shares.shares.u128(), 2000u128);
+
+        // Query the total shares
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetTotalShares {}),
+        )
+        .unwrap();
+        let total_shares: GetTotalSharesResponse = from_binary(&res).unwrap();
+        assert_eq!(total_shares.total_shares.u128(), 2000u128);
+
+        // Query the total pool liquidity
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetTotalPoolLiquidity {}),
+        )
+        .unwrap();
+        let total_pool_liquidity: GetTotalPoolLiquidityResponse = from_binary(&res).unwrap();
+        assert_eq!(
+            total_pool_liquidity.total_pool_liquidity,
+            vec![Coin::new(1000, "uion"), Coin::new(1000, "uosmo")]
+        );
+
+        // Join pool
+        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(user_2, &[Coin::new(1000, "uion")]),
+            join_pool_msg,
+        )
+        .unwrap();
+
+        // Update balance for user 2
+        deps.querier
+            .update_balance(user_2, vec![Coin::new(1000, "usomoion")]);
+
+        // Query the total shares
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetTotalShares {}),
+        )
+        .unwrap();
+
+        let total_shares: GetTotalSharesResponse = from_binary(&res).unwrap();
+
+        assert_eq!(total_shares.total_shares.u128(), 3000u128);
+
+        // Query the total pool liquidity
+        let res = query(
+            deps.as_ref(),
+            env,
+            ContractQueryMsg::Transmuter(QueryMsg::GetTotalPoolLiquidity {}),
+        )
+        .unwrap();
+
+        let total_pool_liquidity: GetTotalPoolLiquidityResponse = from_binary(&res).unwrap();
+
+        assert_eq!(
+            total_pool_liquidity.total_pool_liquidity,
+            vec![Coin::new(2000, "uion"), Coin::new(1000, "uosmo")]
+        );
+    }
+
     // test
-    // - get_shares
     // - get_share_denom
     // - get_alloyed_denom
-    // - get_total_shares
-    // - get_total_pool_liquidity
     // - spot_price*
     // - calc_out_amt_given_in* (need update)
     // - calc_in_amt_given_out*
