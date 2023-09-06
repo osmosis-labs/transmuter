@@ -414,7 +414,6 @@ impl Transmuter<'_> {
         };
 
         // burn alloyed assets
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
         let burn_msg = MsgBurn {
             sender: env.contract.address.to_string(),
             amount: Some(Coin::new(required_shares.u128(), alloyed_denom).into()),
