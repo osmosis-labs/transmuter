@@ -64,7 +64,7 @@ fn test_spot_price(liquidity: &[Coin]) {
             )
             .unwrap_err(),
         ContractError::SpotPriceQueryFailed {
-            reason: "quote_asset_denom is not in pool assets: must be one of [\"denom0\", \"denom1\"] but got random_denom".to_string()
+            reason: "quote_asset_denom is not in swappable assets: must be one of [\"denom0\", \"denom1\", \"factory/contract_address/transmuter/poolshare\"] but got random_denom".to_string()
         }
     );
 
@@ -77,7 +77,7 @@ fn test_spot_price(liquidity: &[Coin]) {
             )
             .unwrap_err(),
         ContractError::SpotPriceQueryFailed {
-            reason: "base_asset_denom is not in pool assets: must be one of [\"denom0\", \"denom1\"] but got random_denom".to_string()
+            reason: "base_asset_denom is not in swappable assets: must be one of [\"denom0\", \"denom1\", \"factory/contract_address/transmuter/poolshare\"] but got random_denom".to_string()
         }
     );
 

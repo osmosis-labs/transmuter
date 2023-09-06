@@ -641,8 +641,6 @@ impl Transmuter<'_> {
         let (_pool, token_in) =
             self.do_calc_in_amt_given_out(ctx, token_out, token_in_denom, swap_fee)?;
 
-        let token_in = Coin::new(token_in.amount.u128(), alloyed_denom);
-
         Ok(CalcInAmtGivenOutResponse { token_in })
     }
 
