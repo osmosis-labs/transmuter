@@ -24,7 +24,7 @@ pub enum ContractError {
         expected_denom: Vec<String>,
     },
 
-    #[error("Unable to transmute token with denom: {denom}: expected one of: {expected_denom:?} or share token")]
+    #[error("Unable to transmute token with denom: {denom}: expected one of: {expected_denom:?} or alloyed asset")]
     InvalidTransmuteDenom {
         denom: String,
         expected_denom: Vec<String>,
