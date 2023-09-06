@@ -587,12 +587,12 @@ impl Transmuter<'_> {
         swap_fee: Decimal,
     ) -> Result<CalcOutAmtGivenInResponse, ContractError> {
         let (_pool, token_out) =
-            self._calc_out_amt_given_in(ctx, token_in, token_out_denom, swap_fee)?;
+            self.do_calc_out_amt_given_in(ctx, token_in, token_out_denom, swap_fee)?;
 
         Ok(CalcOutAmtGivenInResponse { token_out })
     }
 
-    pub(crate) fn _calc_out_amt_given_in(
+    pub(crate) fn do_calc_out_amt_given_in(
         &self,
         ctx: (Deps, Env),
         token_in: Coin,
@@ -628,24 +628,23 @@ impl Transmuter<'_> {
         token_in_denom: String,
         swap_fee: Decimal,
     ) -> Result<CalcInAmtGivenOutResponse, ContractError> {
-        // TODO: handling this more thoughtfully
-        let share_denom = self.get_share_denom(ctx.clone())?.share_denom;
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(ctx.0.storage)?;
 
         let token_in = Coin::new(token_out.amount.u128(), token_in_denom.clone());
 
-        if token_in_denom == share_denom || token_out.denom == share_denom {
+        if token_in_denom == alloyed_denom || token_out.denom == alloyed_denom {
             return Ok(CalcInAmtGivenOutResponse { token_in });
         }
 
         let (_pool, token_in) =
-            self._calc_in_amt_given_out(ctx, token_out, token_in_denom, swap_fee)?;
+            self.do_calc_in_amt_given_out(ctx, token_out, token_in_denom, swap_fee)?;
 
-        let token_in = Coin::new(token_in.amount.u128(), share_denom);
+        let token_in = Coin::new(token_in.amount.u128(), alloyed_denom);
 
         Ok(CalcInAmtGivenOutResponse { token_in })
     }
 
-    pub(crate) fn _calc_in_amt_given_out(
+    pub(crate) fn do_calc_in_amt_given_out(
         &self,
         ctx: (Deps, Env),
         token_out: Coin,
@@ -1467,4 +1466,70 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn test_set_alloyed_denom_metadata() {
+        let mut deps = mock_dependencies();
+
+        let admin = "admin";
+        let non_admin = "non_admin";
+        let init_msg = InstantiateMsg {
+            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            alloyed_asset_subdenom: "uosmouion".to_string(),
+            admin: Some(admin.to_string()),
+        };
+        let env = mock_env();
+        let info = mock_info(admin, &[]);
+
+        // Instantiate the contract.
+        instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap();
+
+        let metadata = Metadata {
+            description: "description".to_string(),
+            base: "base".to_string(),
+            display: "display".to_string(),
+            name: "name".to_string(),
+            symbol: "symbol".to_string(),
+            denom_units: vec![],
+        };
+
+        // Attempt to set alloyed denom metadata by a non-admin user.
+        let non_admin_info = mock_info(non_admin, &[]);
+        let non_admin_msg = ContractExecMsg::Transmuter(ExecMsg::SetAlloyedDenomMetadata {
+            metadata: metadata.clone(),
+        });
+        let err = execute(deps.as_mut(), env.clone(), non_admin_info, non_admin_msg).unwrap_err();
+
+        assert_eq!(err, ContractError::Unauthorized {});
+
+        // Set the alloyed denom metadata by admin.
+        let msg = ContractExecMsg::Transmuter(ExecMsg::SetAlloyedDenomMetadata {
+            metadata: metadata.clone(),
+        });
+        let res = execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+
+        assert_eq!(
+            res.attributes,
+            vec![attr("method", "set_alloyed_denom_metadata")]
+        );
+
+        assert_eq!(
+            res.messages,
+            vec![SubMsg::new(MsgSetDenomMetadata {
+                sender: env.contract.address.to_string(),
+                metadata: Some(metadata)
+            })]
+        )
+    }
+
+    // test
+    // - exit_pool
+    // - get_shares
+    // - get_share_denom
+    // - get_alloyed_denom
+    // - get_total_shares
+    // - get_total_pool_liquidity
+    // - spot_price*
+    // - calc_out_amt_given_in* (need update)
+    // - calc_in_amt_given_out*
 }
