@@ -1537,7 +1537,7 @@ mod tests {
         let info = mock_info(admin, &[]);
 
         // Instantiate the contract.
-        instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap();
+        instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
 
         // Manually reply
         let alloyed_denom = "usomoion";
@@ -1749,9 +1749,67 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_denom() {
+        let mut deps = mock_dependencies();
+
+        let admin = "admin";
+        let init_msg = InstantiateMsg {
+            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            admin: Some(admin.to_string()),
+            alloyed_asset_subdenom: "usomoion".to_string(),
+        };
+        let env = mock_env();
+        let info = mock_info(admin, &[]);
+
+        // Instantiate the contract.
+        instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
+
+        // Manually reply
+        let alloyed_denom = "usomoion";
+
+        reply(
+            deps.as_mut(),
+            env.clone(),
+            Reply {
+                id: 1,
+                result: SubMsgResult::Ok(SubMsgResponse {
+                    events: vec![],
+                    data: Some(
+                        MsgCreateDenomResponse {
+                            new_token_denom: alloyed_denom.to_string(),
+                        }
+                        .into(),
+                    ),
+                }),
+            },
+        )
+        .unwrap();
+
+        // Query the share denom
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetShareDenom {}),
+        )
+        .unwrap();
+
+        let share_denom: GetShareDenomResponse = from_binary(&res).unwrap();
+        assert_eq!(share_denom.share_denom, "usomoion");
+
+        // Query the alloyed denom
+        let res = query(
+            deps.as_ref(),
+            env,
+            ContractQueryMsg::Transmuter(QueryMsg::GetAlloyedDenom {}),
+        )
+        .unwrap();
+
+        let alloyed_denom: GetAlloyedDenomResponse = from_binary(&res).unwrap();
+        assert_eq!(alloyed_denom.alloyed_denom, "usomoion");
+    }
+
     // test
-    // - get_share_denom
-    // - get_alloyed_denom
     // - spot_price*
     // - calc_out_amt_given_in* (need update)
     // - calc_in_amt_given_out*
