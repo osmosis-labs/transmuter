@@ -309,9 +309,8 @@ impl Transmuter<'_> {
             ContractError::AtLeastSingleTokenExpected {}
         );
 
-        // join pool
-        let mut pool = self.pool.load(deps.storage)?;
-        pool.join_pool(&info.funds)?;
+        let (pool, alloyed_asset_out) =
+            self.calc_swap_tokens_for_alloyed_asset(deps.as_ref(), &info.funds)?;
 
         // check and update limiters only if pool assets are not zero
         if let Some(denom_weight_pairs) = pool.weights()? {
@@ -324,18 +323,31 @@ impl Transmuter<'_> {
 
         self.pool.save(deps.storage, &pool)?;
 
-        // mint alloyed asset
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
-        let new_shares = AlloyedAsset::calc_amount_to_mint(&info.funds)?;
         let mint_msg = MsgMint {
             sender: env.contract.address.to_string(),
-            amount: Some(Coin::new(new_shares.u128(), alloyed_denom).into()),
+            amount: Some(alloyed_asset_out.into()),
             mint_to_address: info.sender.to_string(),
         };
 
         Ok(Response::new()
             .add_attribute("method", method)
             .add_message(mint_msg))
+    }
+
+    fn calc_swap_tokens_for_alloyed_asset(
+        &self,
+        deps: Deps,
+        tokens_in: &[Coin],
+    ) -> Result<(TransmuterPool, Coin), ContractError> {
+        // join pool
+        let mut pool = self.pool.load(deps.storage)?;
+        pool.join_pool(tokens_in)?;
+
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+        let out_amount = AlloyedAsset::calc_amount_to_mint(tokens_in)?;
+        let alloyed_asset_out = Coin::new(out_amount.u128(), alloyed_denom);
+
+        Ok((pool, alloyed_asset_out))
     }
 
     /// Exit pool with `tokens_out` amount of tokens.
@@ -631,10 +643,8 @@ impl Transmuter<'_> {
         swap_fee: Decimal,
     ) -> Result<CalcInAmtGivenOutResponse, ContractError> {
         let alloyed_denom = self.alloyed_asset.get_alloyed_denom(ctx.0.storage)?;
-
-        let token_in = Coin::new(token_out.amount.u128(), token_in_denom.clone());
-
         if token_in_denom == alloyed_denom || token_out.denom == alloyed_denom {
+            let token_in = Coin::new(token_out.amount.u128(), token_in_denom);
             return Ok(CalcInAmtGivenOutResponse { token_in });
         }
 
