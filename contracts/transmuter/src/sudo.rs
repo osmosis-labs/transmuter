@@ -3,7 +3,10 @@ use cosmwasm_std::{
     ensure, to_binary, BankMsg, Coin, Decimal, DepsMut, Env, MessageInfo, Response, Uint128,
 };
 
-use crate::{contract::Transmuter, ContractError};
+use crate::{
+    contract::{BurnAlloyedAssetFrom, Transmuter},
+    ContractError,
+};
 
 #[cw_serde]
 pub enum SudoMsg {
@@ -71,6 +74,7 @@ impl SudoMsg {
                     return transmuter
                         .swap_alloyed_asset_for_tokens(
                             method,
+                            BurnAlloyedAssetFrom::SentFunds,
                             (
                                 deps,
                                 env,
@@ -172,6 +176,7 @@ impl SudoMsg {
                     return transmuter
                         .swap_alloyed_asset_for_tokens(
                             method,
+                            BurnAlloyedAssetFrom::SentFunds,
                             (
                                 deps,
                                 env,

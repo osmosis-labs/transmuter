@@ -347,12 +347,18 @@ impl Transmuter<'_> {
         ctx: (DepsMut, Env, MessageInfo),
         tokens_out: Vec<Coin>,
     ) -> Result<Response, ContractError> {
-        self.swap_alloyed_asset_for_tokens("exit_pool", ctx, tokens_out)
+        self.swap_alloyed_asset_for_tokens(
+            "exit_pool",
+            BurnAlloyedAssetFrom::SenderAccount,
+            ctx,
+            tokens_out,
+        )
     }
 
     pub fn swap_alloyed_asset_for_tokens(
         &self,
         method: &str,
+        burn_alloyed_asset_from: BurnAlloyedAssetFrom,
         ctx: (DepsMut, Env, MessageInfo),
         tokens_out: Vec<Coin>,
     ) -> Result<Response, ContractError> {
@@ -360,26 +366,30 @@ impl Transmuter<'_> {
 
         let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
 
-        // if funds contains one coin and is alloyed asset, use that as sender's share
-        let (sender_shares, burn_from_address) = if info.funds.is_empty() {
-            let sender_shares = self
-                .alloyed_asset
-                .get_balance(deps.as_ref(), &info.sender)?;
-            let burn_from_address = info.sender.to_string();
-            (sender_shares, burn_from_address)
-        } else {
-            ensure!(info.funds.len() == 1, ContractError::SingleTokenExpected {});
-            ensure!(
-                info.funds[0].denom == alloyed_denom,
-                ContractError::UnexpectedDenom {
-                    expected: info.funds[0].clone().denom,
-                    actual: alloyed_denom
-                }
-            );
+        let (sender_shares, burn_from_address) = match burn_alloyed_asset_from {
+            BurnAlloyedAssetFrom::SenderAccount => {
+                ensure!(info.funds.is_empty(), ContractError::EmptyFundsExpected {});
 
-            let sender_shares = info.funds[0].amount;
-            let burn_from_address = env.contract.address.to_string();
-            (sender_shares, burn_from_address)
+                let sender_shares = self
+                    .alloyed_asset
+                    .get_balance(deps.as_ref(), &info.sender)?;
+                let burn_from_address = info.sender.to_string();
+                (sender_shares, burn_from_address)
+            }
+            BurnAlloyedAssetFrom::SentFunds => {
+                ensure!(info.funds.len() == 1, ContractError::SingleTokenExpected {});
+                ensure!(
+                    info.funds[0].denom == alloyed_denom,
+                    ContractError::UnexpectedDenom {
+                        expected: info.funds[0].clone().denom,
+                        actual: alloyed_denom
+                    }
+                );
+
+                let sender_shares = info.funds[0].amount;
+                let burn_from_address = env.contract.address.to_string();
+                (sender_shares, burn_from_address)
+            }
         };
 
         // check if sender's shares is enough
@@ -723,6 +733,18 @@ impl Transmuter<'_> {
             admin_candidate: self.admin.candidate(deps)?,
         })
     }
+}
+
+/// Determines where to burn alloyed assets from.
+pub enum BurnAlloyedAssetFrom {
+    /// Burn alloyed asset from the sender's account.
+    /// This is used when the sender wants to exit pool
+    /// forcing no funds attached in the process.
+    SenderAccount,
+    /// Burn alloyed assets from the sent funds.
+    /// This is used when the sender wants to swap tokens for alloyed assets,
+    /// since alloyed asset needs to be sent to the contract before swapping.
+    SentFunds,
 }
 
 #[cw_serde]

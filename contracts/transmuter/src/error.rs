@@ -9,6 +9,9 @@ pub enum ContractError {
     #[error("{0}")]
     Std(#[from] StdError),
 
+    #[error("Funds must be empty")]
+    EmptyFundsExpected {},
+
     #[error("Funds must contain exactly one token")]
     SingleTokenExpected {},
 
