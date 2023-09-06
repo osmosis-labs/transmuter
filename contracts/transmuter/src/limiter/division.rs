@@ -305,8 +305,15 @@ impl Division {
                 //                                      ^ end at block time
                 let started_at = window_started_at.max(first_div_started_at.nanos().into());
 
-                // TODO: handle special case where total_elapsed_time == 0?
                 let total_elapsed_time = elapsed_time(started_at, block_time.nanos())?;
+
+                // if total_elapsed_time is 0 in this case, it means
+                // the integral range should not contain any value
+                // so the average should be 0
+                // early return to avoid division by zero
+                if total_elapsed_time.is_zero() {
+                    return Ok(Decimal::zero());
+                }
 
                 integral
                     .checked_div(from_uint(total_elapsed_time))
@@ -332,9 +339,14 @@ impl Division {
         let current_integral_range =
             elapsed_time(self.started_at.nanos(), self.updated_at.nanos())?;
 
+        // if start and update at the same time, integral should be 0
+        // early return to avoid division by zero
+        if current_integral_range.is_zero() {
+            return Ok(Decimal::zero());
+        }
+
         let new_integral_range = elapsed_time(window_stared_at, self.updated_at.nanos())?;
 
-        // TODO: handle current_integral_range == 0
         let division_average_before_latest_update = self
             .integral
             .checked_div(from_uint(current_integral_range))?;
@@ -482,6 +494,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_average_single_div_updated_at_start() {
+        let started_at = Timestamp::from_nanos(1100);
+        let updated_at = started_at;
+        let value = Decimal::percent(20);
+        let prev_value = Decimal::percent(10);
+        let compressed_division = Division::new(started_at, updated_at, value, prev_value).unwrap();
+
+        let divisions = vec![compressed_division];
+        let division_size = Uint64::from(100u64);
+        let window_size = Uint64::from(1000u64);
+        let block_time = Timestamp::from_nanos(1100);
+        let average = Division::compressed_moving_average(
+            None,
+            &divisions,
+            division_size,
+            window_size,
+            block_time,
+        )
+        .unwrap();
+
+        assert_eq!(average, Decimal::zero());
+
+        let block_time = Timestamp::from_nanos(1111);
+        let average = Division::compressed_moving_average(
+            None,
+            &divisions,
+            division_size,
+            window_size,
+            block_time,
+        )
+        .unwrap();
+
+        assert_eq!(average, value);
+    }
     #[test]
     fn test_average_single_div() {
         let started_at = Timestamp::from_nanos(1100);
