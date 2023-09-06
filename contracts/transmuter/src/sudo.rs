@@ -268,3 +268,176 @@ pub struct SwapExactAmountInResponseData {
 pub struct SwapExactAmountOutResponseData {
     pub token_in_amount: Uint128,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        contract::{ContractExecMsg, ExecMsg, InstantiateMsg},
+        execute, instantiate, reply, sudo,
+    };
+    use cosmwasm_std::{
+        testing::{mock_dependencies, mock_env, mock_info},
+        to_binary, Reply, SubMsgResponse, SubMsgResult,
+    };
+    use osmosis_std::types::osmosis::tokenfactory::v1beta1::{
+        MsgBurn, MsgCreateDenomResponse, MsgMint,
+    };
+
+    #[test]
+    fn test_swap_exact_amount_in() {
+        let mut deps = mock_dependencies();
+
+        let admin = "admin";
+        let user = "user";
+        let init_msg = InstantiateMsg {
+            pool_asset_denoms: vec!["axlusdc".to_string(), "whusdc".to_string()],
+            alloyed_asset_subdenom: "uusdc".to_string(),
+            admin: Some(admin.to_string()),
+        };
+        let env = mock_env();
+        let info = mock_info(admin, &[]);
+
+        // Instantiate the contract.
+        instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
+
+        // Manually reply
+        let alloyed_denom = "uusdc";
+
+        reply(
+            deps.as_mut(),
+            env.clone(),
+            Reply {
+                id: 1,
+                result: SubMsgResult::Ok(SubMsgResponse {
+                    events: vec![],
+                    data: Some(
+                        MsgCreateDenomResponse {
+                            new_token_denom: alloyed_denom.to_string(),
+                        }
+                        .into(),
+                    ),
+                }),
+            },
+        )
+        .unwrap();
+
+        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(
+                user,
+                &[
+                    Coin::new(1_000_000_000_000, "axlusdc"),
+                    Coin::new(1_000_000_000_000, "whusdc"),
+                ],
+            ),
+            join_pool_msg,
+        )
+        .unwrap();
+
+        // Test swap exact amount in with only pool assets
+        let swap_msg = SudoMsg::SwapExactAmountIn {
+            sender: user.to_string(),
+            token_in: Coin::new(500, "axlusdc".to_string()),
+            token_out_denom: "whusdc".to_string(),
+            token_out_min_amount: Uint128::from(500u128),
+            swap_fee: Decimal::zero(),
+        };
+
+        let res = sudo(deps.as_mut(), env.clone(), swap_msg).unwrap();
+
+        let expected = Response::new()
+            .add_attribute("method", "swap_exact_amount_in")
+            .add_message(BankMsg::Send {
+                to_address: user.to_string(),
+                amount: vec![Coin::new(500, "whusdc".to_string())],
+            })
+            .set_data(
+                to_binary(&SwapExactAmountInResponseData {
+                    token_out_amount: Uint128::from(500u128),
+                })
+                .unwrap(),
+            );
+
+        assert_eq!(res, expected);
+
+        // Test swap with token in as alloyed asset
+        let swap_msg = SudoMsg::SwapExactAmountIn {
+            sender: user.to_string(),
+            token_in: Coin::new(500, alloyed_denom),
+            token_out_denom: "whusdc".to_string(),
+            token_out_min_amount: Uint128::from(500u128),
+            swap_fee: Decimal::zero(),
+        };
+
+        let res = sudo(deps.as_mut(), env.clone(), swap_msg).unwrap();
+
+        let expected = Response::new()
+            .add_attribute("method", "swap_exact_amount_in")
+            .add_message(MsgBurn {
+                amount: Some(Coin::new(500, alloyed_denom).into()),
+                sender: env.contract.address.to_string(),
+                burn_from_address: env.contract.address.to_string(),
+            })
+            .add_message(BankMsg::Send {
+                to_address: user.to_string(),
+                amount: vec![Coin::new(500, "whusdc".to_string())],
+            })
+            .set_data(
+                to_binary(&SwapExactAmountInResponseData {
+                    token_out_amount: Uint128::from(500u128),
+                })
+                .unwrap(),
+            );
+
+        assert_eq!(res, expected);
+
+        // Test swap with token out as alloyed asset
+        let swap_msg = SudoMsg::SwapExactAmountIn {
+            sender: user.to_string(),
+            token_in: Coin::new(500, "whusdc".to_string()),
+            token_out_denom: alloyed_denom.to_string(),
+            token_out_min_amount: Uint128::from(500u128),
+            swap_fee: Decimal::zero(),
+        };
+
+        let res = sudo(deps.as_mut(), env.clone(), swap_msg).unwrap();
+
+        let expected = Response::new()
+            .add_attribute("method", "swap_exact_amount_in")
+            .add_message(MsgMint {
+                sender: env.contract.address.to_string(),
+                amount: Some(Coin::new(500, alloyed_denom).into()),
+                mint_to_address: user.to_string(),
+            })
+            .set_data(
+                to_binary(&SwapExactAmountInResponseData {
+                    token_out_amount: Uint128::from(500u128),
+                })
+                .unwrap(),
+            );
+
+        assert_eq!(res, expected);
+
+        // Test case for ensure token_out amount is greater than or equal to token_out_min_amount
+        let swap_msg = SudoMsg::SwapExactAmountIn {
+            sender: user.to_string(),
+            token_in: Coin::new(500, "whusdc".to_string()),
+            token_out_denom: "axlusdc".to_string(),
+            token_out_min_amount: Uint128::from(1000u128), // set min amount greater than token_in
+            swap_fee: Decimal::zero(),
+        };
+
+        let res = sudo(deps.as_mut(), env, swap_msg);
+
+        assert_eq!(
+            res,
+            Err(ContractError::InsufficientTokenOut {
+                required: Uint128::from(1000u128),
+                available: Uint128::from(500u128)
+            })
+        );
+    }
+}
