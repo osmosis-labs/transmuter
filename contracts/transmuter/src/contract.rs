@@ -966,9 +966,39 @@ mod tests {
             token_in_denom: "uion".to_string(),
             token_in_max_amount: Uint128::new(100),
         };
-        let res = sudo(deps.as_mut(), env, swap_exact_amount_out_msg);
+        let res = sudo(deps.as_mut(), env.clone(), swap_exact_amount_out_msg);
 
         assert!(res.is_ok());
+
+        // Test setting active status through sudo
+        let set_active_status_msg = SudoMsg::SetActive { is_active: false };
+        let res = sudo(deps.as_mut(), env.clone(), set_active_status_msg);
+        assert!(res.is_ok());
+
+        // Check the active status again.
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::IsActive {}),
+        )
+        .unwrap();
+        let active_status: IsActiveResponse = from_binary(&res).unwrap();
+        assert!(!active_status.is_active);
+
+        // Set the active status back to true through sudo
+        let set_active_status_msg = SudoMsg::SetActive { is_active: true };
+        let res = sudo(deps.as_mut(), env.clone(), set_active_status_msg);
+        assert!(res.is_ok());
+
+        // Check the active status again.
+        let res = query(
+            deps.as_ref(),
+            env,
+            ContractQueryMsg::Transmuter(QueryMsg::IsActive {}),
+        )
+        .unwrap();
+        let active_status: IsActiveResponse = from_binary(&res).unwrap();
+        assert!(active_status.is_active);
     }
 
     #[test]
