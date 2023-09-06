@@ -1,6 +1,5 @@
-use cosmwasm_std::{Addr, Coin, Deps, StdError, StdResult, Storage, Uint128};
+use cosmwasm_std::{Addr, Coin, Deps, StdResult, Storage, Uint128};
 use cw_storage_plus::Item;
-use osmosis_std::types::cosmos::bank::v1beta1::BankQuerier;
 
 /// Alloyed asset represents the shares of the pool
 /// and since the pool is a 1:1 multi-asset pool, it act
@@ -35,27 +34,19 @@ impl<'a> AlloyedAsset<'a> {
     /// which is the total shares of the pool
     pub fn get_total_supply(&self, deps: Deps) -> StdResult<Uint128> {
         let alloyed_denom = self.get_alloyed_denom(deps.storage)?;
-        let bank_querier = BankQuerier::new(&deps.querier);
 
-        bank_querier
-            .supply_of(alloyed_denom)?
-            .amount
-            .ok_or_else(|| StdError::generic_err("No shares"))?
-            .amount
-            .parse()
+        deps.querier
+            .query_supply(alloyed_denom)
+            .map(|coin| coin.amount)
     }
 
     /// get the balance of alloyed asset for a given address
     pub fn get_balance(&self, deps: Deps, address: &Addr) -> StdResult<Uint128> {
         let alloyed_denom = self.get_alloyed_denom(deps.storage)?;
-        let bank_querier = BankQuerier::new(&deps.querier);
 
-        bank_querier
-            .balance(address.to_string(), alloyed_denom)?
-            .balance
-            .ok_or_else(|| StdError::generic_err("No alloyed asset"))?
-            .amount
-            .parse()
+        deps.querier
+            .query_balance(address, alloyed_denom)
+            .map(|coin| coin.amount)
     }
 
     /// calculate the amount of alloyed asset to mint
