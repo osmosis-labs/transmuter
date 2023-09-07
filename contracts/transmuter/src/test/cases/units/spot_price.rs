@@ -25,13 +25,14 @@ fn test_spot_price(liquidity: &[Coin]) {
         .instantiate(
             (deps.as_mut(), mock_env(), mock_info("creator", &[])),
             vec!["denom0".to_string(), "denom1".to_string()],
+            "transmuter/poolshare".to_string(),
             None,
         )
         .unwrap();
 
     transmuter
-        .shares
-        .set_share_denom(
+        .alloyed_asset
+        .set_alloyed_denom(
             &mut deps.storage,
             &"factory/contract_address/transmuter/poolshare".to_string(),
         )
@@ -63,7 +64,7 @@ fn test_spot_price(liquidity: &[Coin]) {
             )
             .unwrap_err(),
         ContractError::SpotPriceQueryFailed {
-            reason: "quote_asset_denom is not in pool assets: must be one of [\"denom0\", \"denom1\"] but got random_denom".to_string()
+            reason: "quote_asset_denom is not in swappable assets: must be one of [\"denom0\", \"denom1\", \"factory/contract_address/transmuter/poolshare\"] but got random_denom".to_string()
         }
     );
 
@@ -76,7 +77,7 @@ fn test_spot_price(liquidity: &[Coin]) {
             )
             .unwrap_err(),
         ContractError::SpotPriceQueryFailed {
-            reason: "base_asset_denom is not in pool assets: must be one of [\"denom0\", \"denom1\"] but got random_denom".to_string()
+            reason: "base_asset_denom is not in swappable assets: must be one of [\"denom0\", \"denom1\", \"factory/contract_address/transmuter/poolshare\"] but got random_denom".to_string()
         }
     );
 

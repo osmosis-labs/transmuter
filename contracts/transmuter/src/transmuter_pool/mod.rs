@@ -1,6 +1,7 @@
 mod exit_pool;
 mod join_pool;
 mod transmute;
+mod weight;
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::Coin;

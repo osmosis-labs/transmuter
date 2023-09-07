@@ -1,7 +1,8 @@
 mod admin;
+mod alloyed_asset;
 pub mod contract;
 mod error;
-mod shares;
+mod limiter;
 mod sudo;
 mod transmuter_pool;
 pub use crate::error::ContractError;
