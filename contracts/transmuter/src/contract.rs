@@ -1,6 +1,7 @@
 use crate::{
     admin::Admin,
     alloyed_asset::AlloyedAsset,
+    denom::Denom,
     ensure_admin_authority,
     error::ContractError,
     limiter::{Limiter, LimiterParams, Limiters},
@@ -74,6 +75,11 @@ impl Transmuter<'_> {
             self.admin
                 .init(deps.storage, deps.api.addr_validate(&admin)?)?;
         }
+
+        let pool_asset_denoms = pool_asset_denoms
+            .into_iter()
+            .map(|denom| Denom::validate(deps.as_ref(), denom))
+            .collect::<Result<Vec<_>, ContractError>>()?;
 
         // store pool
         self.pool
@@ -891,16 +897,23 @@ pub struct GetAdminCandidateResponse {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::limiter::{ChangeLimiter, StaticLimiter, WindowConfig};
     use crate::sudo::SudoMsg;
+    use crate::test_helpers::{
+        mock_dependencies_with_stargate_query, pass_with_default_denom_metadata_handler,
+    };
     use crate::*;
-    use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
+    use cosmwasm_std::testing::{mock_env, mock_info};
     use cosmwasm_std::{attr, from_binary, SubMsgResponse, SubMsgResult, Uint64};
 
     #[test]
     fn test_set_active_status() {
-        let mut deps = mock_dependencies();
+        let mut deps = mock_dependencies_with_stargate_query();
+
+        deps.querier
+            .update_stargate(pass_with_default_denom_metadata_handler);
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
@@ -1080,7 +1093,10 @@ mod tests {
 
     #[test]
     fn test_transfer_and_claim_admin() {
-        let mut deps = mock_dependencies();
+        let mut deps = mock_dependencies_with_stargate_query();
+
+        deps.querier
+            .update_stargate(pass_with_default_denom_metadata_handler);
 
         let admin = "admin";
         let candidate = "candidate";
@@ -1135,7 +1151,10 @@ mod tests {
     #[test]
     fn test_limiter_registration_and_config() {
         // register limiter
-        let mut deps = mock_dependencies();
+        let mut deps = mock_dependencies_with_stargate_query();
+
+        deps.querier
+            .update_stargate(pass_with_default_denom_metadata_handler);
 
         let admin = "admin";
         let user = "user";
@@ -1547,7 +1566,10 @@ mod tests {
 
     #[test]
     fn test_set_alloyed_denom_metadata() {
-        let mut deps = mock_dependencies();
+        let mut deps = mock_dependencies_with_stargate_query();
+
+        deps.querier
+            .update_stargate(pass_with_default_denom_metadata_handler);
 
         let admin = "admin";
         let non_admin = "non_admin";
@@ -1602,7 +1624,10 @@ mod tests {
 
     #[test]
     fn test_exit_pool() {
-        let mut deps = mock_dependencies();
+        let mut deps = mock_dependencies_with_stargate_query();
+
+        deps.querier
+            .update_stargate(pass_with_default_denom_metadata_handler);
 
         let admin = "admin";
         let user = "user";
@@ -1699,7 +1724,10 @@ mod tests {
 
     #[test]
     fn test_shares_and_liquidity() {
-        let mut deps = mock_dependencies();
+        let mut deps = mock_dependencies_with_stargate_query();
+
+        deps.querier
+            .update_stargate(pass_with_default_denom_metadata_handler);
 
         let admin = "admin";
         let user_1 = "user_1";
@@ -1829,7 +1857,10 @@ mod tests {
 
     #[test]
     fn test_denom() {
-        let mut deps = mock_dependencies();
+        let mut deps = mock_dependencies_with_stargate_query();
+
+        deps.querier
+            .update_stargate(pass_with_default_denom_metadata_handler);
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
@@ -1889,7 +1920,10 @@ mod tests {
 
     #[test]
     fn test_spot_price() {
-        let mut deps = mock_dependencies();
+        let mut deps = mock_dependencies_with_stargate_query();
+
+        deps.querier
+            .update_stargate(pass_with_default_denom_metadata_handler);
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
@@ -2021,7 +2055,10 @@ mod tests {
 
     #[test]
     fn test_calc_out_amt_given_in() {
-        let mut deps = mock_dependencies();
+        let mut deps = mock_dependencies_with_stargate_query();
+
+        deps.querier
+            .update_stargate(pass_with_default_denom_metadata_handler);
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
@@ -2226,7 +2263,10 @@ mod tests {
 
     #[test]
     fn test_calc_in_amt_given_out() {
-        let mut deps = mock_dependencies();
+        let mut deps = mock_dependencies_with_stargate_query();
+
+        deps.querier
+            .update_stargate(pass_with_default_denom_metadata_handler);
 
         let admin = "admin";
         let init_msg = InstantiateMsg {

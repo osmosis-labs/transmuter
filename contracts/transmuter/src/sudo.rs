@@ -297,9 +297,12 @@ mod tests {
     use crate::{
         contract::{ContractExecMsg, ExecMsg, InstantiateMsg},
         execute, instantiate, reply, sudo,
+        test_helpers::{
+            mock_dependencies_with_stargate_query, pass_with_default_denom_metadata_handler,
+        },
     };
     use cosmwasm_std::{
-        testing::{mock_dependencies, mock_env, mock_info},
+        testing::{mock_env, mock_info},
         to_binary, Reply, SubMsgResponse, SubMsgResult,
     };
     use osmosis_std::types::osmosis::tokenfactory::v1beta1::{
@@ -308,7 +311,10 @@ mod tests {
 
     #[test]
     fn test_swap_exact_amount_in() {
-        let mut deps = mock_dependencies();
+        let mut deps = mock_dependencies_with_stargate_query();
+
+        deps.querier
+            .update_stargate(pass_with_default_denom_metadata_handler);
 
         let admin = "admin";
         let user = "user";
@@ -503,7 +509,10 @@ mod tests {
 
     #[test]
     fn test_swap_exact_token_out() {
-        let mut deps = mock_dependencies();
+        let mut deps = mock_dependencies_with_stargate_query();
+
+        deps.querier
+            .update_stargate(pass_with_default_denom_metadata_handler);
 
         let admin = "admin";
         let user = "user";
