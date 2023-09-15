@@ -10,6 +10,11 @@ use crate::test::test_env::TestEnvBuilder;
 #[test]
 fn test_create_pool() {
     let app = OsmosisTestApp::new();
+
+    // create denom
+    app.init_account(&[Coin::new(1, "denom1"), Coin::new(1, "denom2")])
+        .unwrap();
+
     let t = TestEnvBuilder::new()
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_denoms: vec!["denom1".to_string(), "denom2".to_string()],
@@ -53,3 +58,5 @@ fn test_create_pool() {
     let IsActiveResponse { is_active } = t.contract.query(&QueryMsg::IsActive {}).unwrap();
     assert!(is_active);
 }
+
+// TODO: test create pool with invalid denom

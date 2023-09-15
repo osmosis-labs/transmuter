@@ -60,6 +60,11 @@ fn test_join_pool_with_single_lp_should_update_shares_and_liquidity_properly() {
 
     for case in cases {
         let app = OsmosisTestApp::new();
+
+        // create denom
+        app.init_account(&[Coin::new(1, "denoma"), Coin::new(1, "denomb")])
+            .unwrap();
+
         let t = TestEnvBuilder::new()
             .with_account("provider", case.funds.clone())
             .with_instantiate_msg(crate::contract::InstantiateMsg {
@@ -171,6 +176,10 @@ fn test_join_pool_should_update_shares_and_liquidity_properly() {
     for case in cases {
         let app = OsmosisTestApp::new();
         let mut builder = TestEnvBuilder::new();
+
+        // create denom
+        app.init_account(&[Coin::new(1, "denoma"), Coin::new(1, "denomb")])
+            .unwrap();
 
         for (acc, funds) in case.joins.clone() {
             builder = builder.with_account(acc, funds);
@@ -284,9 +293,12 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
     ];
 
     for case in cases {
-        // let transmuter = Transmuter::new();
-        // let mut deps = mock_dependencies();
         let app = OsmosisTestApp::new();
+
+        // create denom
+        app.init_account(&[Coin::new(1, "denoma"), Coin::new(1, "denomb")])
+            .unwrap();
+
         let t = TestEnvBuilder::new()
             .with_account("instantiator", vec![])
             .with_account("addr1", case.join.clone())
@@ -478,6 +490,11 @@ fn test_exit_pool_greater_than_their_shares_should_fail() {
 
     for case in cases {
         let app = OsmosisTestApp::new();
+
+        // create denom
+        app.init_account(&[Coin::new(1, "denoma"), Coin::new(1, "denomb")])
+            .unwrap();
+
         let t = TestEnvBuilder::new()
             .with_account("addr", case.join.clone())
             .with_instantiate_msg(InstantiateMsg {
