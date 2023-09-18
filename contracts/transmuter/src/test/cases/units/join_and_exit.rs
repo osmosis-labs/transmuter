@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use cosmwasm_std::{attr, Coin, Uint128};
+use itertools::Itertools;
 use osmosis_test_tube::{Account, OsmosisTestApp};
 
 use crate::{
@@ -60,6 +61,26 @@ fn test_join_pool_with_single_lp_should_update_shares_and_liquidity_properly() {
 
     for case in cases {
         let app = OsmosisTestApp::new();
+
+        // Find missing denom from funds
+        let all_denoms = vec!["denoma".to_string(), "denomb".to_string()];
+        let funds_denoms = case
+            .funds
+            .iter()
+            .map(|c| c.denom.to_string())
+            .unique()
+            .collect::<Vec<_>>();
+
+        let missing_denoms = all_denoms
+            .into_iter()
+            .filter(|d| !funds_denoms.contains(d))
+            .collect::<Vec<_>>();
+
+        // make supply non-zero
+        for denom in missing_denoms {
+            app.init_account(&[Coin::new(1, denom)]).unwrap();
+        }
+
         let t = TestEnvBuilder::new()
             .with_account("provider", case.funds.clone())
             .with_instantiate_msg(crate::contract::InstantiateMsg {
@@ -171,6 +192,25 @@ fn test_join_pool_should_update_shares_and_liquidity_properly() {
     for case in cases {
         let app = OsmosisTestApp::new();
         let mut builder = TestEnvBuilder::new();
+
+        // Find missing denom from joins
+        let all_denoms = vec!["denoma".to_string(), "denomb".to_string()];
+        let join_denoms = case
+            .joins
+            .iter()
+            .flat_map(|(_, coins)| coins.iter().map(|c| c.denom.to_string()))
+            .unique()
+            .collect::<Vec<_>>();
+
+        let missing_denoms = all_denoms
+            .into_iter()
+            .filter(|d| !join_denoms.contains(d))
+            .collect::<Vec<_>>();
+
+        // make supply non-zero
+        for denom in missing_denoms {
+            app.init_account(&[Coin::new(1, denom)]).unwrap();
+        }
 
         for (acc, funds) in case.joins.clone() {
             builder = builder.with_account(acc, funds);
@@ -284,12 +324,17 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
     ];
 
     for case in cases {
-        // let transmuter = Transmuter::new();
-        // let mut deps = mock_dependencies();
         let app = OsmosisTestApp::new();
+
         let t = TestEnvBuilder::new()
             .with_account("instantiator", vec![])
-            .with_account("addr1", case.join.clone())
+            .with_account(
+                "addr1",
+                vec![
+                    Coin::new(u128::MAX, "denoma"),
+                    Coin::new(u128::MAX, "denomb"),
+                ],
+            )
             .with_instantiate_msg(InstantiateMsg {
                 pool_asset_denoms: vec!["denoma".to_string(), "denomb".to_string()],
                 alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
@@ -478,6 +523,11 @@ fn test_exit_pool_greater_than_their_shares_should_fail() {
 
     for case in cases {
         let app = OsmosisTestApp::new();
+
+        // create denom
+        app.init_account(&[Coin::new(1, "denoma"), Coin::new(1, "denomb")])
+            .unwrap();
+
         let t = TestEnvBuilder::new()
             .with_account("addr", case.join.clone())
             .with_instantiate_msg(InstantiateMsg {

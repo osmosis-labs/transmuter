@@ -76,13 +76,16 @@ impl TransmuterPool {
 
 #[cfg(test)]
 mod tests {
+    use crate::denom::Denom;
+
     use super::*;
     const ETH_USDC: &str = "ibc/AXLETHUSDC";
     const COSMOS_USDC: &str = "ibc/COSMOSUSDC";
 
     #[test]
     fn test_transmute_succeed() {
-        let mut pool = TransmuterPool::new(&[ETH_USDC.to_string(), COSMOS_USDC.to_string()]);
+        let mut pool =
+            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)]);
 
         pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
         assert_eq!(
@@ -132,7 +135,8 @@ mod tests {
 
     #[test]
     fn test_transmute_token_out_denom_eq_token_in_denom() {
-        let mut pool = TransmuterPool::new(&[ETH_USDC.to_string(), COSMOS_USDC.to_string()]);
+        let mut pool =
+            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)]);
         pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
 
         let token_in = Coin::new(70_000, COSMOS_USDC);
@@ -141,7 +145,8 @@ mod tests {
 
     #[test]
     fn test_transmute_fail_token_out_not_enough() {
-        let mut pool = TransmuterPool::new(&[ETH_USDC.to_string(), COSMOS_USDC.to_string()]);
+        let mut pool =
+            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)]);
 
         pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
         assert_eq!(
@@ -156,7 +161,8 @@ mod tests {
 
     #[test]
     fn test_transmute_fail_token_in_not_allowed() {
-        let mut pool = TransmuterPool::new(&[ETH_USDC.to_string(), COSMOS_USDC.to_string()]);
+        let mut pool =
+            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)]);
 
         pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
         assert_eq!(
@@ -171,7 +177,8 @@ mod tests {
 
     #[test]
     fn test_transmute_fail_token_out_denom_not_allowed() {
-        let mut pool = TransmuterPool::new(&[ETH_USDC.to_string(), COSMOS_USDC.to_string()]);
+        let mut pool =
+            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)]);
 
         pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
         assert_eq!(

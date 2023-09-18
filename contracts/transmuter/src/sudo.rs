@@ -310,6 +310,12 @@ mod tests {
     fn test_swap_exact_amount_in() {
         let mut deps = mock_dependencies();
 
+        // make denom has non-zero total supply
+        deps.querier.update_balance(
+            "someone",
+            vec![Coin::new(1, "axlusdc"), Coin::new(1, "whusdc")],
+        );
+
         let admin = "admin";
         let user = "user";
         let init_msg = InstantiateMsg {
@@ -504,6 +510,12 @@ mod tests {
     #[test]
     fn test_swap_exact_token_out() {
         let mut deps = mock_dependencies();
+
+        // make denom has non-zero total supply
+        deps.querier.update_balance(
+            "someone",
+            vec![Coin::new(1, "axlusdc"), Coin::new(1, "whusdc")],
+        );
 
         let admin = "admin";
         let user = "user";

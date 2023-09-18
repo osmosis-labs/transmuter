@@ -18,6 +18,9 @@ pub enum ContractError {
     #[error("Funds must contain at least one token")]
     AtLeastSingleTokenExpected {},
 
+    #[error("Denom has no supply, it might be an invalid denom: {denom}")]
+    DenomHasNoSupply { denom: String },
+
     #[error("Unable to join pool with denom: {denom}: expected one of: {expected_denom:?}")]
     InvalidJoinPoolDenom {
         denom: String,

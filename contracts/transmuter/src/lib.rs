@@ -1,6 +1,7 @@
 mod admin;
 mod alloyed_asset;
 pub mod contract;
+mod denom;
 mod error;
 mod limiter;
 mod sudo;

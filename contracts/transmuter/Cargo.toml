@@ -52,4 +52,5 @@ sylvia = "0.7.0"
 thiserror = {version = "1.0.44"}
 
 [dev-dependencies]
+itertools = "0.11.0"
 osmosis-test-tube = "19.0.0"

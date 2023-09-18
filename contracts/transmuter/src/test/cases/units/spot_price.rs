@@ -21,6 +21,12 @@ fn test_spot_price(liquidity: &[Coin]) {
     let transmuter = Transmuter::new();
     let mut deps = mock_dependencies();
 
+    // make denom has non-zero total supply
+    deps.querier.update_balance(
+        "someone",
+        vec![Coin::new(1, "denom0"), Coin::new(1, "denom1")],
+    );
+
     transmuter
         .instantiate(
             (deps.as_mut(), mock_env(), mock_info("creator", &[])),
