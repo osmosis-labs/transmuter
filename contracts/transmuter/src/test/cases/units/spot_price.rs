@@ -1,15 +1,9 @@
 use cosmwasm_std::{
-    testing::{mock_env, mock_info},
+    testing::{mock_dependencies, mock_env, mock_info},
     Coin, Decimal,
 };
 
-use crate::{
-    contract::Transmuter,
-    test_helpers::{
-        mock_dependencies_with_stargate_query, pass_with_default_denom_metadata_handler,
-    },
-    ContractError,
-};
+use crate::{contract::Transmuter, ContractError};
 
 #[test]
 fn test_spot_price_on_balanced_liquidity_must_be_one() {
@@ -25,10 +19,13 @@ fn test_spot_price_on_unbalanced_liquidity_must_be_one() {
 
 fn test_spot_price(liquidity: &[Coin]) {
     let transmuter = Transmuter::new();
-    let mut deps = mock_dependencies_with_stargate_query();
+    let mut deps = mock_dependencies();
 
-    deps.querier
-        .update_stargate(pass_with_default_denom_metadata_handler);
+    // make denom has non-zero total supply
+    deps.querier.update_balance(
+        "someone",
+        vec![Coin::new(1, "denom0"), Coin::new(1, "denom1")],
+    );
 
     transmuter
         .instantiate(

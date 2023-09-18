@@ -901,19 +901,18 @@ mod tests {
     use super::*;
     use crate::limiter::{ChangeLimiter, StaticLimiter, WindowConfig};
     use crate::sudo::SudoMsg;
-    use crate::test_helpers::{
-        mock_dependencies_with_stargate_query, pass_with_default_denom_metadata_handler,
-    };
+
     use crate::*;
-    use cosmwasm_std::testing::{mock_env, mock_info};
+    use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
     use cosmwasm_std::{attr, from_binary, SubMsgResponse, SubMsgResult, Uint64};
 
     #[test]
     fn test_set_active_status() {
-        let mut deps = mock_dependencies_with_stargate_query();
+        let mut deps = mock_dependencies();
 
+        // make denom has non-zero total supply
         deps.querier
-            .update_stargate(pass_with_default_denom_metadata_handler);
+            .update_balance("someone", vec![Coin::new(1, "uosmo"), Coin::new(1, "uion")]);
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
@@ -1093,10 +1092,11 @@ mod tests {
 
     #[test]
     fn test_transfer_and_claim_admin() {
-        let mut deps = mock_dependencies_with_stargate_query();
+        let mut deps = mock_dependencies();
 
+        // make denom has non-zero total supply
         deps.querier
-            .update_stargate(pass_with_default_denom_metadata_handler);
+            .update_balance("someone", vec![Coin::new(1, "uosmo"), Coin::new(1, "uion")]);
 
         let admin = "admin";
         let candidate = "candidate";
@@ -1151,10 +1151,11 @@ mod tests {
     #[test]
     fn test_limiter_registration_and_config() {
         // register limiter
-        let mut deps = mock_dependencies_with_stargate_query();
+        let mut deps = mock_dependencies();
 
+        // make denom has non-zero total supply
         deps.querier
-            .update_stargate(pass_with_default_denom_metadata_handler);
+            .update_balance("someone", vec![Coin::new(1, "uosmo"), Coin::new(1, "uion")]);
 
         let admin = "admin";
         let user = "user";
@@ -1566,10 +1567,11 @@ mod tests {
 
     #[test]
     fn test_set_alloyed_denom_metadata() {
-        let mut deps = mock_dependencies_with_stargate_query();
+        let mut deps = mock_dependencies();
 
+        // make denom has non-zero total supply
         deps.querier
-            .update_stargate(pass_with_default_denom_metadata_handler);
+            .update_balance("someone", vec![Coin::new(1, "uosmo"), Coin::new(1, "uion")]);
 
         let admin = "admin";
         let non_admin = "non_admin";
@@ -1624,10 +1626,11 @@ mod tests {
 
     #[test]
     fn test_exit_pool() {
-        let mut deps = mock_dependencies_with_stargate_query();
+        let mut deps = mock_dependencies();
 
+        // make denom has non-zero total supply
         deps.querier
-            .update_stargate(pass_with_default_denom_metadata_handler);
+            .update_balance("someone", vec![Coin::new(1, "uosmo"), Coin::new(1, "uion")]);
 
         let admin = "admin";
         let user = "user";
@@ -1724,10 +1727,11 @@ mod tests {
 
     #[test]
     fn test_shares_and_liquidity() {
-        let mut deps = mock_dependencies_with_stargate_query();
+        let mut deps = mock_dependencies();
 
+        // make denom has non-zero total supply
         deps.querier
-            .update_stargate(pass_with_default_denom_metadata_handler);
+            .update_balance("someone", vec![Coin::new(1, "uosmo"), Coin::new(1, "uion")]);
 
         let admin = "admin";
         let user_1 = "user_1";
@@ -1857,10 +1861,11 @@ mod tests {
 
     #[test]
     fn test_denom() {
-        let mut deps = mock_dependencies_with_stargate_query();
+        let mut deps = mock_dependencies();
 
+        // make denom has non-zero total supply
         deps.querier
-            .update_stargate(pass_with_default_denom_metadata_handler);
+            .update_balance("someone", vec![Coin::new(1, "uosmo"), Coin::new(1, "uion")]);
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
@@ -1920,10 +1925,11 @@ mod tests {
 
     #[test]
     fn test_spot_price() {
-        let mut deps = mock_dependencies_with_stargate_query();
+        let mut deps = mock_dependencies();
 
+        // make denom has non-zero total supply
         deps.querier
-            .update_stargate(pass_with_default_denom_metadata_handler);
+            .update_balance("someone", vec![Coin::new(1, "uosmo"), Coin::new(1, "uion")]);
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
@@ -2055,10 +2061,13 @@ mod tests {
 
     #[test]
     fn test_calc_out_amt_given_in() {
-        let mut deps = mock_dependencies_with_stargate_query();
+        let mut deps = mock_dependencies();
 
-        deps.querier
-            .update_stargate(pass_with_default_denom_metadata_handler);
+        // make denom has non-zero total supply
+        deps.querier.update_balance(
+            "someone",
+            vec![Coin::new(1, "axlusdc"), Coin::new(1, "whusdc")],
+        );
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
@@ -2263,10 +2272,13 @@ mod tests {
 
     #[test]
     fn test_calc_in_amt_given_out() {
-        let mut deps = mock_dependencies_with_stargate_query();
+        let mut deps = mock_dependencies();
 
-        deps.querier
-            .update_stargate(pass_with_default_denom_metadata_handler);
+        // make denom has non-zero total supply
+        deps.querier.update_balance(
+            "someone",
+            vec![Coin::new(1, "axlusdc"), Coin::new(1, "whusdc")],
+        );
 
         let admin = "admin";
         let init_msg = InstantiateMsg {

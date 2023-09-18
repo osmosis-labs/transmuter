@@ -297,12 +297,9 @@ mod tests {
     use crate::{
         contract::{ContractExecMsg, ExecMsg, InstantiateMsg},
         execute, instantiate, reply, sudo,
-        test_helpers::{
-            mock_dependencies_with_stargate_query, pass_with_default_denom_metadata_handler,
-        },
     };
     use cosmwasm_std::{
-        testing::{mock_env, mock_info},
+        testing::{mock_dependencies, mock_env, mock_info},
         to_binary, Reply, SubMsgResponse, SubMsgResult,
     };
     use osmosis_std::types::osmosis::tokenfactory::v1beta1::{
@@ -311,10 +308,13 @@ mod tests {
 
     #[test]
     fn test_swap_exact_amount_in() {
-        let mut deps = mock_dependencies_with_stargate_query();
+        let mut deps = mock_dependencies();
 
-        deps.querier
-            .update_stargate(pass_with_default_denom_metadata_handler);
+        // make denom has non-zero total supply
+        deps.querier.update_balance(
+            "someone",
+            vec![Coin::new(1, "axlusdc"), Coin::new(1, "whusdc")],
+        );
 
         let admin = "admin";
         let user = "user";
@@ -509,10 +509,13 @@ mod tests {
 
     #[test]
     fn test_swap_exact_token_out() {
-        let mut deps = mock_dependencies_with_stargate_query();
+        let mut deps = mock_dependencies();
 
-        deps.querier
-            .update_stargate(pass_with_default_denom_metadata_handler);
+        // make denom has non-zero total supply
+        deps.querier.update_balance(
+            "someone",
+            vec![Coin::new(1, "axlusdc"), Coin::new(1, "whusdc")],
+        );
 
         let admin = "admin";
         let user = "user";
