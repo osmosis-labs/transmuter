@@ -284,6 +284,8 @@ impl<'a> Limiters<'a> {
         let is_registering_limiter_exists =
             self.limiters.may_load(storage, (denom, label))?.is_some();
 
+        ensure!(!label.is_empty(), ContractError::EmptyLimiterLabel {});
+
         ensure!(
             !is_registering_limiter_exists,
             ContractError::LimiterAlreadyExists {
@@ -654,6 +656,29 @@ mod tests {
                     })
                 )]
             );
+        }
+
+        #[test]
+        fn test_register_with_empty_label_fails() {
+            let mut deps = mock_dependencies();
+            let limiter = Limiters::new("limiters");
+
+            let err = limiter
+                .register(
+                    &mut deps.storage,
+                    "denoma",
+                    "",
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
+                    },
+                )
+                .unwrap_err();
+
+            assert_eq!(err, ContractError::EmptyLimiterLabel {});
         }
 
         #[test]

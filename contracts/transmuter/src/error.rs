@@ -82,6 +82,9 @@ pub enum ContractError {
     #[error("Unauthorized")]
     Unauthorized {},
 
+    #[error("Limiter label must not be empty")]
+    EmptyLimiterLabel {},
+
     #[error("Window size must be greater than zero")]
     ZeroWindowSize {},
 
