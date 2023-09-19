@@ -1061,7 +1061,7 @@ fn test_limiters() {
             ),
             (
                 (COSMOS_USDC.to_string(), "static".to_string()),
-                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(55)))
+                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(55)).unwrap())
             ),
         ]
     );

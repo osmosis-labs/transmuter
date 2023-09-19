@@ -85,6 +85,12 @@ pub enum ContractError {
     #[error("Window size must be greater than zero")]
     ZeroWindowSize {},
 
+    #[error("Boundary must be greater than zero")]
+    ZeroBoundaryOffset {},
+
+    #[error("Upper limit must be greater than zero")]
+    ZeroUpperLimit {},
+
     #[error("Window must be evenly divisible by division size")]
     UnevenWindowDivision {},
 
