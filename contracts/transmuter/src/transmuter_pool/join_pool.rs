@@ -47,7 +47,8 @@ mod tests {
     #[test]
     fn test_join_pool_increasingly() {
         let mut pool =
-            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)]);
+            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)])
+                .unwrap();
 
         // join pool
         pool.join_pool(&[Coin::new(1000, COSMOS_USDC)]).unwrap();
@@ -75,7 +76,8 @@ mod tests {
     #[test]
     fn test_join_pool_error_with_wrong_denom() {
         let mut pool =
-            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)]);
+            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)])
+                .unwrap();
 
         assert_eq!(
             pool.join_pool(&[Coin::new(1000, "urandom")]).unwrap_err(),
@@ -100,7 +102,8 @@ mod tests {
     #[test]
     fn test_join_pool_error_with_overflow() {
         let mut pool =
-            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)]);
+            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)])
+                .unwrap();
 
         assert_eq!(
             {

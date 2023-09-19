@@ -11,6 +11,11 @@ use super::division::Division;
 /// which will cause high gas usage when checking the limit, cleaning up divisions, etc.
 const MAX_DIVISION_COUNT: Uint64 = Uint64::new(10u64);
 
+/// Maximum number of limiters allowed per denom.
+/// This limited so that the contract can't be abused by setting a large number of limiters,
+/// causing high gas usage when checking the limit, cleaning up divisions, etc.
+const MAX_LIMITER_COUNT_PER_DENOM: Uint64 = Uint64::new(10u64);
+
 #[cw_serde]
 pub struct WindowConfig {
     /// Size of the window in nanoseconds
@@ -308,6 +313,16 @@ impl<'a> Limiters<'a> {
                 Limiter::StaticLimiter(StaticLimiter::new(upper_limit)?)
             }
         };
+
+        // ensure limiters for the denom has not yet reached the maximum
+        let limiter_count_for_denom = self.list_limiters_by_denom(storage, denom)?.len() as u64;
+        ensure!(
+            limiter_count_for_denom < MAX_LIMITER_COUNT_PER_DENOM.u64(),
+            ContractError::MaxLimiterCountPerDenomExceeded {
+                denom: denom.to_string(),
+                max: MAX_LIMITER_COUNT_PER_DENOM
+            }
+        );
 
         self.limiters
             .save(storage, (denom, label), &limiter)
@@ -726,6 +741,75 @@ mod tests {
                 ContractError::LimiterAlreadyExists {
                     denom: "denoma".to_string(),
                     label: "1m".to_string()
+                }
+            );
+        }
+
+        #[test]
+        fn test_register_limiter_exceed_max_limiter_per_denom() {
+            let mut deps = mock_dependencies();
+            let limiter = Limiters::new("limiters");
+
+            for h in 1..10u64 {
+                let label = format!("{}h", h);
+                let result = limiter.register(
+                    &mut deps.storage,
+                    "denoma",
+                    &label,
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(3_600_000_000_000u64 * h),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
+                    },
+                );
+
+                if h <= 10 {
+                    assert!(result.is_ok());
+                } else {
+                    assert_eq!(
+                        result.unwrap_err(),
+                        ContractError::MaxLimiterCountPerDenomExceeded {
+                            denom: "denoma".to_string(),
+                            max: MAX_LIMITER_COUNT_PER_DENOM
+                        }
+                    );
+                }
+            }
+
+            // deregister to register should work
+            limiter.deregister(&mut deps.storage, "denoma", "0h");
+
+            // register static limiter
+            limiter
+                .register(
+                    &mut deps.storage,
+                    "denoma",
+                    "static",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(10),
+                    },
+                )
+                .unwrap();
+
+            // register another one should fail
+            let err = limiter
+                .register(
+                    &mut deps.storage,
+                    "denoma",
+                    "static2",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(9),
+                    },
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::MaxLimiterCountPerDenomExceeded {
+                    denom: "denoma".to_string(),
+                    max: MAX_LIMITER_COUNT_PER_DENOM
                 }
             );
         }
