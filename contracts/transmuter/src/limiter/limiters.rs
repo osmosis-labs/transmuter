@@ -224,6 +224,11 @@ impl StaticLimiter {
             ContractError::ZeroUpperLimit {}
         );
 
+        ensure!(
+            self.upper_limit <= Decimal::percent(100),
+            ContractError::ExceedHundredPercentUpperLimit {}
+        );
+
         Ok(self)
     }
 
@@ -1057,6 +1062,21 @@ mod tests {
                     .set_upper_limit(Decimal::zero())
                     .unwrap_err(),
                 ContractError::ZeroUpperLimit {}
+            );
+
+            // upper limit is 100% + Decimal::raw(1)
+            assert_eq!(
+                StaticLimiter::new(Decimal::percent(100) + Decimal::raw(1u128)).unwrap_err(),
+                ContractError::ExceedHundredPercentUpperLimit {}
+            );
+
+            // set upper limit to 100% + Decimal::raw(1)
+            assert_eq!(
+                StaticLimiter::new(Decimal::percent(10))
+                    .unwrap()
+                    .set_upper_limit(Decimal::percent(100) + Decimal::raw(1u128))
+                    .unwrap_err(),
+                ContractError::ExceedHundredPercentUpperLimit {}
             );
         }
     }

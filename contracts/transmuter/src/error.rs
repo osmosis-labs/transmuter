@@ -94,6 +94,9 @@ pub enum ContractError {
     #[error("Upper limit must be greater than zero")]
     ZeroUpperLimit {},
 
+    #[error("Upper limit must not exceed 100%")]
+    ExceedHundredPercentUpperLimit {},
+
     #[error("Window must be evenly divisible by division size")]
     UnevenWindowDivision {},
 
