@@ -82,8 +82,20 @@ pub enum ContractError {
     #[error("Unauthorized")]
     Unauthorized {},
 
+    #[error("Limiter label must not be empty")]
+    EmptyLimiterLabel {},
+
     #[error("Window size must be greater than zero")]
     ZeroWindowSize {},
+
+    #[error("Boundary must be greater than zero")]
+    ZeroBoundaryOffset {},
+
+    #[error("Upper limit must be greater than zero")]
+    ZeroUpperLimit {},
+
+    #[error("Upper limit must not exceed 100%")]
+    ExceedHundredPercentUpperLimit {},
 
     #[error("Window must be evenly divisible by division size")]
     UnevenWindowDivision {},

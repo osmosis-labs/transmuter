@@ -70,7 +70,17 @@ impl ChangeLimiter {
             window_config,
             boundary_offset,
         }
+        .ensure_boundary_offset_constrain()?
         .ensure_window_config_constraint()
+    }
+
+    fn ensure_boundary_offset_constrain(self) -> Result<Self, ContractError> {
+        ensure!(
+            self.boundary_offset > Decimal::zero(),
+            ContractError::ZeroBoundaryOffset {}
+        );
+
+        Ok(self)
     }
 
     fn ensure_window_config_constraint(self) -> Result<Self, ContractError> {
@@ -204,8 +214,22 @@ pub struct StaticLimiter {
 }
 
 impl StaticLimiter {
-    pub fn new(upper_limit: Decimal) -> Self {
-        Self { upper_limit }
+    pub fn new(upper_limit: Decimal) -> Result<Self, ContractError> {
+        Self { upper_limit }.ensure_upper_limit_constraint()
+    }
+
+    fn ensure_upper_limit_constraint(self) -> Result<Self, ContractError> {
+        ensure!(
+            self.upper_limit > Decimal::zero(),
+            ContractError::ZeroUpperLimit {}
+        );
+
+        ensure!(
+            self.upper_limit <= Decimal::percent(100),
+            ContractError::ExceedHundredPercentUpperLimit {}
+        );
+
+        Ok(self)
     }
 
     fn ensure_upper_limit(self, denom: &str, value: Decimal) -> Result<Self, ContractError> {
@@ -221,8 +245,8 @@ impl StaticLimiter {
         Ok(self)
     }
 
-    fn set_upper_limit(self, upper_limit: Decimal) -> Self {
-        Self { upper_limit }
+    fn set_upper_limit(self, upper_limit: Decimal) -> Result<Self, ContractError> {
+        Self { upper_limit }.ensure_upper_limit_constraint()
     }
 }
 
@@ -265,6 +289,8 @@ impl<'a> Limiters<'a> {
         let is_registering_limiter_exists =
             self.limiters.may_load(storage, (denom, label))?.is_some();
 
+        ensure!(!label.is_empty(), ContractError::EmptyLimiterLabel {});
+
         ensure!(
             !is_registering_limiter_exists,
             ContractError::LimiterAlreadyExists {
@@ -279,7 +305,7 @@ impl<'a> Limiters<'a> {
                 boundary_offset,
             } => Limiter::ChangeLimiter(ChangeLimiter::new(window_config, boundary_offset)?),
             LimiterParams::StaticLimiter { upper_limit } => {
-                Limiter::StaticLimiter(StaticLimiter::new(upper_limit))
+                Limiter::StaticLimiter(StaticLimiter::new(upper_limit)?)
             }
         };
 
@@ -344,9 +370,9 @@ impl<'a> Limiters<'a> {
 
                 // check if the limiter is a StaticLimiter
                 match limiter {
-                    Limiter::StaticLimiter(limiter) => {
-                        Ok(Limiter::StaticLimiter(limiter.set_upper_limit(upper_limit)))
-                    }
+                    Limiter::StaticLimiter(limiter) => Ok(Limiter::StaticLimiter(
+                        limiter.set_upper_limit(upper_limit)?,
+                    )),
                     Limiter::ChangeLimiter(_) => Err(ContractError::WrongLimiterType {
                         expected: "static_limiter".to_string(),
                         actual: "change_limiter".to_string(),
@@ -635,6 +661,29 @@ mod tests {
                     })
                 )]
             );
+        }
+
+        #[test]
+        fn test_register_with_empty_label_fails() {
+            let mut deps = mock_dependencies();
+            let limiter = Limiters::new("limiters");
+
+            let err = limiter
+                .register(
+                    &mut deps.storage,
+                    "denoma",
+                    "",
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
+                    },
+                )
+                .unwrap_err();
+
+            assert_eq!(err, ContractError::EmptyLimiterLabel {});
         }
 
         #[test]
@@ -938,6 +987,99 @@ mod tests {
         }
     }
 
+    mod pararm_validation {
+        use super::*;
+
+        #[test]
+        fn change_limiter_validation() {
+            // boundary offset is zero
+            assert_eq!(
+                ChangeLimiter::new(
+                    WindowConfig {
+                        window_size: 604_800_000_000u64.into(),
+                        division_count: 2u64.into(),
+                    },
+                    Decimal::zero()
+                )
+                .unwrap_err(),
+                ContractError::ZeroBoundaryOffset {}
+            );
+
+            // window size is zero
+            assert_eq!(
+                ChangeLimiter::new(
+                    WindowConfig {
+                        window_size: 0u64.into(),
+                        division_count: 2u64.into(),
+                    },
+                    Decimal::percent(10)
+                )
+                .unwrap_err(),
+                ContractError::ZeroWindowSize {}
+            );
+
+            // exceed MAX_DIVISION_COUNT
+            assert_eq!(
+                ChangeLimiter::new(
+                    WindowConfig {
+                        window_size: 604_800_000_000u64.into(),
+                        division_count: MAX_DIVISION_COUNT + Uint64::one(),
+                    },
+                    Decimal::percent(10)
+                )
+                .unwrap_err(),
+                ContractError::DivisionCountExceeded {
+                    max_division_count: MAX_DIVISION_COUNT
+                }
+            );
+
+            // division count does not evenly divide the window
+            assert_eq!(
+                ChangeLimiter::new(
+                    WindowConfig {
+                        window_size: 604_800_000_001u64.into(),
+                        division_count: 9u64.into(),
+                    },
+                    Decimal::percent(10)
+                )
+                .unwrap_err(),
+                ContractError::UnevenWindowDivision {}
+            );
+        }
+
+        #[test]
+        fn static_limiter_validation() {
+            // upper limit is zero
+            assert_eq!(
+                StaticLimiter::new(Decimal::zero()).unwrap_err(),
+                ContractError::ZeroUpperLimit {}
+            );
+
+            // set upper limit to zero
+            assert_eq!(
+                StaticLimiter::new(Decimal::percent(10))
+                    .unwrap()
+                    .set_upper_limit(Decimal::zero())
+                    .unwrap_err(),
+                ContractError::ZeroUpperLimit {}
+            );
+
+            // upper limit is 100% + Decimal::raw(1)
+            assert_eq!(
+                StaticLimiter::new(Decimal::percent(100) + Decimal::raw(1u128)).unwrap_err(),
+                ContractError::ExceedHundredPercentUpperLimit {}
+            );
+
+            // set upper limit to 100% + Decimal::raw(1)
+            assert_eq!(
+                StaticLimiter::new(Decimal::percent(10))
+                    .unwrap()
+                    .set_upper_limit(Decimal::percent(100) + Decimal::raw(1u128))
+                    .unwrap_err(),
+                ContractError::ExceedHundredPercentUpperLimit {}
+            );
+        }
+    }
     mod remove_outdated_division {
         use super::*;
 
@@ -1529,7 +1671,7 @@ mod tests {
                     "1h",
                     LimiterParams::ChangeLimiter {
                         window_config: config,
-                        boundary_offset: Decimal::zero(),
+                        boundary_offset: Decimal::percent(1),
                     },
                 )
                 .unwrap();
@@ -1680,7 +1822,7 @@ mod tests {
                     "1h",
                     LimiterParams::ChangeLimiter {
                         window_config: config,
-                        boundary_offset: Decimal::zero(),
+                        boundary_offset: Decimal::percent(1),
                     },
                 )
                 .unwrap();

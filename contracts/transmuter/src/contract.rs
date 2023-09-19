@@ -1180,7 +1180,7 @@ mod tests {
                         window_size: Uint64::from(604_800_000_000u64),
                         division_count: Uint64::from(5u64),
                     },
-                    boundary_offset: Decimal::zero(),
+                    boundary_offset: Decimal::one(),
                 },
             }),
         )
@@ -1218,7 +1218,7 @@ mod tests {
                 label: "1h".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: window_config_1h.clone(),
-                    boundary_offset: Decimal::zero(),
+                    boundary_offset: Decimal::percent(1),
                 },
             }),
         )
@@ -1231,7 +1231,7 @@ mod tests {
             attr("limiter_type", "change_limiter"),
             attr("window_size", "3600000000000"),
             attr("division_count", "5"),
-            attr("boundary_offset", "0"),
+            attr("boundary_offset", "0.01"),
         ];
 
         assert_eq!(res.attributes, attrs);
@@ -1246,7 +1246,7 @@ mod tests {
             vec![(
                 (String::from("uosmo"), String::from("1h")),
                 Limiter::ChangeLimiter(
-                    ChangeLimiter::new(window_config_1h.clone(), Decimal::zero()).unwrap()
+                    ChangeLimiter::new(window_config_1h.clone(), Decimal::percent(1)).unwrap()
                 )
             )]
         );
@@ -1264,7 +1264,7 @@ mod tests {
                 label: "1w".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: window_config_1w.clone(),
-                    boundary_offset: Decimal::zero(),
+                    boundary_offset: Decimal::percent(1),
                 },
             }),
         )
@@ -1277,7 +1277,7 @@ mod tests {
             attr("limiter_type", "change_limiter"),
             attr("window_size", "604800000000"),
             attr("division_count", "5"),
-            attr("boundary_offset", "0"),
+            attr("boundary_offset", "0.01"),
         ];
 
         assert_eq!(res.attributes, attrs_1w);
@@ -1293,13 +1293,13 @@ mod tests {
                 (
                     (String::from("uosmo"), String::from("1h")),
                     Limiter::ChangeLimiter(
-                        ChangeLimiter::new(window_config_1h, Decimal::zero()).unwrap()
+                        ChangeLimiter::new(window_config_1h, Decimal::percent(1)).unwrap()
                     )
                 ),
                 (
                     (String::from("uosmo"), String::from("1w")),
                     Limiter::ChangeLimiter(
-                        ChangeLimiter::new(window_config_1w.clone(), Decimal::zero()).unwrap()
+                        ChangeLimiter::new(window_config_1w.clone(), Decimal::percent(1)).unwrap()
                     )
                 ),
             ]
@@ -1375,12 +1375,12 @@ mod tests {
                 (
                     (String::from("uosmo"), String::from("1w")),
                     Limiter::ChangeLimiter(
-                        ChangeLimiter::new(window_config_1w.clone(), Decimal::zero()).unwrap()
+                        ChangeLimiter::new(window_config_1w.clone(), Decimal::percent(1)).unwrap()
                     )
                 ),
                 (
                     (String::from("uosmo"), String::from("static")),
-                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)))
+                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
                 )
             ]
         );
@@ -1459,7 +1459,7 @@ mod tests {
                 ),
                 (
                     (String::from("uosmo"), String::from("static")),
-                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)))
+                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
                 )
             ]
         );
@@ -1559,7 +1559,7 @@ mod tests {
                 ),
                 (
                     (String::from("uosmo"), String::from("static")),
-                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(50)))
+                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(50)).unwrap())
                 )
             ]
         );
