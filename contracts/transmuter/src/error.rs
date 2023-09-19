@@ -82,6 +82,9 @@ pub enum ContractError {
     #[error("Unauthorized")]
     Unauthorized {},
 
+    #[error("Limiter count for {denom} exceed maximum per denom: {max}")]
+    MaxLimiterCountPerDenomExceeded { denom: String, max: Uint64 },
+
     #[error("Limiter label must not be empty")]
     EmptyLimiterLabel {},
 
