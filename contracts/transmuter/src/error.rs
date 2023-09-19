@@ -36,6 +36,13 @@ pub enum ContractError {
     #[error("Not a pool asset denom: {denom}")]
     InvalidPoolAssetDenom { denom: String },
 
+    #[error("Pool asset denom count must be within {min} - {max} inclusive, but got: {actual}")]
+    PoolAssetDenomCountOutOfRange {
+        min: Uint64,
+        max: Uint64,
+        actual: Uint64,
+    },
+
     #[error("Insufficient pool asset: required: {required}, available: {available}")]
     InsufficientPoolAsset { required: Coin, available: Coin },
 

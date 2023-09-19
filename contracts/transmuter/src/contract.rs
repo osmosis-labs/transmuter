@@ -83,7 +83,7 @@ impl Transmuter<'_> {
 
         // store pool
         self.pool
-            .save(deps.storage, &TransmuterPool::new(&pool_asset_denoms))?;
+            .save(deps.storage, &TransmuterPool::new(&pool_asset_denoms)?)?;
 
         // set active status to true
         self.active_status.save(deps.storage, &true)?;
