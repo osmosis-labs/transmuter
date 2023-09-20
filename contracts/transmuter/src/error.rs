@@ -116,6 +116,9 @@ pub enum ContractError {
     #[error("Division count must not exceed {max_division_count}")]
     DivisionCountExceeded { max_division_count: Uint64 },
 
+    #[error("Moving average is undefined due to zero elapsed time since limiter started tracking")]
+    UndefinedMovingAverage {},
+
     #[error("Time must be monotonically increasing")]
     NonMonotonicTime {},
 

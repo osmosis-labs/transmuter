@@ -307,12 +307,11 @@ impl Division {
 
                 let total_elapsed_time = elapsed_time(started_at, block_time.nanos())?;
 
-                // if total_elapsed_time is 0 in this case, it means
-                // the integral range should not contain any value
-                // so the average should be 0
-                // early return to avoid division by zero
+                // if total_elapsed_time is 0 in this case,
+                // it means that this is the very beginning of this limiter.
+                // This means average is undefined
                 if total_elapsed_time.is_zero() {
-                    return Ok(Decimal::zero());
+                    return Err(ContractError::UndefinedMovingAverage {});
                 }
 
                 integral
@@ -506,16 +505,16 @@ mod tests {
         let division_size = Uint64::from(100u64);
         let window_size = Uint64::from(1000u64);
         let block_time = Timestamp::from_nanos(1100);
-        let average = Division::compressed_moving_average(
+        let err = Division::compressed_moving_average(
             None,
             &divisions,
             division_size,
             window_size,
             block_time,
         )
-        .unwrap();
+        .unwrap_err();
 
-        assert_eq!(average, Decimal::zero());
+        assert_eq!(err, ContractError::UndefinedMovingAverage {});
 
         let block_time = Timestamp::from_nanos(1111);
         let average = Division::compressed_moving_average(
