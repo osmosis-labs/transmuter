@@ -26,9 +26,8 @@ impl TransmuterPool {
                     }
                 }
             } else {
-                return Err(ContractError::InsufficientPoolAsset {
-                    required: token.clone(),
-                    available: Coin::new(0, token.denom.clone()),
+                return Err(ContractError::InvalidPoolAssetDenom {
+                    denom: token.denom.clone(),
                 });
             }
         }
@@ -94,21 +93,19 @@ mod tests {
         let err = pool.exit_pool(&[Coin::new(10_000, "invalid")]).unwrap_err();
         assert_eq!(
             err,
-            ContractError::InsufficientPoolAsset {
-                required: Coin::new(10_000, "invalid"),
-                available: Coin::new(0, "invalid")
+            ContractError::InvalidPoolAssetDenom {
+                denom: "invalid".to_string()
             }
         );
 
         // exit pool with both valid and invalid token
         let err = pool
-            .exit_pool(&[Coin::new(10_000, ETH_USDC), Coin::new(10_000, "invalid")])
+            .exit_pool(&[Coin::new(10_000, ETH_USDC), Coin::new(10_000, "invalid2")])
             .unwrap_err();
         assert_eq!(
             err,
-            ContractError::InsufficientPoolAsset {
-                required: Coin::new(10_000, "invalid"),
-                available: Coin::new(0, "invalid")
+            ContractError::InvalidPoolAssetDenom {
+                denom: "invalid2".to_string()
             }
         );
     }
