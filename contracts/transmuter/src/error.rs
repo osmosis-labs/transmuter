@@ -46,9 +46,6 @@ pub enum ContractError {
     #[error("Insufficient pool asset: required: {required}, available: {available}")]
     InsufficientPoolAsset { required: Coin, available: Coin },
 
-    #[error("Funds mismatch token in: funds: {funds:?}, token_in: {token_in}")]
-    FundsMismatchTokenIn { funds: Vec<Coin>, token_in: Coin },
-
     #[error("Insufficient shares: required: {required}, available: {available}")]
     InsufficientShares {
         required: Uint128,
