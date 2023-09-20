@@ -58,6 +58,12 @@ impl SudoMsg {
                 token_out_min_amount,
                 swap_fee,
             } => {
+                // ensure non-zero token_in amount
+                ensure!(
+                    token_in.amount > Uint128::zero(),
+                    ContractError::ZeroSwapValue {}
+                );
+
                 let method = "swap_exact_amount_in";
 
                 let (deps, env) = ctx;
@@ -170,6 +176,12 @@ impl SudoMsg {
                 token_out,
                 swap_fee,
             } => {
+                // ensure non-zero token_out amount
+                ensure!(
+                    token_out.amount > Uint128::zero(),
+                    ContractError::ZeroSwapValue {}
+                );
+
                 let method = "swap_exact_amount_out";
                 let (deps, env) = ctx;
 
@@ -364,6 +376,18 @@ mod tests {
             join_pool_msg,
         )
         .unwrap();
+
+        // Test swap exact amount in with 0 amount in should error with ZeroSwapValue
+        let swap_msg = SudoMsg::SwapExactAmountIn {
+            sender: user.to_string(),
+            token_in: Coin::new(0, "axlusdc".to_string()),
+            token_out_denom: "whusdc".to_string(),
+            token_out_min_amount: Uint128::from(0u128),
+            swap_fee: Decimal::zero(),
+        };
+
+        let err = sudo(deps.as_mut(), env.clone(), swap_msg).unwrap_err();
+        assert_eq!(err, ContractError::ZeroSwapValue {});
 
         // Test swap exact amount in with only pool assets
         let swap_msg = SudoMsg::SwapExactAmountIn {
@@ -565,6 +589,18 @@ mod tests {
             join_pool_msg,
         )
         .unwrap();
+
+        // Test swap exact amount in with 0 amount out should error with ZeroSwapValue
+        let swap_msg = SudoMsg::SwapExactAmountOut {
+            sender: user.to_string(),
+            token_in_denom: "whusdc".to_string(),
+            token_out: Coin::new(0, "axlusdc".to_string()),
+            token_in_max_amount: Uint128::from(0u128),
+            swap_fee: Decimal::zero(),
+        };
+
+        let err = sudo(deps.as_mut(), env.clone(), swap_msg).unwrap_err();
+        assert_eq!(err, ContractError::ZeroSwapValue {});
 
         // Test swap exact amount out with only pool assets
         let swap_msg = SudoMsg::SwapExactAmountOut {

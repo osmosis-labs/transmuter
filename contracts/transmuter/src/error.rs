@@ -95,6 +95,9 @@ pub enum ContractError {
     #[error("Limiter label must not be empty")]
     EmptyLimiterLabel {},
 
+    #[error("Swapping value must be greater than zero")]
+    ZeroSwapValue {},
+
     #[error("Window size must be greater than zero")]
     ZeroWindowSize {},
 
