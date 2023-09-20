@@ -190,7 +190,7 @@ impl Transmuter<'_> {
         ];
 
         // deregister limiter
-        self.limiters.deregister(deps.storage, &denom, &label);
+        self.limiters.deregister(deps.storage, &denom, &label)?;
 
         Ok(Response::new().add_attributes(attrs))
     }

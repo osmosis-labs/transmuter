@@ -329,8 +329,22 @@ impl<'a> Limiters<'a> {
             .map_err(Into::into)
     }
 
-    pub fn deregister(&self, storage: &mut dyn Storage, denom: &str, label: &str) {
-        self.limiters.remove(storage, (denom, label))
+    pub fn deregister(
+        &self,
+        storage: &mut dyn Storage,
+        denom: &str,
+        label: &str,
+    ) -> Result<Limiter, ContractError> {
+        match self.limiters.may_load(storage, (denom, label))? {
+            Some(limiter) => {
+                self.limiters.remove(storage, (denom, label));
+                Ok(limiter)
+            }
+            None => Err(ContractError::LimiterDoesNotExist {
+                denom: denom.to_string(),
+                label: label.to_string(),
+            }),
+        }
     }
 
     /// Set boundary offset for a [`ChangeLimiter`] only, otherwise it will fail.
@@ -750,7 +764,7 @@ mod tests {
             let mut deps = mock_dependencies();
             let limiter = Limiters::new("limiters");
 
-            for h in 1..10u64 {
+            for h in 1..=10u64 {
                 let label = format!("{}h", h);
                 let result = limiter.register(
                     &mut deps.storage,
@@ -779,7 +793,9 @@ mod tests {
             }
 
             // deregister to register should work
-            limiter.deregister(&mut deps.storage, "denoma", "0h");
+            limiter
+                .deregister(&mut deps.storage, "denoma", "1h")
+                .unwrap();
 
             // register static limiter
             limiter
@@ -895,7 +911,21 @@ mod tests {
                 ]
             );
 
-            limiter.deregister(&mut deps.storage, "denoma", "1m");
+            let err = limiter
+                .deregister(&mut deps.storage, "denoma", "nonexistent")
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::LimiterDoesNotExist {
+                    denom: "denoma".to_string(),
+                    label: "nonexistent".to_string(),
+                }
+            );
+
+            limiter
+                .deregister(&mut deps.storage, "denoma", "1m")
+                .unwrap();
 
             assert_eq!(
                 limiter.list_limiters(&deps.storage).unwrap(),
@@ -913,7 +943,9 @@ mod tests {
                 )]
             );
 
-            limiter.deregister(&mut deps.storage, "denoma", "1h");
+            limiter
+                .deregister(&mut deps.storage, "denoma", "1h")
+                .unwrap();
 
             assert_eq!(limiter.list_limiters(&deps.storage).unwrap(), vec![]);
         }
