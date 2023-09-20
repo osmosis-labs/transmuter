@@ -61,7 +61,7 @@ impl SudoMsg {
                 // ensure non-zero token_in amount
                 ensure!(
                     token_in.amount > Uint128::zero(),
-                    ContractError::ZeroSwapValue {}
+                    ContractError::ZeroValueOperation {}
                 );
 
                 let method = "swap_exact_amount_in";
@@ -179,7 +179,7 @@ impl SudoMsg {
                 // ensure non-zero token_out amount
                 ensure!(
                     token_out.amount > Uint128::zero(),
-                    ContractError::ZeroSwapValue {}
+                    ContractError::ZeroValueOperation {}
                 );
 
                 let method = "swap_exact_amount_out";
@@ -377,7 +377,7 @@ mod tests {
         )
         .unwrap();
 
-        // Test swap exact amount in with 0 amount in should error with ZeroSwapValue
+        // Test swap exact amount in with 0 amount in should error with ZeroValueOperation
         let swap_msg = SudoMsg::SwapExactAmountIn {
             sender: user.to_string(),
             token_in: Coin::new(0, "axlusdc".to_string()),
@@ -387,7 +387,7 @@ mod tests {
         };
 
         let err = sudo(deps.as_mut(), env.clone(), swap_msg).unwrap_err();
-        assert_eq!(err, ContractError::ZeroSwapValue {});
+        assert_eq!(err, ContractError::ZeroValueOperation {});
 
         // Test swap exact amount in with only pool assets
         let swap_msg = SudoMsg::SwapExactAmountIn {
@@ -590,7 +590,7 @@ mod tests {
         )
         .unwrap();
 
-        // Test swap exact amount in with 0 amount out should error with ZeroSwapValue
+        // Test swap exact amount in with 0 amount out should error with ZeroValueOperation
         let swap_msg = SudoMsg::SwapExactAmountOut {
             sender: user.to_string(),
             token_in_denom: "whusdc".to_string(),
@@ -600,7 +600,7 @@ mod tests {
         };
 
         let err = sudo(deps.as_mut(), env.clone(), swap_msg).unwrap_err();
-        assert_eq!(err, ContractError::ZeroSwapValue {});
+        assert_eq!(err, ContractError::ZeroValueOperation {});
 
         // Test swap exact amount out with only pool assets
         let swap_msg = SudoMsg::SwapExactAmountOut {

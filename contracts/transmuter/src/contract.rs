@@ -315,6 +315,12 @@ impl Transmuter<'_> {
             ContractError::AtLeastSingleTokenExpected {}
         );
 
+        // ensure funds does not have zero coin
+        ensure!(
+            info.funds.iter().all(|coin| coin.amount > Uint128::zero()),
+            ContractError::ZeroValueOperation {}
+        );
+
         let (pool, alloyed_asset_out) =
             self.calc_swap_tokens_for_alloyed_asset(deps.as_ref(), &info.funds)?;
 
@@ -381,6 +387,12 @@ impl Transmuter<'_> {
         tokens_out: Vec<Coin>,
     ) -> Result<Response, ContractError> {
         let (deps, env, info) = ctx;
+
+        // ensure tokens out has no zero value
+        ensure!(
+            tokens_out.iter().all(|coin| coin.amount > Uint128::zero()),
+            ContractError::ZeroValueOperation {}
+        );
 
         let (pool, alloyed_asset_to_burn, burn_from_address) = self
             .calc_swap_alloyed_asset_for_tokens(
@@ -1625,6 +1637,78 @@ mod tests {
     }
 
     #[test]
+    fn test_join_pool() {
+        let mut deps = mock_dependencies();
+
+        // make denom has non-zero total supply
+        deps.querier
+            .update_balance("someone", vec![Coin::new(1, "uosmo"), Coin::new(1, "uion")]);
+
+        let admin = "admin";
+        let user = "user";
+        let init_msg = InstantiateMsg {
+            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            admin: Some(admin.to_string()),
+            alloyed_asset_subdenom: "usomoion".to_string(),
+        };
+        let env = mock_env();
+        let info = mock_info(admin, &[]);
+
+        // Instantiate the contract.
+        instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
+
+        // Manually reply
+        let alloyed_denom = "usomoion";
+
+        reply(
+            deps.as_mut(),
+            env.clone(),
+            Reply {
+                id: 1,
+                result: SubMsgResult::Ok(SubMsgResponse {
+                    events: vec![],
+                    data: Some(
+                        MsgCreateDenomResponse {
+                            new_token_denom: alloyed_denom.to_string(),
+                        }
+                        .into(),
+                    ),
+                }),
+            },
+        )
+        .unwrap();
+
+        // join pool with amount 0 coin should error
+        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+        let info = mock_info(user, &[Coin::new(1000, "uion"), Coin::new(0, "uosmo")]);
+        let err = execute(deps.as_mut(), env.clone(), info, join_pool_msg).unwrap_err();
+
+        assert_eq!(err, ContractError::ZeroValueOperation {});
+
+        // join pool properly works
+        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+        let info = mock_info(user, &[Coin::new(1000, "uion"), Coin::new(1000, "uosmo")]);
+        execute(deps.as_mut(), env.clone(), info, join_pool_msg).unwrap();
+
+        // Check pool asset
+        let GetTotalPoolLiquidityResponse {
+            total_pool_liquidity,
+        } = from_binary(
+            &query(
+                deps.as_ref(),
+                env,
+                ContractQueryMsg::Transmuter(QueryMsg::GetTotalPoolLiquidity {}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            total_pool_liquidity,
+            vec![Coin::new(1000, "uosmo"), Coin::new(1000, "uion")]
+        );
+    }
+
+    #[test]
     fn test_exit_pool() {
         let mut deps = mock_dependencies();
 
@@ -1697,6 +1781,19 @@ mod tests {
 
         deps.querier
             .update_balance(user, vec![Coin::new(2000, alloyed_denom)]);
+
+        // User tries to exit pool with zero amount
+        let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
+            tokens_out: vec![Coin::new(0, "uion"), Coin::new(1, "uosmo")],
+        });
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(user, &[]),
+            exit_pool_msg,
+        )
+        .unwrap_err();
+        assert_eq!(err, ContractError::ZeroValueOperation {});
 
         // User tries to exit pool again
         let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
