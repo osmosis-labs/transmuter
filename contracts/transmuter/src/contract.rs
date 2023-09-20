@@ -783,7 +783,7 @@ impl Transmuter<'_> {
 
         Ok(Response::new()
             .add_attribute("method", "transfer_admin")
-            .add_attribute("andidate", candidate))
+            .add_attribute("candidate", candidate))
     }
 
     #[msg(exec)]
