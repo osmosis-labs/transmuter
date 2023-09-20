@@ -525,17 +525,6 @@ impl Transmuter<'_> {
     }
 
     #[msg(query)]
-    pub(crate) fn get_alloyed_denom(
-        &self,
-        ctx: (Deps, Env),
-    ) -> Result<GetAlloyedDenomResponse, ContractError> {
-        let (deps, _env) = ctx;
-        Ok(GetAlloyedDenomResponse {
-            alloyed_denom: self.alloyed_asset.get_alloyed_denom(deps.storage)?,
-        })
-    }
-
-    #[msg(query)]
     pub(crate) fn get_swap_fee(
         &self,
         _ctx: (Deps, Env),
@@ -855,11 +844,6 @@ pub struct GetSharesResponse {
 #[cw_serde]
 pub struct GetShareDenomResponse {
     pub share_denom: String,
-}
-
-#[cw_serde]
-pub struct GetAlloyedDenomResponse {
-    pub alloyed_denom: String,
 }
 
 #[cw_serde]
@@ -2007,17 +1991,6 @@ mod tests {
 
         let share_denom: GetShareDenomResponse = from_binary(&res).unwrap();
         assert_eq!(share_denom.share_denom, "usomoion");
-
-        // Query the alloyed denom
-        let res = query(
-            deps.as_ref(),
-            env,
-            ContractQueryMsg::Transmuter(QueryMsg::GetAlloyedDenom {}),
-        )
-        .unwrap();
-
-        let alloyed_denom: GetAlloyedDenomResponse = from_binary(&res).unwrap();
-        assert_eq!(alloyed_denom.alloyed_denom, "usomoion");
     }
 
     #[test]
