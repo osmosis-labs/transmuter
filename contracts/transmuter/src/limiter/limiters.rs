@@ -1,5 +1,5 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{ensure, Decimal, Storage, Timestamp, Uint64};
+use cosmwasm_std::{ensure, Decimal, StdError, Storage, Timestamp, Uint64};
 use cw_storage_plus::Map;
 
 use crate::ContractError;
@@ -166,7 +166,10 @@ impl ChangeLimiter {
         } else {
             // If the division is over, create a new division
             let mut divisions = updated_limiter.divisions;
-            let latest_division = divisions.last().expect("divisions must not be empty");
+            let latest_division = divisions
+                .last()
+                // this error should never occur since we checked if divisions is empty
+                .ok_or(StdError::generic_err("divisions must not be empty"))?;
 
             if latest_division.elapsed_time(block_time)? >= division_size {
                 let started_at = latest_division.next_started_at(division_size, block_time)?;
