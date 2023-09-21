@@ -1984,7 +1984,7 @@ mod tests {
         // Query the share denom
         let res = query(
             deps.as_ref(),
-            env.clone(),
+            env,
             ContractQueryMsg::Transmuter(QueryMsg::GetShareDenom {}),
         )
         .unwrap();
