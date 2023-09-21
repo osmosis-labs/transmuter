@@ -86,6 +86,9 @@ pub enum ContractError {
     #[error("Unauthorized")]
     Unauthorized {},
 
+    #[error("Admin transferring state is inoperable for the requested operation")]
+    InoperableAdminTransferringState {},
+
     #[error("Limiter count for {denom} exceed maximum per denom: {max}")]
     MaxLimiterCountPerDenomExceeded { denom: String, max: Uint64 },
 

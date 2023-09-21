@@ -787,6 +787,28 @@ impl Transmuter<'_> {
     }
 
     #[msg(exec)]
+    pub fn cancel_admin_transfer(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+        self.admin.cancel_transfer(deps, info.sender)?;
+
+        Ok(Response::new().add_attribute("method", "cancel_admin_transfer"))
+    }
+
+    #[msg(exec)]
+    pub fn reject_admin_transfer(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+        self.admin.reject_transfer(deps, info.sender)?;
+
+        Ok(Response::new().add_attribute("method", "reject_admin_transfer"))
+    }
+
+    #[msg(exec)]
     pub fn claim_admin(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
         let sender_string = info.sender.to_string();
@@ -795,6 +817,17 @@ impl Transmuter<'_> {
         Ok(Response::new()
             .add_attribute("method", "claim_admin")
             .add_attribute("new_admin", sender_string))
+    }
+
+    #[msg(exec)]
+    pub fn renounce_adminship(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+        self.admin.renounce(deps, info.sender)?;
+
+        Ok(Response::new().add_attribute("method", "renounce_adminship"))
     }
 
     #[msg(query)]
@@ -1095,6 +1128,8 @@ mod tests {
             .update_balance("someone", vec![Coin::new(1, "uosmo"), Coin::new(1, "uion")]);
 
         let admin = "admin";
+        let canceling_candidate = "canceling_candidate";
+        let rejecting_candidate = "rejecting_candidate";
         let candidate = "candidate";
         let init_msg = InstantiateMsg {
             pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
@@ -1106,6 +1141,88 @@ mod tests {
 
         // Instantiate the contract.
         instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap();
+
+        // Transfer admin rights to the canceling candidate
+        let transfer_admin_msg = ContractExecMsg::Transmuter(ExecMsg::TransferAdmin {
+            candidate: canceling_candidate.to_string(),
+        });
+        execute(deps.as_mut(), env.clone(), info.clone(), transfer_admin_msg).unwrap();
+
+        // Check the admin candidate
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetAdminCandidate {}),
+        )
+        .unwrap();
+        let admin_candidate: GetAdminCandidateResponse = from_binary(&res).unwrap();
+        assert_eq!(
+            admin_candidate.admin_candidate.unwrap().as_str(),
+            canceling_candidate
+        );
+
+        // Cancel admin rights transfer
+        let cancel_admin_transfer_msg =
+            ContractExecMsg::Transmuter(ExecMsg::CancelAdminTransfer {});
+
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(admin, &[]),
+            cancel_admin_transfer_msg,
+        )
+        .unwrap();
+
+        // Check the admin candidate
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetAdminCandidate {}),
+        )
+        .unwrap();
+        let admin_candidate: GetAdminCandidateResponse = from_binary(&res).unwrap();
+        assert_eq!(admin_candidate.admin_candidate, None);
+
+        // Transfer admin rights to the rejecting candidate
+        let transfer_admin_msg = ContractExecMsg::Transmuter(ExecMsg::TransferAdmin {
+            candidate: rejecting_candidate.to_string(),
+        });
+        execute(deps.as_mut(), env.clone(), info.clone(), transfer_admin_msg).unwrap();
+
+        // Check the admin candidate
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetAdminCandidate {}),
+        )
+        .unwrap();
+        let admin_candidate: GetAdminCandidateResponse = from_binary(&res).unwrap();
+        assert_eq!(
+            admin_candidate.admin_candidate.unwrap().as_str(),
+            rejecting_candidate
+        );
+
+        // Reject admin rights transfer
+        let reject_admin_transfer_msg =
+            ContractExecMsg::Transmuter(ExecMsg::RejectAdminTransfer {});
+
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(rejecting_candidate, &[]),
+            reject_admin_transfer_msg,
+        )
+        .unwrap();
+
+        // Check the admin candidate
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetAdminCandidate {}),
+        )
+        .unwrap();
+        let admin_candidate: GetAdminCandidateResponse = from_binary(&res).unwrap();
+        assert_eq!(admin_candidate.admin_candidate, None);
 
         // Transfer admin rights to the candidate
         let transfer_admin_msg = ContractExecMsg::Transmuter(ExecMsg::TransferAdmin {
@@ -1136,12 +1253,32 @@ mod tests {
         // Check the current admin
         let res = query(
             deps.as_ref(),
-            env,
+            env.clone(),
             ContractQueryMsg::Transmuter(QueryMsg::GetAdmin {}),
         )
         .unwrap();
         let admin: GetAdminResponse = from_binary(&res).unwrap();
         assert_eq!(admin.admin.as_str(), candidate);
+
+        // Renounce admin rights
+        let renounce_admin_msg = ContractExecMsg::Transmuter(ExecMsg::RenounceAdminship {});
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(candidate, &[]),
+            renounce_admin_msg,
+        )
+        .unwrap();
+
+        // Check the current admin
+        let err = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetAdmin {}),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, ContractError::Std(StdError::not_found("admin")));
     }
 
     #[test]
