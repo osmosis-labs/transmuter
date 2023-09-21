@@ -59,6 +59,11 @@ impl Division {
     }
 
     pub fn update(&self, updated_at: Timestamp, value: Decimal) -> Result<Self, ContractError> {
+        ensure!(
+            updated_at >= self.started_at,
+            ContractError::NonMonotonicTime {}
+        );
+
         let prev_updated_at = self.updated_at.nanos();
         let elapsed_time = elapsed_time(prev_updated_at, updated_at.nanos())?;
         Ok(Self {

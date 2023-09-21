@@ -1,6 +1,6 @@
 use cosmwasm_std::{
-    CheckedFromRatioError, Coin, Decimal, DivideByZeroError, OverflowError, StdError, Uint128,
-    Uint64,
+    CheckedFromRatioError, Coin, Decimal, DivideByZeroError, OverflowError, StdError, Timestamp,
+    Uint128, Uint64,
 };
 use thiserror::Error;
 
@@ -122,8 +122,16 @@ pub enum ContractError {
     #[error("Moving average is undefined due to zero elapsed time since limiter started tracking")]
     UndefinedMovingAverage {},
 
+    /// Time invariant error, this should never happen
     #[error("Time must be monotonically increasing")]
     NonMonotonicTime {},
+
+    /// Time invariant error, this should never happen
+    #[error("Division's update should occur before division ended: updated_at: {updated_at}, ended_at: {ended_at}")]
+    UpdateAfterDivisionEnded {
+        updated_at: Timestamp,
+        ended_at: Timestamp,
+    },
 
     #[error("Limiter does not exist for denom: {denom}, label: {label}")]
     LimiterDoesNotExist { denom: String, label: String },

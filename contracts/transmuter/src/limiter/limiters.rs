@@ -162,6 +162,9 @@ impl ChangeLimiter {
         updated_limiter.latest_value = value;
 
         updated_limiter.divisions = if updated_limiter.divisions.is_empty() {
+            // no need to ensure time invariant since
+            // started_at = updated_at so
+            // `updated_at <= started_at + division_size` is always true
             vec![Division::new(block_time, block_time, value, value)?]
         } else {
             // If the division is over, create a new division
@@ -173,14 +176,39 @@ impl ChangeLimiter {
 
             if latest_division.elapsed_time(block_time)? >= division_size {
                 let started_at = latest_division.next_started_at(division_size, block_time)?;
+                let updated_at = block_time;
+                let ended_at = started_at.plus_nanos(division_size.u64());
 
-                let new_division = Division::new(started_at, block_time, value, prev_value)?;
+                // ensure time invariant
+                ensure!(
+                    updated_at <= ended_at,
+                    ContractError::UpdateAfterDivisionEnded {
+                        updated_at,
+                        ended_at
+                    }
+                );
+
+                let new_division = Division::new(started_at, updated_at, value, prev_value)?;
                 divisions.push(new_division);
             }
             // else update the current division
             else {
                 let last_index = divisions.len() - 1;
-                divisions[last_index] = latest_division.update(block_time, value)?;
+
+                let updated_at = block_time;
+                let ended_at =
+                    Timestamp::from_nanos(latest_division.ended_at(division_size)?.u64());
+
+                // ensure time invariant
+                ensure!(
+                    updated_at <= ended_at,
+                    ContractError::UpdateAfterDivisionEnded {
+                        updated_at,
+                        ended_at
+                    }
+                );
+
+                divisions[last_index] = latest_division.update(updated_at, value)?;
             }
 
             divisions
