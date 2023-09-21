@@ -89,6 +89,9 @@ pub enum ContractError {
     #[error("Limiter count for {denom} exceed maximum per denom: {max}")]
     MaxLimiterCountPerDenomExceeded { denom: String, max: Uint64 },
 
+    #[error("Denom: {denom} cannot have an empty limiter after it has been registered")]
+    EmptyLimiterNotAllowed { denom: String },
+
     #[error("Limiter label must not be empty")]
     EmptyLimiterLabel {},
 

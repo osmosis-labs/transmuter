@@ -340,6 +340,16 @@ impl<'a> Limiters<'a> {
     ) -> Result<Limiter, ContractError> {
         match self.limiters.may_load(storage, (denom, label))? {
             Some(limiter) => {
+                let limiter_for_denom_will_not_be_empty =
+                    self.list_limiters_by_denom(storage, denom)?.len() >= 2;
+
+                ensure!(
+                    limiter_for_denom_will_not_be_empty,
+                    ContractError::EmptyLimiterNotAllowed {
+                        denom: denom.to_string()
+                    }
+                );
+
                 self.limiters.remove(storage, (denom, label));
                 Ok(limiter)
             }
@@ -946,11 +956,117 @@ mod tests {
                 )]
             );
 
-            limiter
+            let err = limiter
                 .deregister(&mut deps.storage, "denoma", "1h")
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::EmptyLimiterNotAllowed {
+                    denom: "denoma".to_string()
+                }
+            );
+
+            assert_eq!(
+                limiter.list_limiters(&deps.storage).unwrap(),
+                vec![(
+                    ("denoma".to_string(), "1h".to_string()),
+                    Limiter::ChangeLimiter(ChangeLimiter {
+                        divisions: vec![],
+                        latest_value: Decimal::zero(),
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(3_600_000_000_000u64),
+                            division_count: Uint64::from(2u64),
+                        },
+                        boundary_offset: Decimal::percent(10)
+                    })
+                )]
+            );
+            limiter
+                .register(
+                    &mut deps.storage,
+                    "denomb",
+                    "1m",
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(604_800_000_000u64),
+                            division_count: Uint64::from(5u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
+                    },
+                )
                 .unwrap();
 
-            assert_eq!(limiter.list_limiters(&deps.storage).unwrap(), vec![]);
+            let err = limiter
+                .deregister(&mut deps.storage, "denomb", "1m")
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::EmptyLimiterNotAllowed {
+                    denom: "denomb".to_string()
+                }
+            );
+
+            limiter
+                .register(
+                    &mut deps.storage,
+                    "denomb",
+                    "1h",
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(3_600_000_000_000u64),
+                            division_count: Uint64::from(2u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
+                    },
+                )
+                .unwrap();
+
+            let err = limiter
+                .deregister(&mut deps.storage, "denoma", "1h")
+                .unwrap_err();
+
+            assert_eq!(
+                err,
+                ContractError::EmptyLimiterNotAllowed {
+                    denom: "denoma".to_string()
+                }
+            );
+
+            limiter
+                .deregister(&mut deps.storage, "denomb", "1m")
+                .unwrap();
+
+            assert_eq!(
+                limiter.list_limiters(&deps.storage).unwrap(),
+                vec![
+                    (
+                        ("denoma".to_string(), "1h".to_string()),
+                        Limiter::ChangeLimiter(ChangeLimiter {
+                            divisions: vec![],
+                            latest_value: Decimal::zero(),
+                            window_config: WindowConfig {
+                                window_size: Uint64::from(3_600_000_000_000u64),
+                                division_count: Uint64::from(2u64),
+                            },
+                            boundary_offset: Decimal::percent(10)
+                        })
+                    ),
+                    (
+                        ("denomb".to_string(), "1h".to_string()),
+                        Limiter::ChangeLimiter(ChangeLimiter {
+                            divisions: vec![],
+                            latest_value: Decimal::zero(),
+                            window_config: WindowConfig {
+                                window_size: Uint64::from(3_600_000_000_000u64),
+                                division_count: Uint64::from(2u64),
+                            },
+                            boundary_offset: Decimal::percent(10)
+                        })
+                    )
+                ]
+            );
         }
     }
 
