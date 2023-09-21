@@ -416,6 +416,7 @@ fn pool_with_single_lp(app: &'_ OsmosisTestApp, pool_assets: Vec<Coin>) -> TestE
             pool_asset_denoms: pool_assets.iter().map(|c| c.denom.clone()).collect(),
             alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
             admin: None,
+            moderator: None,
         })
         .build(app);
 

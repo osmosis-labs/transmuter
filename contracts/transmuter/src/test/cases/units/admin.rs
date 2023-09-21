@@ -29,6 +29,7 @@ fn test_admin_set_denom_metadata() {
             pool_asset_denoms: vec![AXL_ETH.to_string(), WH_ETH.to_string()],
             alloyed_asset_subdenom: alloyed_asset_subdenom.to_string(),
             admin: None,
+            moderator: None,
         })
         .with_admin("admin")
         .build(&app);

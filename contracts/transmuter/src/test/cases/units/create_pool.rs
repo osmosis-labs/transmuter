@@ -20,6 +20,7 @@ fn test_create_pool() {
             pool_asset_denoms: vec!["denom1".to_string(), "denom2".to_string()],
             admin: None,
             alloyed_asset_subdenom: "denomx".to_string(),
+            moderator: None,
         })
         .build(&app);
 

@@ -1,10 +1,10 @@
 use crate::{
-    admin::Admin,
     alloyed_asset::AlloyedAsset,
     denom::Denom,
-    ensure_admin_authority,
+    ensure_admin_authority, ensure_moderator_authority,
     error::ContractError,
     limiter::{Limiter, LimiterParams, Limiters},
+    role::Role,
     transmuter_pool::TransmuterPool,
 };
 use cosmwasm_schema::cw_serde;
@@ -38,7 +38,7 @@ pub struct Transmuter<'a> {
     pub(crate) active_status: Item<'a, bool>,
     pub(crate) pool: Item<'a, TransmuterPool>,
     pub(crate) alloyed_asset: AlloyedAsset<'a>,
-    pub(crate) admin: Admin<'a>,
+    pub(crate) role: Role<'a>,
     pub(crate) limiters: Limiters<'a>,
 }
 
@@ -51,7 +51,7 @@ impl Transmuter<'_> {
             active_status: Item::new("active_status"),
             pool: Item::new("pool"),
             alloyed_asset: AlloyedAsset::new("alloyed_denom"),
-            admin: Admin::new("admin"),
+            role: Role::new("admin", "moderator"),
             limiters: Limiters::new("limiters"),
         }
     }
@@ -64,6 +64,7 @@ impl Transmuter<'_> {
         pool_asset_denoms: Vec<String>,
         alloyed_asset_subdenom: String,
         admin: Option<String>,
+        moderator: Option<String>,
     ) -> Result<Response, ContractError> {
         let (deps, env, _info) = ctx;
 
@@ -72,8 +73,16 @@ impl Transmuter<'_> {
 
         // set admin if exists
         if let Some(admin) = admin {
-            self.admin
+            self.role
+                .admin
                 .init(deps.storage, deps.api.addr_validate(&admin)?)?;
+        }
+
+        // set moderator if exists
+        if let Some(moderator) = moderator {
+            self.role
+                .moderator
+                .init(deps.storage, deps.api.addr_validate(&moderator)?)?;
         }
 
         let pool_asset_denoms = pool_asset_denoms
@@ -133,7 +142,7 @@ impl Transmuter<'_> {
         let (deps, _env, info) = ctx;
 
         // only admin can register limiter
-        ensure_admin_authority!(info.sender, self.admin, deps.as_ref());
+        ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
         let base_attrs = vec![
             ("method", "register_limiter"),
@@ -181,7 +190,7 @@ impl Transmuter<'_> {
         let (deps, _env, info) = ctx;
 
         // only admin can deregister limiter
-        ensure_admin_authority!(info.sender, self.admin, deps.as_ref());
+        ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
         let attrs = vec![
             ("method", "deregister_limiter"),
@@ -206,7 +215,7 @@ impl Transmuter<'_> {
         let (deps, _env, info) = ctx;
 
         // only admin can set boundary offset
-        ensure_admin_authority!(info.sender, self.admin, deps.as_ref());
+        ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
         let boundary_offset_string = boundary_offset.to_string();
         let attrs = vec![
@@ -238,7 +247,7 @@ impl Transmuter<'_> {
         let (deps, _env, info) = ctx;
 
         // only admin can set upper limit
-        ensure_admin_authority!(info.sender, self.admin, deps.as_ref());
+        ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
         let upper_limit_string = upper_limit.to_string();
         let attrs = vec![
@@ -264,7 +273,7 @@ impl Transmuter<'_> {
         let (deps, env, info) = ctx;
 
         // only admin can set denom metadata
-        ensure_admin_authority!(info.sender, self.admin, deps.as_ref());
+        ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
         let msg_set_denom_metadata = MsgSetDenomMetadata {
             sender: env.contract.address.to_string(),
@@ -284,8 +293,8 @@ impl Transmuter<'_> {
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
-        // only admin can set active status
-        ensure_admin_authority!(info.sender, self.admin, deps.as_ref());
+        // only moderator can set active status
+        ensure_moderator_authority!(info.sender, self.role.moderator, deps.as_ref());
 
         // set active status
         self.active_status.save(deps.storage, &active)?;
@@ -779,7 +788,9 @@ impl Transmuter<'_> {
         let (deps, _env, info) = ctx;
 
         let candidate_addr = deps.api.addr_validate(&candidate)?;
-        self.admin.transfer(deps, info.sender, candidate_addr)?;
+        self.role
+            .admin
+            .transfer(deps, info.sender, candidate_addr)?;
 
         Ok(Response::new()
             .add_attribute("method", "transfer_admin")
@@ -792,7 +803,7 @@ impl Transmuter<'_> {
         ctx: (DepsMut, Env, MessageInfo),
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
-        self.admin.cancel_transfer(deps, info.sender)?;
+        self.role.admin.cancel_transfer(deps, info.sender)?;
 
         Ok(Response::new().add_attribute("method", "cancel_admin_transfer"))
     }
@@ -803,7 +814,7 @@ impl Transmuter<'_> {
         ctx: (DepsMut, Env, MessageInfo),
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
-        self.admin.reject_transfer(deps, info.sender)?;
+        self.role.admin.reject_transfer(deps, info.sender)?;
 
         Ok(Response::new().add_attribute("method", "reject_admin_transfer"))
     }
@@ -812,7 +823,7 @@ impl Transmuter<'_> {
     pub fn claim_admin(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
         let sender_string = info.sender.to_string();
-        self.admin.claim(deps, info.sender)?;
+        self.role.admin.claim(deps, info.sender)?;
 
         Ok(Response::new()
             .add_attribute("method", "claim_admin")
@@ -825,7 +836,7 @@ impl Transmuter<'_> {
         ctx: (DepsMut, Env, MessageInfo),
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
-        self.admin.renounce(deps, info.sender)?;
+        self.role.admin.renounce(deps, info.sender)?;
 
         Ok(Response::new().add_attribute("method", "renounce_adminship"))
     }
@@ -835,7 +846,7 @@ impl Transmuter<'_> {
         let (deps, _env) = ctx;
 
         Ok(GetAdminResponse {
-            admin: self.admin.current(deps)?,
+            admin: self.role.admin.current(deps)?,
         })
     }
 
@@ -847,7 +858,46 @@ impl Transmuter<'_> {
         let (deps, _env) = ctx;
 
         Ok(GetAdminCandidateResponse {
-            admin_candidate: self.admin.candidate(deps)?,
+            admin_candidate: self.role.admin.candidate(deps)?,
+        })
+    }
+
+    // -- moderator --
+    #[msg(exec)]
+    pub fn assign_moderator(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        address: String,
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+        let moderator_address = deps.api.addr_validate(&address)?;
+
+        self.role
+            .assign_moderator(info.sender, deps, moderator_address)?;
+
+        Ok(Response::new()
+            .add_attribute("method", "assign_moderator")
+            .add_attribute("moderator", address))
+    }
+
+    #[msg(exec)]
+    pub fn remove_moderator(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+
+        self.role.remove_moderator(info.sender, deps)?;
+
+        Ok(Response::new().add_attribute("method", "remove_moderator"))
+    }
+
+    #[msg(query)]
+    fn get_moderator(&self, ctx: (Deps, Env)) -> Result<GetModeratorResponse, ContractError> {
+        let (deps, _env) = ctx;
+
+        Ok(GetModeratorResponse {
+            moderator: self.role.moderator.get(deps)?,
         })
     }
 }
@@ -924,6 +974,11 @@ pub struct GetAdminCandidateResponse {
     pub admin_candidate: Option<Addr>,
 }
 
+#[cw_serde]
+pub struct GetModeratorResponse {
+    pub moderator: Addr,
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -944,16 +999,18 @@ mod tests {
             .update_balance("someone", vec![Coin::new(1, "uosmo"), Coin::new(1, "uion")]);
 
         let admin = "admin";
+        let moderator = "moderator";
         let init_msg = InstantiateMsg {
             pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
             alloyed_asset_subdenom: "uosmouion".to_string(),
             admin: Some(admin.to_string()),
+            moderator: Some(moderator.to_string()),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
 
         // Instantiate the contract.
-        instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap();
+        instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
 
         // Manually set alloyed denom
         let alloyed_denom = "uosmo".to_string();
@@ -975,7 +1032,7 @@ mod tests {
         assert!(active_status.is_active);
 
         // Attempt to set the active status by a non-admin user.
-        let non_admin_info = mock_info("non_admin", &[]);
+        let non_admin_info = mock_info("non_moderator", &[]);
         let non_admin_msg = ContractExecMsg::Transmuter(ExecMsg::SetActiveStatus { active: false });
         let err = execute(deps.as_mut(), env.clone(), non_admin_info, non_admin_msg).unwrap_err();
 
@@ -983,7 +1040,7 @@ mod tests {
 
         // Set the active status to false.
         let msg = ContractExecMsg::Transmuter(ExecMsg::SetActiveStatus { active: false });
-        execute(deps.as_mut(), env.clone(), info, msg).unwrap();
+        execute(deps.as_mut(), env.clone(), mock_info(moderator, &[]), msg).unwrap();
 
         // Check the active status again.
         let res = query(
@@ -1043,7 +1100,7 @@ mod tests {
 
         // Set the active status back to true
         let msg = ContractExecMsg::Transmuter(ExecMsg::SetActiveStatus { active: true });
-        execute(deps.as_mut(), env.clone(), mock_info(admin, &[]), msg).unwrap();
+        execute(deps.as_mut(), env.clone(), mock_info(moderator, &[]), msg).unwrap();
 
         // Check the active status again.
         let res = query(
@@ -1135,6 +1192,7 @@ mod tests {
             pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            moderator: None,
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -1273,12 +1331,134 @@ mod tests {
         // Check the current admin
         let err = query(
             deps.as_ref(),
-            env.clone(),
+            env,
             ContractQueryMsg::Transmuter(QueryMsg::GetAdmin {}),
         )
         .unwrap_err();
 
         assert_eq!(err, ContractError::Std(StdError::not_found("admin")));
+    }
+
+    #[test]
+    fn test_assign_and_remove_moderator() {
+        let admin = "admin";
+        let moderator = "moderator";
+
+        let mut deps = mock_dependencies();
+
+        // make denom has non-zero total supply
+        deps.querier
+            .update_balance("someone", vec![Coin::new(1, "uosmo"), Coin::new(1, "uion")]);
+
+        // Instantiate the contract.
+        let init_msg = InstantiateMsg {
+            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            admin: Some(admin.to_string()),
+            alloyed_asset_subdenom: "usomoion".to_string(),
+            moderator: None,
+        };
+        instantiate(deps.as_mut(), mock_env(), mock_info(admin, &[]), init_msg).unwrap();
+
+        // Check the current moderator
+        let err = query(
+            deps.as_ref(),
+            mock_env(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetModerator {}),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, ContractError::Std(StdError::not_found("moderator")));
+
+        let mut deps = mock_dependencies();
+
+        // make denom has non-zero total supply
+        deps.querier
+            .update_balance("someone", vec![Coin::new(1, "uosmo"), Coin::new(1, "uion")]);
+
+        // Instantiate the contract.
+        let init_msg = InstantiateMsg {
+            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            admin: Some(admin.to_string()),
+            alloyed_asset_subdenom: "usomoion".to_string(),
+            moderator: Some(moderator.to_string()),
+        };
+        instantiate(deps.as_mut(), mock_env(), mock_info(admin, &[]), init_msg).unwrap();
+
+        // Check the current moderator
+        let res = query(
+            deps.as_ref(),
+            mock_env(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetModerator {}),
+        )
+        .unwrap();
+        let moderator_response: GetModeratorResponse = from_binary(&res).unwrap();
+        assert_eq!(moderator_response.moderator, moderator);
+
+        let new_moderator = "new_moderator";
+
+        // Try to assign new moderator by non admin
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("non_admin", &[]),
+            ContractExecMsg::Transmuter(ExecMsg::AssignModerator {
+                address: new_moderator.to_string(),
+            }),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, ContractError::Unauthorized {});
+
+        // Assign new moderator by admin
+        execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(admin, &[]),
+            ContractExecMsg::Transmuter(ExecMsg::AssignModerator {
+                address: new_moderator.to_string(),
+            }),
+        )
+        .unwrap();
+
+        // Check the current moderator
+        let res = query(
+            deps.as_ref(),
+            mock_env(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetModerator {}),
+        )
+        .unwrap();
+        let moderator_response: GetModeratorResponse = from_binary(&res).unwrap();
+        assert_eq!(moderator_response.moderator, new_moderator);
+
+        // Try to remove moderator by non admin
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info("non_admin", &[]),
+            ContractExecMsg::Transmuter(ExecMsg::RemoveModerator {}),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, ContractError::Unauthorized {});
+
+        // Remove moderator by admin
+        execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(admin, &[]),
+            ContractExecMsg::Transmuter(ExecMsg::RemoveModerator {}),
+        )
+        .unwrap();
+
+        // Check the current moderator
+        let err = query(
+            deps.as_ref(),
+            mock_env(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetModerator {}),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, ContractError::Std(StdError::not_found("moderator")));
     }
 
     #[test]
@@ -1295,6 +1475,7 @@ mod tests {
         let init_msg = InstantiateMsg {
             pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
             admin: Some(admin.to_string()),
+            moderator: None,
             alloyed_asset_subdenom: "usomoion".to_string(),
         };
 
@@ -1712,6 +1893,7 @@ mod tests {
             pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
             alloyed_asset_subdenom: "uosmouion".to_string(),
             admin: Some(admin.to_string()),
+            moderator: None,
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -1771,6 +1953,7 @@ mod tests {
             pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            moderator: None,
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -1843,6 +2026,7 @@ mod tests {
             pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            moderator: None,
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -1958,6 +2142,7 @@ mod tests {
             pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            moderator: None,
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -2090,6 +2275,7 @@ mod tests {
             pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            moderator: None,
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -2143,6 +2329,7 @@ mod tests {
             pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            moderator: None,
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -2281,6 +2468,7 @@ mod tests {
             pool_asset_denoms: vec!["axlusdc".to_string(), "whusdc".to_string()],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "alloyedusdc".to_string(),
+            moderator: None,
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -2492,6 +2680,7 @@ mod tests {
             pool_asset_denoms: vec!["axlusdc".to_string(), "whusdc".to_string()],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "alloyedusdc".to_string(),
+            moderator: None,
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);

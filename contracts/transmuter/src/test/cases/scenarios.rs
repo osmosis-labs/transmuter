@@ -50,6 +50,7 @@ fn test_join_pool() {
             pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
             alloyed_asset_subdenom: "usdc".to_string(),
             admin: None,
+            moderator: None,
         })
         .build(&app);
 
@@ -213,6 +214,7 @@ fn test_swap() {
             pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
             alloyed_asset_subdenom: "usdc".to_string(),
             admin: None,
+            moderator: None,
         })
         .build(&app);
 
@@ -469,6 +471,7 @@ fn test_exit_pool() {
             pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
             alloyed_asset_subdenom: "usdc".to_string(),
             admin: None,
+            moderator: None,
         })
         .build(&app);
 
@@ -677,6 +680,7 @@ fn test_3_pool_swap() {
             ],
             alloyed_asset_subdenom: "usdc".to_string(),
             admin: None,
+            moderator: None,
         })
         .build(&app);
 
@@ -891,6 +895,7 @@ fn test_swap_alloyed_asset() {
             pool_asset_denoms: vec![AXL_ETH.to_string(), WH_ETH.to_string()],
             alloyed_asset_subdenom: alloyed_asset_subdenom.to_string(),
             admin: None,
+            moderator: None,
         })
         .build(&app);
 
@@ -943,6 +948,7 @@ fn test_limiters() {
             pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
             alloyed_asset_subdenom: "usdc".to_string(),
             admin: Some(admin.address()),
+            moderator: None,
         })
         .build(&app);
 

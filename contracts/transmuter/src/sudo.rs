@@ -334,6 +334,7 @@ mod tests {
             pool_asset_denoms: vec!["axlusdc".to_string(), "whusdc".to_string()],
             alloyed_asset_subdenom: "uusdc".to_string(),
             admin: Some(admin.to_string()),
+            moderator: None,
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -547,6 +548,7 @@ mod tests {
             pool_asset_denoms: vec!["axlusdc".to_string(), "whusdc".to_string()],
             alloyed_asset_subdenom: "uusdc".to_string(),
             admin: Some(admin.to_string()),
+            moderator: None,
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);

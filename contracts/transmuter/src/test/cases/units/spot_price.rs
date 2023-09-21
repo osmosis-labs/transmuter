@@ -33,6 +33,7 @@ fn test_spot_price(liquidity: &[Coin]) {
             vec!["denom0".to_string(), "denom1".to_string()],
             "transmuter/poolshare".to_string(),
             None,
+            None,
         )
         .unwrap();
 
