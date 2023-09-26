@@ -2,6 +2,7 @@ mod exit_pool;
 mod join_pool;
 mod transmute;
 mod weight;
+mod has_denom;
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{ensure, Coin, Uint64};

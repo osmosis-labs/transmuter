@@ -144,6 +144,13 @@ impl Transmuter<'_> {
         // only admin can register limiter
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
+        // ensure pool has the specified denom
+        let pool = self.pool.load(deps.storage)?;
+        ensure!(
+            pool.has_denom(&denom),
+            ContractError::InvalidPoolAssetDenom { denom }
+        );
+
         let base_attrs = vec![
             ("method", "register_limiter"),
             ("denom", &denom),
@@ -1549,6 +1556,29 @@ mod tests {
         ];
 
         assert_eq!(res.attributes, attrs);
+
+        // denom that is not in the pool can't be registered
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            mock_info(admin, &[]),
+            ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+                denom: "invalid_denom".to_string(),
+                label: "1h".to_string(),
+                limiter_params: LimiterParams::ChangeLimiter {
+                    window_config: window_config_1h.clone(),
+                    boundary_offset: Decimal::percent(1),
+                },
+            }),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::InvalidPoolAssetDenom {
+                denom: "invalid_denom".to_string(),
+            }
+        );
 
         // Query the list of limiters
         let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
