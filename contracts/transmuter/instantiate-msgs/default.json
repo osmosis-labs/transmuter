@@ -2,5 +2,6 @@
   "pool_asset_denoms": [
     "uosmo",
     "factory/osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks/uxosmo"
-  ]
+  ],
+  "alloyed_asset_subdenom": "osmo"
 }

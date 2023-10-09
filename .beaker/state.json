@@ -1,7 +1,7 @@
 {
   "testnet": {
     "transmuter": {
-      "code_id": 6879,
+      "code_id": 4642,
       "addresses": {
         "default": "osmo1spwewtr9695t6kdd070dc7vurt7nfllqg4rn3txpy9wx9nl6rf8sk8t0qs"
       },
