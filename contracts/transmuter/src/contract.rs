@@ -132,6 +132,31 @@ impl Transmuter<'_> {
     // === executes ===
 
     #[msg(exec)]
+    fn add_new_assets(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        denoms: Vec<String>,
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+
+        // only admin can add new assets
+        ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
+
+        // convert denoms to Denom type
+        let denoms = denoms
+            .into_iter()
+            .map(|denom| Denom::validate(deps.as_ref(), denom))
+            .collect::<Result<Vec<_>, ContractError>>()?;
+
+        // add new assets to the pool
+        let mut pool = self.pool.load(deps.storage)?;
+        pool.add_new_assets(&denoms)?;
+        self.pool.save(deps.storage, &pool)?;
+
+        Ok(Response::new().add_attribute("method", "add_new_assets"))
+    }
+
+    #[msg(exec)]
     fn register_limiter(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
@@ -996,6 +1021,101 @@ mod tests {
     use crate::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
     use cosmwasm_std::{attr, from_binary, SubMsgResponse, SubMsgResult, Uint64};
+
+    #[test]
+    fn test_add_new_assets() {
+        let mut deps = mock_dependencies();
+
+        // make denom has non-zero total supply
+        deps.querier.update_balance(
+            "someone",
+            vec![
+                Coin::new(1, "uosmo"),
+                Coin::new(1, "uion"),
+                Coin::new(1, "new_asset1"),
+                Coin::new(1, "new_asset2"),
+            ],
+        );
+
+        let admin = "admin";
+        let init_msg = InstantiateMsg {
+            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            alloyed_asset_subdenom: "uosmouion".to_string(),
+            admin: Some(admin.to_string()),
+            moderator: None,
+        };
+        let env = mock_env();
+        let info = mock_info(admin, &[]);
+
+        // Instantiate the contract.
+        instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap();
+
+        // Add new assets
+
+        // Attempt to add assets with invalid denom
+        let invalid_denoms = vec!["invalid_asset1".to_string(), "invalid_asset2".to_string()];
+        let add_invalid_assets_msg = ContractExecMsg::Transmuter(ExecMsg::AddNewAssets {
+            denoms: invalid_denoms,
+        });
+
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            info.clone(),
+            add_invalid_assets_msg,
+        );
+
+        // Check if the attempt resulted in DenomHasNoSupply error
+        assert_eq!(
+            res.unwrap_err(),
+            ContractError::DenomHasNoSupply {
+                denom: "invalid_asset1".to_string()
+            }
+        );
+
+        let new_assets = vec!["new_asset1".to_string(), "new_asset2".to_string()];
+        let add_assets_msg =
+            ContractExecMsg::Transmuter(ExecMsg::AddNewAssets { denoms: new_assets });
+
+        // Attempt to add assets by non-admin
+        let non_admin_info = mock_info("non_admin", &[]);
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            non_admin_info,
+            add_assets_msg.clone(),
+        );
+
+        // Check if the attempt was unauthorized
+        assert_eq!(
+            res.unwrap_err(),
+            ContractError::Unauthorized {},
+            "Adding assets by non-admin should be unauthorized"
+        );
+
+        execute(deps.as_mut(), env.clone(), info, add_assets_msg).unwrap();
+
+        // Check if the new assets were added
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetTotalPoolLiquidity {}),
+        )
+        .unwrap();
+        let GetTotalPoolLiquidityResponse {
+            total_pool_liquidity,
+        } = from_binary(&res).unwrap();
+
+        assert_eq!(
+            total_pool_liquidity,
+            vec![
+                Coin::new(0, "uosmo"),
+                Coin::new(0, "uion"),
+                Coin::new(0, "new_asset1"),
+                Coin::new(0, "new_asset2"),
+            ]
+        );
+    }
 
     #[test]
     fn test_set_active_status() {
