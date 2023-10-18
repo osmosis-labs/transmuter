@@ -3,6 +3,7 @@ pub mod contract;
 mod denom;
 mod error;
 mod limiter;
+mod migrations;
 mod role;
 mod sudo;
 mod transmuter_pool;
@@ -19,6 +20,7 @@ mod entry_points {
 
     use crate::contract::{ContractExecMsg, ContractQueryMsg, ExecMsg, InstantiateMsg, Transmuter};
     use crate::error::ContractError;
+    use crate::migrations;
     use crate::sudo::SudoMsg;
 
     const CONTRACT: Transmuter = Transmuter::new();
@@ -86,6 +88,15 @@ mod entry_points {
         );
 
         msg.dispatch(&CONTRACT, (deps, env))
+    }
+
+    #[entry_point]
+    pub fn migrate(
+        deps: DepsMut,
+        _env: Env,
+        msg: migrations::v2_1_0::MigrateMsg,
+    ) -> Result<Response, ContractError> {
+        migrations::v2_1_0::execute_migration(deps, msg)
     }
 }
 

@@ -23,8 +23,8 @@ use osmosis_std::types::{
 use sylvia::contract;
 
 /// version info for migration
-const CONTRACT_NAME: &str = "crates.io:transmuter";
-const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const CONTRACT_NAME: &str = "crates.io:transmuter";
+pub const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Swap fee is hardcoded to zero intentionally.
 const SWAP_FEE: Decimal = Decimal::zero();

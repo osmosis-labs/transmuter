@@ -9,6 +9,9 @@ pub enum ContractError {
     #[error("{0}")]
     Std(#[from] StdError),
 
+    #[error("{0}")]
+    VersionError(#[from] cw2::VersionError),
+
     #[error("Funds must be empty")]
     EmptyFundsExpected {},
 
