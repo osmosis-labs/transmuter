@@ -86,6 +86,9 @@ pub enum ContractError {
     #[error("Duplicated pool asset denom: {denom}")]
     DuplicatedPoolAssetDenom { denom: String },
 
+    #[error("Pool asset not be share denom")]
+    ShareDenomNotAllowedAsPoolAsset {},
+
     #[error("Unauthorized")]
     Unauthorized {},
 

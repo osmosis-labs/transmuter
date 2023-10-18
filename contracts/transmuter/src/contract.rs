@@ -142,6 +142,15 @@ impl Transmuter<'_> {
         // only admin can add new assets
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
+        // ensure that new denoms are not alloyed denom
+        let share_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+        for denom in &denoms {
+            ensure!(
+                denom != &share_denom,
+                ContractError::ShareDenomNotAllowedAsPoolAsset {}
+            );
+        }
+
         // convert denoms to Denom type
         let denoms = denoms
             .into_iter()
@@ -1049,6 +1058,27 @@ mod tests {
 
         // Instantiate the contract.
         instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap();
+
+        // Manually reply
+        let alloyed_denom = "usomoion";
+
+        reply(
+            deps.as_mut(),
+            env.clone(),
+            Reply {
+                id: 1,
+                result: SubMsgResult::Ok(SubMsgResponse {
+                    events: vec![],
+                    data: Some(
+                        MsgCreateDenomResponse {
+                            new_token_denom: alloyed_denom.to_string(),
+                        }
+                        .into(),
+                    ),
+                }),
+            },
+        )
+        .unwrap();
 
         // Add new assets
 
