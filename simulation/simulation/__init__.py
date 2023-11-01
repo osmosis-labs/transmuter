@@ -120,12 +120,12 @@ class Simulation:
 def init_state(reset=False):
     if "simulation" not in st.session_state or reset:
         st.session_state.simulation = Simulation(["denom1", "denom2"])
-        # TODO: check why order of limiters matter
+
         st.session_state.simulation.pool.set_limiters(
-            "denom1", [StaticLimiter(0.6), ChangeLimiter(0.001, 10)]
+            "denom1", [ChangeLimiter(0.001, 10), StaticLimiter(0.6)]
         )
         st.session_state.simulation.pool.set_limiters(
-            "denom2", [StaticLimiter(0.6), ChangeLimiter(0.001, 10)]
+            "denom2", [ChangeLimiter(0.001, 10), StaticLimiter(0.6)]
         )
 
 
@@ -133,6 +133,8 @@ init_state()
 
 
 with st.sidebar:
+    st.markdown("## Simulation parameters")
+
     timesteps = st.number_input(
         "time steps", min_value=1, max_value=10000, value=1000, step=1, key="timesteps"
     )
@@ -156,8 +158,65 @@ with st.sidebar:
             timesteps, max_action_count, amount_mean, amount_sd
         )
 
+    if st.button("Add denom"):
+        st.session_state.simulation.pool.add_new_denom("denom3")
+        st.session_state.simulation.pool.set_limiters("denom3", [StaticLimiter(0.6)])
+
     if st.button("Reset"):
         init_state(reset=True)
+
+    st.markdown("---")
+    st.markdown("## Pool config")
+
+    limiters_df = pd.DataFrame(
+        columns=[
+            "denom",
+            "limiter_type",
+            "static_upper_limit",
+            "change_offset",
+            "change_window_length",
+        ],
+        data=[
+            [
+                denom,
+                limiter.__class__.__name__,
+                limiter.upper_limit
+                if limiter.__class__.__name__ == StaticLimiter.__name__
+                else None,
+                limiter.offset
+                if limiter.__class__.__name__ == ChangeLimiter.__name__
+                else None,
+                limiter.window_length
+                if limiter.__class__.__name__ == ChangeLimiter.__name__
+                else None,
+            ]
+            for denom, limiters in st.session_state.simulation.pool.limiters.items()
+            for limiter in limiters
+        ],
+    )
+
+    updated_limiters_df = st.data_editor(
+        limiters_df, use_container_width=True, num_rows="dynamic"
+    )
+
+    # Iterate over all denominations in the pool
+    for denom in st.session_state.simulation.pool.denoms():
+        # Filter the dataframe to only include rows for the current denomination
+        denom_limiters_df = updated_limiters_df[updated_limiters_df["denom"] == denom]
+        limiters = []
+        # Iterate over each row in the filtered dataframe
+        for _, row in denom_limiters_df.iterrows():
+            # If the limiter type is StaticLimiter, create a new StaticLimiter with the specified upper limit
+            if row["limiter_type"] == StaticLimiter.__name__:
+                limiters.append(StaticLimiter(row["static_upper_limit"]))
+            # If the limiter type is ChangeLimiter, create a new ChangeLimiter with the specified offset and window length
+            elif row["limiter_type"] == ChangeLimiter.__name__:
+                limiters.append(
+                    ChangeLimiter(row["change_offset"], row["change_window_length"])
+                )
+        # Set the limiters for the current denomination in the pool
+        st.session_state.simulation.pool.set_limiters(denom, limiters)
+
 
 snapshots = st.session_state.simulation.snapshots
 if not snapshots.empty:
@@ -185,9 +244,3 @@ if not snapshots.empty:
     )
 
     st.plotly_chart(fig)
-
-
-# TODO:
-# - make limiter configurable
-# - inject simulation with config
-# - add new denom and see how simulation perform

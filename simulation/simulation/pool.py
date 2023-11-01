@@ -51,6 +51,8 @@ class Pool:
             return
 
     def set_limiters(self, denom: str, limiters: list[Limiter]):
+        if denom not in self.assets:
+            raise ValueError(f"Denom {denom} is not in the pool.")
         self.limiters[denom] = limiters
 
     def surpassed_limit(self, timestamp: int) -> bool:
@@ -60,6 +62,5 @@ class Pool:
                     return True
         return False
 
-    # TODO: add new denom and see how simulation perform
-    def add_new_denom(self, _denom: str):
-        pass
+    def add_new_denom(self, denom: str):
+        self.assets[denom] = 0

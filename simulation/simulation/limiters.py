@@ -7,6 +7,9 @@ class StaticLimiter(Limiter):
     def __init__(self, upper_limit: float) -> None:
         self.upper_limit = upper_limit
 
+    def __repr__(self):
+        return f"<StaticLimiter(upper_limit={self.upper_limit})>"
+
     def surpassed_limit(self, _timestamp: int, value: float):
         return value > self.upper_limit
 
@@ -19,6 +22,11 @@ class ChangeLimiter(Limiter):
         # window is a list of (time, weight) tuples
         self.window: list[tuple[int, float]] = []
         self.window_length = window_length
+
+    def __repr__(self):
+        return (
+            f"<ChangeLimiter(offset={self.offset}, window_length={self.window_length})>"
+        )
 
     def update(self, timestamp: int, value: float):
         """
