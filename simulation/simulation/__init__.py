@@ -1,6 +1,8 @@
 import streamlit as st
 import random
-import matplotlib.pyplot as plt
+import plotly.express as px
+import numpy as np
+
 
 from limiters import ChangeLimiter, StaticLimiter
 from pool import Pool
@@ -10,19 +12,19 @@ from pool import Pool
 """
 
 
-# Initialize pool
-pool = Pool(["denom1", "denom2"])
-
-# TODO: check why order of limiters matter
-pool.set_limiters("denom1", [StaticLimiter(0.6), ChangeLimiter(0.001, 10)])
-pool.set_limiters("denom2", [StaticLimiter(0.6), ChangeLimiter(0.001, 10)])
-
-
-actions = [pool.join_pool, pool.exit_pool, pool.swap]
-denoms = pool.denoms()
-
-
 def init_state(reset=False):
+    if "pool" not in st.session_state or reset:
+        st.session_state.pool = Pool(["denom1", "denom2"])
+        # TODO: check why order of limiters matter
+        st.session_state.pool.set_limiters(
+            "denom1", [StaticLimiter(0.6), ChangeLimiter(0.001, 10)]
+        )
+        st.session_state.pool.set_limiters(
+            "denom2", [StaticLimiter(0.6), ChangeLimiter(0.001, 10)]
+        )
+
+    denoms = st.session_state.pool.denoms()
+
     # Initialize dictionaries to store weights and timestamps for each denom
     if "total_time_steps" not in st.session_state or reset:
         st.session_state.total_time_steps = 0
@@ -37,17 +39,19 @@ def init_state(reset=False):
 
 init_state()
 
+pool = st.session_state.pool
+actions = [pool.join_pool, pool.exit_pool, pool.swap]
+denoms = pool.denoms()
+
 with st.sidebar:
     timesteps = st.number_input("time steps", min_value=1, max_value=10000, value=1000)
     max_action_count = st.number_input(
         "max action count", min_value=1, max_value=1000, value=10
     )
     amount_mean = st.number_input(
-        "amount mean", min_value=1, max_value=1000000, value=100
+        "amount mean", min_value=1, max_value=1000000, value=10
     )
-    amount_sd = st.number_input(
-        "amount sd", min_value=1, max_value=1000000, value=10000
-    )
+    amount_sd = st.number_input("amount sd", min_value=1, max_value=1000000, value=100)
 
     if st.button("Simulate more"):
         # Run simulation
@@ -63,10 +67,14 @@ with st.sidebar:
                 action = random.choice(actions)
                 denom = random.choice(denoms)
 
-                # Generate random amount (you may want to adjust this)
-                amount = random.normalvariate(amount_mean, amount_sd)
+                # Generate random amount
+                # using log normal distribution due to positive only nature of amount
+                amount = np.log(random.lognormvariate(amount_mean, amount_sd))
 
-                # Perform action
+                if amount < 0:
+                    amount = 0
+
+                # # Perform action
                 if action == pool.swap:
                     # Choose a random denom_out that is different from denom_in
                     denom_out = random.choice([d for d in denoms if d != denom])
@@ -108,36 +116,52 @@ with st.sidebar:
     if st.button("Reset"):
         init_state(reset=True)
 
-# Plot amount over time
-fig, ax = plt.subplots()
+    # Construct dataframe from timestamps, amounts, and weights
+import pandas as pd
+
+data = []
 for denom in denoms:
-    ax.plot(
-        st.session_state.timestamps[denom], st.session_state.amounts[denom], label=denom
+    for timestamp, amount, weight in zip(
+        st.session_state.timestamps[denom],
+        st.session_state.amounts[denom],
+        st.session_state.weights[denom],
+    ):
+        data.append(
+            {"denom": denom, "timestamp": timestamp, "amount": amount, "weight": weight}
+        )
+
+
+df = pd.DataFrame(data)
+
+with st.expander("Show raw simulation data"):
+    st.write(df)
+
+
+if not df.empty:
+    # Plot amount over time
+    fig = px.line(
+        df,
+        x="timestamp",
+        y="amount",
+        color="denom",
+        title="Amount over time",
     )
 
-ax.set_title("Amount over time")
-ax.set_xlabel("Time")
-ax.set_ylabel("Amount")
-ax.legend()
-st.pyplot(fig)
+    st.plotly_chart(fig)
 
-# Plot weight over time
-fig, ax = plt.subplots()
-for denom in denoms:
-    ax.plot(
-        st.session_state.timestamps[denom], st.session_state.weights[denom], label=denom
+    # Plot weight over time
+    fig = px.line(
+        df,
+        x="timestamp",
+        y="weight",
+        color="denom",
+        title="Weight over time",
     )
 
-ax.set_title("Weight over time")
-ax.set_xlabel("Time")
-ax.set_ylabel("Weight")
-ax.legend()
-st.pyplot(fig)
+    st.plotly_chart(fig)
 
 
 # TODO:
-# - check why it goes below 0
 # - make limiter configurable
 # - inject simulation with config
 # - add new denom and see how simulation perform
-# - use better interractive graph

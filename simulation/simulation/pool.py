@@ -27,7 +27,13 @@ class Pool:
             return
 
     def exit_pool(self, timestamp: int, amount: dict[str, float]):
+        amount = amount.copy()
+
         for denom in amount.keys():
+            # ensure that assets will not be negative
+            if self.assets[denom] < amount[denom]:
+                amount[denom] = self.assets[denom]
+
             self.assets[denom] -= amount[denom]
 
         if self.surpassed_limit(timestamp):
