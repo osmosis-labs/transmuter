@@ -1,6 +1,6 @@
 class Limiter:
-    def surpassed_limit(timestamp: int, value: float) -> bool:
-        pass
+    def surpassed_limit(self, _timestamp: int, _value: float) -> bool:
+        raise NotImplementedError
 
 
 class StaticLimiter(Limiter):
@@ -17,7 +17,7 @@ class ChangeLimiter(Limiter):
         self.offset = offset
 
         # window is a list of (time, weight) tuples
-        self.window: list[(int, float)] = []
+        self.window: list[tuple[int, float]] = []
         self.window_length = window_length
 
     def update(self, timestamp: int, value: float):

@@ -3,7 +3,7 @@ from limiters import Limiter
 
 class Pool:
     def __init__(self, denoms: list[str]):
-        self.assets = {denom: 0 for denom in denoms}
+        self.assets = {denom: 0.0 for denom in denoms}
         self.limiters = {denom: [] for denom in denoms}
 
     def denoms(self) -> list[str]:
@@ -61,5 +61,5 @@ class Pool:
         return False
 
     # TODO: add new denom and see how simulation perform
-    def add_new_denom(denom: str):
+    def add_new_denom(self, _denom: str):
         pass
