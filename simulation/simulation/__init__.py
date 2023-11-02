@@ -22,6 +22,16 @@ class Simulation:
             columns=["denom", "timestamp", "amount", "weight"]
         )
 
+    def join_pool(self, amount: dict[str, float]):
+        latest_timestamp: int = (
+            self.snapshots["timestamp"].max(skipna=True)
+            if not self.snapshots.empty
+            else 0
+        )
+        timestamp = latest_timestamp + 1
+        self.pool.join_pool(timestamp, amount)
+        self.record_snapshot(timestamp)
+
     def run(
         self,
         timesteps: int,
@@ -34,11 +44,12 @@ class Simulation:
             if not self.snapshots.empty
             else 0
         )
+        starting_timestamp = latest_timestamp + 1
         denoms = self.pool.denoms()
 
         for timestamp in range(
-            latest_timestamp,
-            latest_timestamp + timesteps,
+            starting_timestamp,
+            starting_timestamp + timesteps,
         ):  # Adjust this to the number of iterations you want
             # Randomly choose 0-10 action count for each timestamp
             action_count = random.randint(0, int(max_action_count))
@@ -92,29 +103,32 @@ class Simulation:
                 else:
                     raise Exception("Action not implemented")
 
-            # Record snapshot
-            new_snapshots = pd.DataFrame(
+            self.record_snapshot(timestamp)
+
+    def record_snapshot(self, timestamp):
+        denoms = self.pool.denoms()
+        new_snapshots = pd.DataFrame(
+            [
+                {
+                    "denom": denom,
+                    "timestamp": timestamp,
+                    "amount": self.pool.assets[denom],
+                    "weight": self.pool.weight(denom),
+                }
+                for denom in denoms
+            ]
+        )
+        self.snapshots = (
+            pd.concat(
                 [
-                    {
-                        "denom": denom,
-                        "timestamp": timestamp,
-                        "amount": self.pool.assets[denom],
-                        "weight": self.pool.weight(denom),
-                    }
-                    for denom in denoms
-                ]
+                    self.snapshots,
+                    new_snapshots,
+                ],
+                ignore_index=True,
             )
-            self.snapshots = (
-                pd.concat(
-                    [
-                        self.snapshots,
-                        new_snapshots,
-                    ],
-                    ignore_index=True,
-                )
-                if not self.snapshots.empty
-                else new_snapshots
-            )
+            if not self.snapshots.empty
+            else new_snapshots
+        )
 
 
 def init_state(reset=False):
@@ -159,14 +173,52 @@ with st.sidebar:
         )
 
     if st.button("Add denom"):
-        st.session_state.simulation.pool.add_new_denom("denom3")
-        st.session_state.simulation.pool.set_limiters("denom3", [StaticLimiter(0.6)])
+        denom_count = len(st.session_state.simulation.pool.denoms())
+        st.session_state.simulation.pool.add_new_denom(f"denom{denom_count + 1}")
 
     if st.button("Reset"):
         init_state(reset=True)
 
     st.markdown("---")
-    st.markdown("## Pool config")
+
+    st.markdown("## Perform actions")
+
+    # create selectbox for each avaialble action
+    action = st.selectbox("action", ["join_pool", "exit_pool", "swap"])
+    if action == "join_pool":
+        # create editable dataframe for amount
+        amount_df = pd.DataFrame(
+            columns=["denom", "amount"],
+            data=[[denom, 0.0] for denom in st.session_state.simulation.pool.denoms()],
+        )
+
+        updated_amount_df = st.data_editor(
+            amount_df,
+            use_container_width=True,
+        )
+
+        # turn df into dict for join_pool
+        amount = {
+            row["denom"]: row["amount"]
+            for _, row in updated_amount_df.iterrows()
+            if row["amount"] > 0
+        }
+
+        if st.button("Join pool"):
+            st.session_state.simulation.join_pool(amount)
+            st.write(st.session_state.simulation.pool.assets)
+
+    elif action == "exit_pool":
+        "<todo>"
+    elif action == "swap":
+        "<todo>"
+
+    st.markdown("---")
+
+    st.markdown("## Denoms")
+    st.write(", ".join(st.session_state.simulation.pool.denoms()))
+
+    st.markdown("## Limiters")
 
     limiters_df = pd.DataFrame(
         columns=[
@@ -222,6 +274,11 @@ snapshots = st.session_state.simulation.snapshots
 if not snapshots.empty:
     with st.expander("Show raw simulation snapshots"):
         st.write(snapshots)
+
+    # latest amount and weight for each denom
+    latest = snapshots.groupby("denom").last()[["amount", "weight"]]
+
+    st.write(latest)
 
     # Plot amount over time
     fig = px.line(
