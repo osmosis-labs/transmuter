@@ -206,12 +206,52 @@ with st.sidebar:
 
         if st.button("Join pool"):
             st.session_state.simulation.join_pool(amount)
-            st.write(st.session_state.simulation.pool.assets)
+
 
     elif action == "exit_pool":
-        "<todo>"
+        # create editable dataframe for amount
+        amount_df = pd.DataFrame(
+            columns=["denom", "amount"],
+            data=[[denom, 0.0] for denom in st.session_state.simulation.pool.denoms()],
+        )
+
+        updated_amount_df = st.data_editor(
+            amount_df,
+            use_container_width=True,
+        )
+
+        # turn df into dict for exit_pool
+        amount = {
+            row["denom"]: row["amount"]
+            for _, row in updated_amount_df.iterrows()
+            if row["amount"] > 0
+        }
+
+        if st.button("Exit pool"):
+            st.session_state.simulation.exit_pool(amount)
+
+
     elif action == "swap":
-        "<todo>"
+        # select denom_in and denom_out from denoms
+        denom_in = st.selectbox(
+            "denom_in", st.session_state.simulation.pool.denoms(), index=0
+        )
+
+        denom_out = st.selectbox(
+            "denom_out", st.session_state.simulation.pool.denoms(), index=1
+        )
+
+        # create number input for amount
+        amount = st.number_input(
+            "amount",
+            min_value=0.0,
+            max_value=min(st.session_state.simulation.pool.assets[denom_in], st.session_state.simulation.pool.assets[denom_out]),
+            value=0.0,
+        )
+
+        if st.button("Swap"):
+            st.session_state.simulation.swap(denom_in, denom_out, amount)
+
 
     st.markdown("---")
 
