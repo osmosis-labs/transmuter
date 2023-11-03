@@ -9,7 +9,7 @@ from limiters import ChangeLimiter, StaticLimiter
 from pool import Pool
 
 """
-# Transmuter Limiter Simulation
+# 🔄 Transmuter Simulation
 """
 
 
@@ -162,7 +162,7 @@ init_state()
 
 
 with st.sidebar:
-    st.header("Control Panel")
+    st.header("🕹️ Control Panel")
     st.markdown("## Simulation")
 
     timesteps = st.number_input(
@@ -345,7 +345,9 @@ with st.sidebar:
 
 
 snapshots = st.session_state.simulation.snapshots
-if not snapshots.empty:
+if snapshots.empty:
+    st.info("👈  Start your simulation via __🕹️️ Control Panel__ on the left sidebar")
+else:
     with st.expander("Show raw simulation snapshots"):
         st.dataframe(snapshots, use_container_width=True)
 
