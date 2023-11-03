@@ -167,7 +167,14 @@ init_state()
 
 with st.sidebar:
     st.header("🕹️ Control Panel")
-    st.markdown("## Simulation")
+    st.markdown("""
+    ## Simulation
+
+    Run the simulation with the following parameters.
+    You can hit `Simulate` multiple times to generate more data points.
+
+    Hit `Reset` to reset the simulation.
+    """)
 
     timesteps = st.number_input(
         "time steps", help="How many times the simulation should run (resulted in newly simulated data points)", min_value=1, max_value=10000, value=1000, step=1, key="timesteps"
@@ -197,18 +204,14 @@ with st.sidebar:
             timesteps, max_action_count, amount_mean, amount_sd
         )
 
-    if st.button("Add denom"):
-        denom_count = len(st.session_state.simulation.pool.denoms())
-        denom = f"denom{denom_count + 1}"
-        st.session_state.simulation.pool.add_new_denom(denom)
-        st.toast(f"Added `{denom}`", icon="🤌")
-
     if st.button("Reset"):
         init_state(reset=True)
 
     st.markdown("---")
 
     st.markdown("## Perform actions")
+
+    st.markdown("Perform specific actions on the pool. This is useful for forcing the pool into a desired state, or simply testing the limiters.")
 
     # create selectbox for each avaialble action
     action = st.selectbox("action", ["join_pool", "exit_pool", "swap"])
@@ -298,10 +301,25 @@ with st.sidebar:
 
     st.markdown("---")
 
-    st.markdown("## Denoms")
-    st.write(", ".join(st.session_state.simulation.pool.denoms()))
+    st.markdown("## Pool Config")
+    st.markdown("### Denoms")
 
-    st.markdown("## Limiters")
+    st.markdown("All denoms avialable in the pool, add new denoms via the button below.")
+
+    if st.button("Add denom"):
+        denom_count = len(st.session_state.simulation.pool.denoms())
+        denom = f"denom{denom_count + 1}"
+        st.session_state.simulation.pool.add_new_denom(denom)
+        st.toast(f"Added `{denom}`", icon="🤌")
+
+    st.write(", ".join(map(lambda denom: f"`{denom}`", st.session_state.simulation.pool.denoms())))
+
+    st.markdown("""
+    ### Limiters
+
+    Limiters listed below are editable. Feel free to change the values or add new ones.
+    Then you can try performing actions / run simulations to see if the limiters are working as expected.
+    """)
 
     limiters_df = pd.DataFrame(
         columns=[
