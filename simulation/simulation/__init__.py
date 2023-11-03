@@ -29,20 +29,23 @@ class Simulation:
             else 0
         )
 
-    def join_pool(self, amount: dict[str, float]):
+    def join_pool(self, amount: dict[str, float]) -> bool:
         timestamp = self.latest_timestamp() + 1
-        self.pool.join_pool(timestamp, amount)
+        ok = self.pool.join_pool(timestamp, amount)
         self.record_snapshot(timestamp)
+        return ok
 
-    def exit_pool(self, amount: dict[str, float]):
+    def exit_pool(self, amount: dict[str, float]) -> bool:
         timestamp = self.latest_timestamp() + 1
-        self.pool.exit_pool(timestamp, amount)
+        ok = self.pool.exit_pool(timestamp, amount)
         self.record_snapshot(timestamp)
+        return ok
 
-    def swap(self, denom_in: str, denom_out: str, amount: float):
+    def swap(self, denom_in: str, denom_out: str, amount: float) -> bool:
         timestamp = self.latest_timestamp() + 1
-        self.pool.swap(denom_in, denom_out, timestamp, amount)
+        ok = self.pool.swap(denom_in, denom_out, timestamp, amount)
         self.record_snapshot(timestamp)
+        return ok
 
     def run(
         self,
@@ -159,7 +162,8 @@ init_state()
 
 
 with st.sidebar:
-    st.markdown("## Simulation parameters")
+    st.header("Control Panel")
+    st.markdown("## Simulation")
 
     timesteps = st.number_input(
         "time steps", min_value=1, max_value=10000, value=1000, step=1, key="timesteps"
@@ -179,7 +183,7 @@ with st.sidebar:
         "amount sd", min_value=1, max_value=1000000, value=100, key="amount_sd"
     )
 
-    if st.button("Simulate more"):
+    if st.button("Simulate"):
         st.session_state.simulation.run(
             timesteps, max_action_count, amount_mean, amount_sd
         )
@@ -219,11 +223,13 @@ with st.sidebar:
         }
 
         if st.button("Join pool"):
-            st.session_state.simulation.join_pool(amount)
-            timestamp = st.session_state.simulation.latest_timestamp()
+            if st.session_state.simulation.join_pool(amount):
+                timestamp = st.session_state.simulation.latest_timestamp()
 
-            for denom, amount in amount.items():
-                st.toast(f"Joined pool: `{amount} {denom}` @ `{timestamp}`", icon="🔥")
+                for denom, amount in amount.items():
+                    st.toast(f"Joined pool: `{amount} {denom}` @ `{timestamp}`", icon="🔥")
+            else:
+                st.error("🤦 Join pool failed ")
 
 
     elif action == "exit_pool":
@@ -246,11 +252,13 @@ with st.sidebar:
         }
 
         if st.button("Exit pool"):
-            st.session_state.simulation.exit_pool(amount)
-            timestamp = st.session_state.simulation.latest_timestamp()
+            if st.session_state.simulation.exit_pool(amount):
+                timestamp = st.session_state.simulation.latest_timestamp()
 
-            for denom, amount in amount.items():
-                st.toast(f"Exited pool: `{amount} {denom}` @ `{timestamp}`", icon="🔥")
+                for denom, amount in amount.items():
+                    st.toast(f"Exited pool: `{amount} {denom}` @ `{timestamp}`", icon="🔥")
+            else:
+                st.error("🤦 Exit pool failed ")
 
 
     elif action == "swap":
@@ -272,10 +280,11 @@ with st.sidebar:
         )
 
         if st.button("Swap"):
-            st.session_state.simulation.swap(denom_in, denom_out, amount)
-            timestamp = st.session_state.simulation.latest_timestamp()
-
-            st.toast(f"Swapped: `{amount} {denom_in}` for `{denom_out}` @ `{timestamp}`", icon="🔥")
+            if st.session_state.simulation.swap(denom_in, denom_out, amount):
+                timestamp = st.session_state.simulation.latest_timestamp()
+                st.toast(f"Swapped: `{amount} {denom_in}` for `{denom_out}` @ `{timestamp}`", icon="🔥")
+            else:
+                st.error("🤦 Swap failed")
 
 
     st.markdown("---")

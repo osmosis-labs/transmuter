@@ -17,16 +17,19 @@ class Pool:
 
     # =======
 
-    def join_pool(self, timestamp: int, amount: dict[str, float]):
+    def join_pool(self, timestamp: int, amount: dict[str, float]) -> bool:
         for denom in amount.keys():
             self.assets[denom] += amount[denom]
 
-        if self.surpassed_limit(timestamp):
+        ok = not self.surpassed_limit(timestamp)
+        
+        if not ok:
             for denom in amount.keys():
                 self.assets[denom] -= amount[denom]
-            return
+        
+        return ok
 
-    def exit_pool(self, timestamp: int, amount: dict[str, float]):
+    def exit_pool(self, timestamp: int, amount: dict[str, float]) -> bool:
         amount = amount.copy()
 
         for denom in amount.keys():
@@ -36,19 +39,25 @@ class Pool:
 
             self.assets[denom] -= amount[denom]
 
-        if self.surpassed_limit(timestamp):
+        ok = not self.surpassed_limit(timestamp)
+        
+        if not ok:
             for denom in amount.keys():
                 self.assets[denom] += amount[denom]
-            return
+        
+        return ok
 
-    def swap(self, denom_in: str, denom_out: str, timestamp: int, amount: float):
+    def swap(self, denom_in: str, denom_out: str, timestamp: int, amount: float) -> bool:
         self.assets[denom_in] += amount
         self.assets[denom_out] -= amount
 
-        if self.surpassed_limit(timestamp):
+        ok = not self.surpassed_limit(timestamp)
+        
+        if not ok:
             self.assets[denom_in] -= amount
             self.assets[denom_out] += amount
-            return
+        
+        return ok
 
     def set_limiters(self, denom: str, limiters: list[Limiter]):
         if denom not in self.assets:
