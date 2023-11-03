@@ -22,14 +22,26 @@ class Simulation:
             columns=["denom", "timestamp", "amount", "weight"]
         )
 
-    def join_pool(self, amount: dict[str, float]):
-        latest_timestamp: int = (
+    def latest_timestamp(self):
+        return (
             self.snapshots["timestamp"].max(skipna=True)
             if not self.snapshots.empty
             else 0
         )
-        timestamp = latest_timestamp + 1
+
+    def join_pool(self, amount: dict[str, float]):
+        timestamp = self.latest_timestamp() + 1
         self.pool.join_pool(timestamp, amount)
+        self.record_snapshot(timestamp)
+
+    def exit_pool(self, amount: dict[str, float]):
+        timestamp = self.latest_timestamp() + 1
+        self.pool.exit_pool(timestamp, amount)
+        self.record_snapshot(timestamp)
+
+    def swap(self, denom_in: str, denom_out: str, amount: float):
+        timestamp = self.latest_timestamp() + 1
+        self.pool.swap(denom_in, denom_out, timestamp, amount)
         self.record_snapshot(timestamp)
 
     def run(
@@ -174,7 +186,9 @@ with st.sidebar:
 
     if st.button("Add denom"):
         denom_count = len(st.session_state.simulation.pool.denoms())
-        st.session_state.simulation.pool.add_new_denom(f"denom{denom_count + 1}")
+        denom = f"denom{denom_count + 1}"
+        st.session_state.simulation.pool.add_new_denom(denom)
+        st.toast(f"Added `{denom}`", icon="🤌")
 
     if st.button("Reset"):
         init_state(reset=True)
@@ -206,6 +220,10 @@ with st.sidebar:
 
         if st.button("Join pool"):
             st.session_state.simulation.join_pool(amount)
+            timestamp = st.session_state.simulation.latest_timestamp()
+
+            for denom, amount in amount.items():
+                st.toast(f"Joined pool: `{amount} {denom}` @ `{timestamp}`", icon="🔥")
 
 
     elif action == "exit_pool":
@@ -229,6 +247,10 @@ with st.sidebar:
 
         if st.button("Exit pool"):
             st.session_state.simulation.exit_pool(amount)
+            timestamp = st.session_state.simulation.latest_timestamp()
+
+            for denom, amount in amount.items():
+                st.toast(f"Exited pool: `{amount} {denom}` @ `{timestamp}`", icon="🔥")
 
 
     elif action == "swap":
@@ -251,6 +273,9 @@ with st.sidebar:
 
         if st.button("Swap"):
             st.session_state.simulation.swap(denom_in, denom_out, amount)
+            timestamp = st.session_state.simulation.latest_timestamp()
+
+            st.toast(f"Swapped: `{amount} {denom_in}` for `{denom_out}` @ `{timestamp}`", icon="🔥")
 
 
     st.markdown("---")
@@ -313,7 +338,7 @@ with st.sidebar:
 snapshots = st.session_state.simulation.snapshots
 if not snapshots.empty:
     with st.expander("Show raw simulation snapshots"):
-        st.write(snapshots)
+        st.dataframe(snapshots, use_container_width=True)
 
     # latest amount and weight for each denom
     latest = snapshots.groupby("denom").last()[["amount", "weight"]]
