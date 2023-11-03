@@ -8,9 +8,13 @@ import pandas as pd
 from limiters import ChangeLimiter, StaticLimiter
 from pool import Pool
 
-"""
-# 🔄 Transmuter Simulation
-"""
+st.set_page_config(
+    page_title="Transmuter Simulation",
+    page_icon="🔄",
+    layout="centered",
+    initial_sidebar_state="expanded",
+)
+st.title("🔄 Transmuter Simulation")
 
 
 class Simulation:
@@ -166,10 +170,11 @@ with st.sidebar:
     st.markdown("## Simulation")
 
     timesteps = st.number_input(
-        "time steps", min_value=1, max_value=10000, value=1000, step=1, key="timesteps"
+        "time steps", help="How many times the simulation should run (resulted in newly simulated data points)", min_value=1, max_value=10000, value=1000, step=1, key="timesteps"
     )
     max_action_count = st.number_input(
         "max action count",
+        help="Max actions per time step, each action is either join_pool, exit_pool or swap. Actual action count will be randomly generated. This is simulating the possibility of multiple actions per block.",
         min_value=1,
         max_value=1000,
         value=10,
@@ -177,10 +182,14 @@ with st.sidebar:
         key="max_action_count",
     )
     amount_mean = st.number_input(
-        "amount mean", min_value=1, max_value=1000000, value=10, key="amount_mean"
+        "amount mean",
+        help="Mean of the amount to be generated for each action. The distribution is log normal (= no negative amount).",
+        min_value=1, max_value=1000000, value=10, key="amount_mean"
     )
     amount_sd = st.number_input(
-        "amount sd", min_value=1, max_value=1000000, value=100, key="amount_sd"
+        "amount sd", 
+        help="Standard deviation of the amount to be generated for each action. The distribution is log normal (= no negative amount).",
+        min_value=1, max_value=1000000, value=100, key="amount_sd"
     )
 
     if st.button("Simulate"):
