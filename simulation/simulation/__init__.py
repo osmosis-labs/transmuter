@@ -167,213 +167,257 @@ init_state()
 
 with st.sidebar:
     st.header("🕹️ Control Panel")
-    st.markdown("""
-    ## Simulation
 
-    Run the simulation with the following parameters.
-    You can hit `Simulate` multiple times to generate more data points.
-
-    Hit `Reset` to reset the simulation.
-    """)
-
-    timesteps = st.number_input(
-        "time steps", help="How many times the simulation should run (resulted in newly simulated data points)", min_value=1, max_value=10000, value=1000, step=1, key="timesteps"
-    )
-    max_action_count = st.number_input(
-        "max action count",
-        help="Max actions per time step, each action is either join_pool, exit_pool or swap. Actual action count will be randomly generated. This is simulating the possibility of multiple actions per block.",
-        min_value=1,
-        max_value=1000,
-        value=10,
-        step=1,
-        key="max_action_count",
-    )
-    amount_mean = st.number_input(
-        "amount mean",
-        help="Mean of the amount to be generated for each action. The distribution is log normal (= no negative amount).",
-        min_value=1, max_value=1000000, value=10, key="amount_mean"
-    )
-    amount_sd = st.number_input(
-        "amount sd", 
-        help="Standard deviation of the amount to be generated for each action. The distribution is log normal (= no negative amount).",
-        min_value=1, max_value=1000000, value=100, key="amount_sd"
+    simulation_tab, perform_action_tab, pool_config_tab = st.tabs(
+        ["Simulation", "Perform Action", "Pool Config"]
     )
 
-    if st.button("Simulate"):
-        st.session_state.simulation.run(
-            timesteps, max_action_count, amount_mean, amount_sd
+    with pool_config_tab:
+        st.markdown("## Pool Config")
+        st.markdown("### Denoms")
+
+        st.markdown(
+            "All denoms avialable in the pool, add new denoms via the button below."
         )
 
-    if st.button("Reset"):
-        init_state(reset=True)
+        if st.button("Add denom"):
+            denom_count = len(st.session_state.simulation.pool.denoms())
+            denom = f"denom{denom_count + 1}"
+            st.session_state.simulation.pool.add_new_denom(denom)
+            st.toast(f"Added `{denom}`", icon="🤌")
 
-    st.markdown("---")
-
-    st.markdown("## Perform actions")
-
-    st.markdown("Perform specific actions on the pool. This is useful for forcing the pool into a desired state, or simply testing the limiters.")
-
-    # create selectbox for each avaialble action
-    action = st.selectbox("action", ["join_pool", "exit_pool", "swap"])
-    if action == "join_pool":
-        # create editable dataframe for amount
-        amount_df = pd.DataFrame(
-            columns=["denom", "amount"],
-            data=[[denom, 0.0] for denom in st.session_state.simulation.pool.denoms()],
-        )
-
-        updated_amount_df = st.data_editor(
-            amount_df,
-            use_container_width=True,
-        )
-
-        # turn df into dict for join_pool
-        amount = {
-            row["denom"]: row["amount"]
-            for _, row in updated_amount_df.iterrows()
-            if row["amount"] > 0
-        }
-
-        if st.button("Join pool"):
-            if st.session_state.simulation.join_pool(amount):
-                timestamp = st.session_state.simulation.latest_timestamp()
-
-                for denom, amount in amount.items():
-                    st.toast(f"Joined pool: `{amount} {denom}` @ `{timestamp}`", icon="🔥")
-            else:
-                st.error("🤦 Join pool failed ")
-
-
-    elif action == "exit_pool":
-        # create editable dataframe for amount
-        amount_df = pd.DataFrame(
-            columns=["denom", "amount"],
-            data=[[denom, 0.0] for denom in st.session_state.simulation.pool.denoms()],
-        )
-
-        updated_amount_df = st.data_editor(
-            amount_df,
-            use_container_width=True,
-        )
-
-        # turn df into dict for exit_pool
-        amount = {
-            row["denom"]: row["amount"]
-            for _, row in updated_amount_df.iterrows()
-            if row["amount"] > 0
-        }
-
-        if st.button("Exit pool"):
-            if st.session_state.simulation.exit_pool(amount):
-                timestamp = st.session_state.simulation.latest_timestamp()
-
-                for denom, amount in amount.items():
-                    st.toast(f"Exited pool: `{amount} {denom}` @ `{timestamp}`", icon="🔥")
-            else:
-                st.error("🤦 Exit pool failed ")
-
-
-    elif action == "swap":
-        # select denom_in and denom_out from denoms
-        denom_in = st.selectbox(
-            "denom_in", st.session_state.simulation.pool.denoms(), index=0
-        )
-
-        denom_out = st.selectbox(
-            "denom_out", st.session_state.simulation.pool.denoms(), index=1
-        )
-
-        # create number input for amount
-        amount = st.number_input(
-            "amount",
-            min_value=0.0,
-            max_value=min(st.session_state.simulation.pool.assets[denom_in], st.session_state.simulation.pool.assets[denom_out]),
-            value=0.0,
-        )
-
-        if st.button("Swap"):
-            if st.session_state.simulation.swap(denom_in, denom_out, amount):
-                timestamp = st.session_state.simulation.latest_timestamp()
-                st.toast(f"Swapped: `{amount} {denom_in}` for `{denom_out}` @ `{timestamp}`", icon="🔥")
-            else:
-                st.error("🤦 Swap failed")
-
-
-    st.markdown("---")
-
-    st.markdown("## Pool Config")
-    st.markdown("### Denoms")
-
-    st.markdown("All denoms avialable in the pool, add new denoms via the button below.")
-
-    if st.button("Add denom"):
-        denom_count = len(st.session_state.simulation.pool.denoms())
-        denom = f"denom{denom_count + 1}"
-        st.session_state.simulation.pool.add_new_denom(denom)
-        st.toast(f"Added `{denom}`", icon="🤌")
-
-    st.write(", ".join(map(lambda denom: f"`{denom}`", st.session_state.simulation.pool.denoms())))
-
-    st.markdown("""
-    ### Limiters
-
-    Limiters listed below are editable. Feel free to change the values or add new ones.
-    Then you can try performing actions / run simulations to see if the limiters are working as expected.
-    """)
-
-    limiters_df = pd.DataFrame(
-        columns=[
-            "denom",
-            "limiter_type",
-            "static_upper_limit",
-            "change_offset",
-            "change_window_length",
-        ],
-        data=[
-            [
-                denom,
-                limiter.__class__.__name__,
-                limiter.upper_limit
-                if limiter.__class__.__name__ == StaticLimiter.__name__
-                else None,
-                limiter.offset
-                if limiter.__class__.__name__ == ChangeLimiter.__name__
-                else None,
-                limiter.window_length
-                if limiter.__class__.__name__ == ChangeLimiter.__name__
-                else None,
-            ]
-            for denom, limiters in st.session_state.simulation.pool.limiters.items()
-            for limiter in limiters
-        ],
-    )
-
-    updated_limiters_df = st.data_editor(
-        limiters_df, use_container_width=True, num_rows="dynamic"
-    )
-
-    # Iterate over all denominations in the pool
-    for denom in st.session_state.simulation.pool.denoms():
-        # Filter the dataframe to only include rows for the current denomination
-        denom_limiters_df = updated_limiters_df[updated_limiters_df["denom"] == denom]
-        limiters = []
-        # Iterate over each row in the filtered dataframe
-        for _, row in denom_limiters_df.iterrows():
-            # If the limiter type is StaticLimiter, create a new StaticLimiter with the specified upper limit
-            if row["limiter_type"] == StaticLimiter.__name__:
-                limiters.append(StaticLimiter(row["static_upper_limit"]))
-            # If the limiter type is ChangeLimiter, create a new ChangeLimiter with the specified offset and window length
-            elif row["limiter_type"] == ChangeLimiter.__name__:
-                limiters.append(
-                    ChangeLimiter(row["change_offset"], row["change_window_length"])
+        st.write(
+            ", ".join(
+                map(
+                    lambda denom: f"`{denom}`",
+                    st.session_state.simulation.pool.denoms(),
                 )
-        # Set the limiters for the current denomination in the pool
-        st.session_state.simulation.pool.set_limiters(denom, limiters)
+            )
+        )
+
+        st.markdown(
+            """
+        ### Limiters
+
+        Limiters listed below are editable. Feel free to change the values or add new ones.
+        Then you can try performing actions / run simulations to see if the limiters are working as expected.
+        """
+        )
+
+        limiters_df = pd.DataFrame(
+            columns=[
+                "denom",
+                "limiter_type",
+                "static_upper_limit",
+                "change_offset",
+                "change_window_length",
+            ],
+            data=[
+                [
+                    denom,
+                    limiter.__class__.__name__,
+                    limiter.upper_limit
+                    if limiter.__class__.__name__ == StaticLimiter.__name__
+                    else None,
+                    limiter.offset
+                    if limiter.__class__.__name__ == ChangeLimiter.__name__
+                    else None,
+                    limiter.window_length
+                    if limiter.__class__.__name__ == ChangeLimiter.__name__
+                    else None,
+                ]
+                for denom, limiters in st.session_state.simulation.pool.limiters.items()
+                for limiter in limiters
+            ],
+        )
+
+        updated_limiters_df = st.data_editor(
+            limiters_df, use_container_width=True, num_rows="dynamic"
+        )
+
+        # Iterate over all denominations in the pool
+        for denom in st.session_state.simulation.pool.denoms():
+            # Filter the dataframe to only include rows for the current denomination
+            denom_limiters_df = updated_limiters_df[
+                updated_limiters_df["denom"] == denom
+            ]
+            limiters = []
+            # Iterate over each row in the filtered dataframe
+            for _, row in denom_limiters_df.iterrows():
+                # If the limiter type is StaticLimiter, create a new StaticLimiter with the specified upper limit
+                if row["limiter_type"] == StaticLimiter.__name__:
+                    limiters.append(StaticLimiter(row["static_upper_limit"]))
+                # If the limiter type is ChangeLimiter, create a new ChangeLimiter with the specified offset and window length
+                elif row["limiter_type"] == ChangeLimiter.__name__:
+                    limiters.append(
+                        ChangeLimiter(row["change_offset"], row["change_window_length"])
+                    )
+            # Set the limiters for the current denomination in the pool
+            st.session_state.simulation.pool.set_limiters(denom, limiters)
+
+    with simulation_tab:
+        st.markdown(
+            """
+        ## Simulation
+
+        Run the simulation with the following parameters.
+        You can hit `Simulate` multiple times to generate more data points.
+
+        Hit `Reset` to reset the simulation.
+        """
+        )
+
+        timesteps = st.number_input(
+            "time steps",
+            help="How many times the simulation should run (resulted in newly simulated data points)",
+            min_value=1,
+            max_value=10000,
+            value=1000,
+            step=1,
+            key="timesteps",
+        )
+        max_action_count = st.number_input(
+            "max action count",
+            help="Max actions per time step, each action is either join_pool, exit_pool or swap. Actual action count will be randomly generated. This is simulating the possibility of multiple actions per block.",
+            min_value=1,
+            max_value=1000,
+            value=10,
+            step=1,
+            key="max_action_count",
+        )
+        amount_mean = st.number_input(
+            "amount mean",
+            help="Mean of the amount to be generated for each action. The distribution is log normal (= no negative amount).",
+            min_value=1,
+            max_value=1000000,
+            value=10,
+            key="amount_mean",
+        )
+        amount_sd = st.number_input(
+            "amount sd",
+            help="Standard deviation of the amount to be generated for each action. The distribution is log normal (= no negative amount).",
+            min_value=1,
+            max_value=1000000,
+            value=100,
+            key="amount_sd",
+        )
+
+        if st.button("Simulate"):
+            st.session_state.simulation.run(
+                timesteps, max_action_count, amount_mean, amount_sd
+            )
+
+        if st.button("Reset"):
+            init_state(reset=True)
+
+    with perform_action_tab:
+        st.markdown("## Perform actions")
+
+        st.markdown(
+            "Perform specific actions on the pool. This is useful for forcing the pool into a desired state, or simply testing the limiters."
+        )
+
+        # create selectbox for each avaialble action
+        action = st.selectbox("action", ["join_pool", "exit_pool", "swap"])
+        if action == "join_pool":
+            # create editable dataframe for amount
+            amount_df = pd.DataFrame(
+                columns=["denom", "amount"],
+                data=[
+                    [denom, 0.0] for denom in st.session_state.simulation.pool.denoms()
+                ],
+            )
+
+            updated_amount_df = st.data_editor(
+                amount_df,
+                use_container_width=True,
+            )
+
+            # turn df into dict for join_pool
+            amount = {
+                row["denom"]: row["amount"]
+                for _, row in updated_amount_df.iterrows()
+                if row["amount"] > 0
+            }
+
+            if st.button("Join pool"):
+                if st.session_state.simulation.join_pool(amount):
+                    timestamp = st.session_state.simulation.latest_timestamp()
+
+                    for denom, amount in amount.items():
+                        st.toast(
+                            f"Joined pool: `{amount} {denom}` @ `{timestamp}`", icon="🔥"
+                        )
+                else:
+                    st.error("🤦 Join pool failed ")
+
+        elif action == "exit_pool":
+            # create editable dataframe for amount
+            amount_df = pd.DataFrame(
+                columns=["denom", "amount"],
+                data=[
+                    [denom, 0.0] for denom in st.session_state.simulation.pool.denoms()
+                ],
+            )
+
+            updated_amount_df = st.data_editor(
+                amount_df,
+                use_container_width=True,
+            )
+
+            # turn df into dict for exit_pool
+            amount = {
+                row["denom"]: row["amount"]
+                for _, row in updated_amount_df.iterrows()
+                if row["amount"] > 0
+            }
+
+            if st.button("Exit pool"):
+                if st.session_state.simulation.exit_pool(amount):
+                    timestamp = st.session_state.simulation.latest_timestamp()
+
+                    for denom, amount in amount.items():
+                        st.toast(
+                            f"Exited pool: `{amount} {denom}` @ `{timestamp}`", icon="🔥"
+                        )
+                else:
+                    st.error("🤦 Exit pool failed ")
+
+        elif action == "swap":
+            # select denom_in and denom_out from denoms
+            denom_in = st.selectbox(
+                "denom_in", st.session_state.simulation.pool.denoms(), index=0
+            )
+
+            denom_out = st.selectbox(
+                "denom_out", st.session_state.simulation.pool.denoms(), index=1
+            )
+
+            # create number input for amount
+            amount = st.number_input(
+                "amount",
+                min_value=0.0,
+                max_value=min(
+                    st.session_state.simulation.pool.assets[denom_in],
+                    st.session_state.simulation.pool.assets[denom_out],
+                ),
+                value=0.0,
+            )
+
+            if st.button("Swap"):
+                if st.session_state.simulation.swap(denom_in, denom_out, amount):
+                    timestamp = st.session_state.simulation.latest_timestamp()
+                    st.toast(
+                        f"Swapped: `{amount} {denom_in}` for `{denom_out}` @ `{timestamp}`",
+                        icon="🔥",
+                    )
+                else:
+                    st.error("🤦 Swap failed")
 
 
 snapshots = st.session_state.simulation.snapshots
 if snapshots.empty:
-    st.info("👈  Start your simulation via __🕹️️ Control Panel__ on the left sidebar")
+    st.info("👈  Start your simulation via __️️️ Control Panel__ on the left sidebar")
 else:
     with st.expander("Show raw simulation snapshots"):
         st.dataframe(snapshots, use_container_width=True)
