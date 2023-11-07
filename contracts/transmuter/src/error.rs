@@ -9,6 +9,9 @@ pub enum ContractError {
     #[error("{0}")]
     Std(#[from] StdError),
 
+    #[error("{0}")]
+    VersionError(#[from] cw2::VersionError),
+
     #[error("Funds must be empty")]
     EmptyFundsExpected {},
 
@@ -80,8 +83,14 @@ pub enum ContractError {
     #[error("The pool is currently inactive")]
     InactivePool {},
 
-    #[error("YUnexpected denom: expected: {expected}, actual: {actual}")]
+    #[error("Unexpected denom: expected: {expected}, actual: {actual}")]
     UnexpectedDenom { expected: String, actual: String },
+
+    #[error("Duplicated pool asset denom: {denom}")]
+    DuplicatedPoolAssetDenom { denom: String },
+
+    #[error("Pool asset not be share denom")]
+    ShareDenomNotAllowedAsPoolAsset {},
 
     #[error("Unauthorized")]
     Unauthorized {},

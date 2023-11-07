@@ -1,8 +1,11 @@
+mod add_new_assets;
 mod exit_pool;
+mod has_denom;
 mod join_pool;
 mod transmute;
 mod weight;
-mod has_denom;
+
+use std::collections::HashSet;
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{ensure, Coin, Uint64};
@@ -26,8 +29,21 @@ pub struct TransmuterPool {
 
 impl TransmuterPool {
     pub fn new(pool_asset_denoms: &[Denom]) -> Result<Self, ContractError> {
-        let count = Uint64::new(pool_asset_denoms.len() as u64);
+        let pool = Self {
+            pool_assets: pool_asset_denoms
+                .iter()
+                .map(|denom| Coin::new(0, denom.as_str()))
+                .collect(),
+        };
 
+        pool.ensure_no_duplicated_denom()?;
+        pool.ensure_pool_asset_count_within_range()?;
+
+        Ok(pool)
+    }
+
+    fn ensure_pool_asset_count_within_range(&self) -> Result<(), ContractError> {
+        let count = Uint64::new(self.pool_assets.len() as u64);
         ensure!(
             count >= MIN_POOL_ASSET_DENOMS && count <= MAX_POOL_ASSET_DENOMS,
             ContractError::PoolAssetDenomCountOutOfRange {
@@ -36,13 +52,23 @@ impl TransmuterPool {
                 actual: count
             }
         );
+        Ok(())
+    }
 
-        Ok(Self {
-            pool_assets: pool_asset_denoms
-                .iter()
-                .map(|denom| Coin::new(0, denom.as_str()))
-                .collect(),
-        })
+    fn ensure_no_duplicated_denom(&self) -> Result<(), ContractError> {
+        let mut denoms = HashSet::new();
+
+        for asset in self.pool_assets.iter() {
+            let is_new = denoms.insert(asset.denom.as_str());
+            ensure!(
+                is_new,
+                ContractError::DuplicatedPoolAssetDenom {
+                    denom: asset.denom.clone(),
+                }
+            );
+        }
+
+        Ok(())
     }
 }
 
@@ -94,6 +120,17 @@ mod tests {
                 min: MIN_POOL_ASSET_DENOMS,
                 max: MAX_POOL_ASSET_DENOMS,
                 actual: Uint64::new(21),
+            }
+        );
+    }
+
+    #[test]
+    fn test_duplicated_denom() {
+        let denoms: Vec<Denom> = vec![Denom::unchecked("a"), Denom::unchecked("a")];
+        assert_eq!(
+            TransmuterPool::new(&denoms).unwrap_err(),
+            ContractError::DuplicatedPoolAssetDenom {
+                denom: "a".to_string(),
             }
         );
     }
