@@ -5,6 +5,7 @@ use crate::ContractError;
 use super::TransmuterPool;
 
 impl TransmuterPool {
+    // TODO: take normalization factor into account to how much the resulted token_out will be
     pub fn transmute(
         &mut self,
         token_in: &Coin,

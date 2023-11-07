@@ -50,6 +50,7 @@ impl<'a> AlloyedAsset<'a> {
     }
 
     /// calculate the amount of alloyed asset to mint/burn
+    // TODO: take normalization factor into account
     pub fn amount_from(tokens: &[Coin]) -> StdResult<Uint128> {
         let mut total = Uint128::zero();
         for coin in tokens {

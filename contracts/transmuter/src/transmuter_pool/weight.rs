@@ -8,6 +8,7 @@ impl TransmuterPool {
     /// All weights of each pool assets. Returns pairs of (denom, weight)
     /// If total pool asset amount is zero, returns None to signify that
     /// it makes no sense to calculate ratios, but not an error.
+    // TODO: take normalization factor into account to how much the resulted weight will be
     pub fn weights(&self) -> Result<Option<Vec<(String, Decimal)>>, ContractError> {
         let total_pool_asset_amount = self.total_pool_assets()?;
 

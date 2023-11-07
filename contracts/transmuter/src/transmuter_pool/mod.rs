@@ -24,6 +24,7 @@ const MAX_POOL_ASSET_DENOMS: Uint64 = Uint64::new(20u64);
 #[cw_serde]
 pub struct TransmuterPool {
     /// incoming coins are stored here
+    // TODO: turn this into asset info, which includes normalization factor
     pub pool_assets: Vec<Coin>,
 }
 

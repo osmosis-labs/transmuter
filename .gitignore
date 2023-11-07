@@ -17,3 +17,5 @@ artifacts/
 **/state.local.json
 
 tarpaulin-report.html
+
+.idea
