@@ -160,6 +160,9 @@ pub enum ContractError {
     #[error("Modifying wrong limiter type: expected: {expected}, actual: {actual}")]
     WrongLimiterType { expected: String, actual: String },
 
+    #[error("Normalization factor must be positive but got: {normalization_factor}")]
+    NormalizationFactorMustBePositive { normalization_factor: Uint128 },
+
     #[error("{0}")]
     OverflowError(#[from] OverflowError),
 

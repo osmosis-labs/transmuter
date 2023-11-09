@@ -21,8 +21,8 @@ impl TransmuterPool {
             .iter()
             .map(|pool_asset| {
                 let ratio =
-                    Decimal::checked_from_ratio(pool_asset.amount, total_pool_asset_amount)?;
-                Ok((pool_asset.denom.to_string(), ratio))
+                    Decimal::checked_from_ratio(pool_asset.amount(), total_pool_asset_amount)?;
+                Ok((pool_asset.denom().to_string(), ratio))
             })
             .collect::<Result<_, ContractError>>()?;
 
@@ -32,7 +32,7 @@ impl TransmuterPool {
     fn total_pool_assets(&self) -> Result<Uint128, ContractError> {
         self.pool_assets
             .iter()
-            .map(|pool_asset| pool_asset.amount)
+            .map(|pool_asset| pool_asset.amount())
             .fold(Ok(Uint128::zero()), |acc, amount| {
                 acc.and_then(|acc| acc.checked_add(amount).map_err(Into::into))
             })
@@ -45,12 +45,17 @@ mod tests {
 
     use cosmwasm_std::Coin;
 
+    use crate::asset::Asset;
+
     use super::*;
 
     #[test]
     fn test_all_ratios() {
         let pool = TransmuterPool {
-            pool_assets: vec![Coin::new(6000, "axlusdc"), Coin::new(4000, "whusdc")],
+            pool_assets: Asset::unchecked_equal_assets_from_coins(&[
+                Coin::new(6000, "axlusdc"),
+                Coin::new(4000, "whusdc"),
+            ]),
         };
 
         let ratios = pool.weights().unwrap();
@@ -63,7 +68,10 @@ mod tests {
         );
 
         let pool = TransmuterPool {
-            pool_assets: vec![Coin::new(0, "axlusdc"), Coin::new(9999, "whusdc")],
+            pool_assets: Asset::unchecked_equal_assets_from_coins(&[
+                Coin::new(0, "axlusdc"),
+                Coin::new(9999, "whusdc"),
+            ]),
         };
 
         let ratios = pool.weights().unwrap();
@@ -76,11 +84,11 @@ mod tests {
         );
 
         let pool = TransmuterPool {
-            pool_assets: vec![
+            pool_assets: Asset::unchecked_equal_assets_from_coins(&[
                 Coin::new(2, "axlusdc"),
                 Coin::new(9999, "whusdc"),
                 Coin::new(9999, "xusdc"),
-            ],
+            ]),
         };
 
         let ratios = pool.weights().unwrap();
@@ -97,7 +105,10 @@ mod tests {
     #[test]
     fn test_all_ratios_when_total_pool_assets_is_zero() {
         let pool = TransmuterPool {
-            pool_assets: vec![Coin::new(0, "axlusdc"), Coin::new(0, "whusdc")],
+            pool_assets: Asset::unchecked_equal_assets_from_coins(&[
+                Coin::new(0, "axlusdc"),
+                Coin::new(0, "whusdc"),
+            ]),
         };
 
         let ratios = pool.weights().unwrap();

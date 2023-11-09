@@ -18,14 +18,14 @@ impl TransmuterPool {
         let pool_asset_by_denom = |denom: &str| {
             self.pool_assets
                 .iter()
-                .find(|pool_asset| pool_asset.denom == denom)
+                .find(|pool_asset| pool_asset.denom() == denom)
         };
 
         // get all pool asset denoms
         let pool_asset_denoms: Vec<String> = self
             .pool_assets
             .iter()
-            .map(|pool_asset| pool_asset.denom.clone())
+            .map(|pool_asset| pool_asset.denom().to_string())
             .collect();
 
         // check if token_in is in pool_assets
@@ -46,28 +46,32 @@ impl TransmuterPool {
 
         // ensure there is enough token_out_denom in the pool
         ensure!(
-            token_out_pool_asset.amount >= token_in.amount,
+            token_out_pool_asset.amount() >= token_in.amount,
             ContractError::InsufficientPoolAsset {
                 required: token_out,
-                available: token_out_pool_asset.clone()
+                available: token_out_pool_asset.to_coin()
             }
         );
 
         for pool_asset in &mut self.pool_assets {
             // increase token in from pool assets
-            if token_in.denom == pool_asset.denom {
-                pool_asset.amount = pool_asset
-                    .amount
-                    .checked_add(token_in.amount)
-                    .map_err(StdError::overflow)?;
+            if token_in.denom == pool_asset.denom() {
+                pool_asset.update_amount(|amount| {
+                    amount
+                        .checked_add(token_in.amount)
+                        .map_err(StdError::overflow)
+                        .map_err(ContractError::Std)
+                })?;
             }
 
             // decrease token out from pool assets
-            if token_out.denom == pool_asset.denom {
-                pool_asset.amount = pool_asset
-                    .amount
-                    .checked_sub(token_in.amount)
-                    .map_err(StdError::overflow)?;
+            if token_out.denom == pool_asset.denom() {
+                pool_asset.update_amount(|amount| {
+                    amount
+                        .checked_sub(token_in.amount)
+                        .map_err(StdError::overflow)
+                        .map_err(ContractError::Std)
+                })?;
             }
         }
 
@@ -77,7 +81,7 @@ impl TransmuterPool {
 
 #[cfg(test)]
 mod tests {
-    use crate::denom::Denom;
+    use crate::asset::Asset;
 
     use super::*;
     const ETH_USDC: &str = "ibc/AXLETHUSDC";
@@ -86,8 +90,7 @@ mod tests {
     #[test]
     fn test_transmute_succeed() {
         let mut pool =
-            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)])
-                .unwrap();
+            TransmuterPool::new(Asset::unchecked_equal_assets(&[ETH_USDC, COSMOS_USDC])).unwrap();
 
         pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
         assert_eq!(
@@ -120,7 +123,10 @@ mod tests {
 
         assert_eq!(
             pool.pool_assets,
-            vec![Coin::new(170_000, ETH_USDC), Coin::new(0, COSMOS_USDC),]
+            Asset::unchecked_equal_assets_from_coins(&[
+                Coin::new(170_000, ETH_USDC),
+                Coin::new(0, COSMOS_USDC),
+            ])
         );
 
         assert_eq!(
@@ -131,15 +137,18 @@ mod tests {
 
         assert_eq!(
             pool.pool_assets,
-            vec![Coin::new(70_000, ETH_USDC), Coin::new(100_000, COSMOS_USDC)]
+            Asset::unchecked_equal_assets_from_coins(&[
+                Coin::new(70_000, ETH_USDC),
+                Coin::new(100_000, COSMOS_USDC)
+            ])
         );
     }
 
     #[test]
     fn test_transmute_token_out_denom_eq_token_in_denom() {
         let mut pool =
-            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)])
-                .unwrap();
+            TransmuterPool::new(Asset::unchecked_equal_assets(&[ETH_USDC, COSMOS_USDC])).unwrap();
+
         pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
 
         let token_in = Coin::new(70_000, COSMOS_USDC);
@@ -149,8 +158,7 @@ mod tests {
     #[test]
     fn test_transmute_fail_token_out_not_enough() {
         let mut pool =
-            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)])
-                .unwrap();
+            TransmuterPool::new(Asset::unchecked_equal_assets(&[ETH_USDC, COSMOS_USDC])).unwrap();
 
         pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
         assert_eq!(
@@ -166,8 +174,7 @@ mod tests {
     #[test]
     fn test_transmute_fail_token_in_not_allowed() {
         let mut pool =
-            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)])
-                .unwrap();
+            TransmuterPool::new(Asset::unchecked_equal_assets(&[ETH_USDC, COSMOS_USDC])).unwrap();
 
         pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
         assert_eq!(
@@ -183,8 +190,7 @@ mod tests {
     #[test]
     fn test_transmute_fail_token_out_denom_not_allowed() {
         let mut pool =
-            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)])
-                .unwrap();
+            TransmuterPool::new(Asset::unchecked_equal_assets(&[ETH_USDC, COSMOS_USDC])).unwrap();
 
         pool.join_pool(&[Coin::new(70_000, COSMOS_USDC)]).unwrap();
         assert_eq!(

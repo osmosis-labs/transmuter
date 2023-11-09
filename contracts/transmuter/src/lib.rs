@@ -1,7 +1,6 @@
 mod alloyed_asset;
 mod asset;
 pub mod contract;
-mod denom;
 mod error;
 mod limiter;
 mod migrations;

@@ -42,7 +42,10 @@ fn test_add_new_assets() {
         .contract
         .execute(
             &crate::contract::ExecMsg::AddNewAssets {
-                denoms: denoms.clone(),
+                asset_configs: denoms
+                    .iter()
+                    .map(|denom| AssetConfig::from_denom_str(denom.as_str()))
+                    .collect(),
             },
             &[],
             &t.accounts["non_admin"],
@@ -53,7 +56,12 @@ fn test_add_new_assets() {
 
     t.contract
         .execute(
-            &crate::contract::ExecMsg::AddNewAssets { denoms },
+            &crate::contract::ExecMsg::AddNewAssets {
+                asset_configs: denoms
+                    .iter()
+                    .map(|denom| AssetConfig::from_denom_str(denom.as_str()))
+                    .collect(),
+            },
             &[],
             &t.accounts["admin"],
         )
@@ -90,7 +98,7 @@ fn test_add_new_assets() {
         .contract
         .execute(
             &crate::contract::ExecMsg::AddNewAssets {
-                denoms: vec![alloyed_denom.clone()],
+                asset_configs: vec![AssetConfig::from_denom_str(alloyed_denom.as_str())],
             },
             &[],
             &t.accounts["admin"],

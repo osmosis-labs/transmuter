@@ -1,7 +1,6 @@
 use crate::{
     alloyed_asset::AlloyedAsset,
-    asset::AssetConfig,
-    denom::Denom,
+    asset::{Asset, AssetConfig},
     ensure_admin_authority, ensure_moderator_authority,
     error::ContractError,
     limiter::{Limiter, LimiterParams, Limiters},
@@ -86,14 +85,14 @@ impl Transmuter<'_> {
                 .init(deps.storage, deps.api.addr_validate(&moderator)?)?;
         }
 
-        let pool_asset_denoms = pool_asset_configs
+        let pool_assets = pool_asset_configs
             .into_iter()
-            .map(|info| Denom::validate(deps.as_ref(), info.denom))
+            .map(|config| AssetConfig::checked_init_asset(config, deps.as_ref()))
             .collect::<Result<Vec<_>, ContractError>>()?;
 
         // store pool
         self.pool
-            .save(deps.storage, &TransmuterPool::new(&pool_asset_denoms)?)?;
+            .save(deps.storage, &TransmuterPool::new(pool_assets)?)?;
 
         // set active status to true
         self.active_status.save(deps.storage, &true)?;
@@ -136,7 +135,7 @@ impl Transmuter<'_> {
     fn add_new_assets(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
-        denoms: Vec<String>,
+        asset_configs: Vec<AssetConfig>,
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
@@ -145,22 +144,22 @@ impl Transmuter<'_> {
 
         // ensure that new denoms are not alloyed denom
         let share_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
-        for denom in &denoms {
+        for cfg in &asset_configs {
             ensure!(
-                denom != &share_denom,
+                cfg.denom != share_denom,
                 ContractError::ShareDenomNotAllowedAsPoolAsset {}
             );
         }
 
         // convert denoms to Denom type
-        let denoms = denoms
+        let assets = asset_configs
             .into_iter()
-            .map(|denom| Denom::validate(deps.as_ref(), denom))
+            .map(|cfg| cfg.checked_init_asset(deps.as_ref()))
             .collect::<Result<Vec<_>, ContractError>>()?;
 
         // add new assets to the pool
         let mut pool = self.pool.load(deps.storage)?;
-        pool.add_new_assets(&denoms)?;
+        pool.add_new_assets(assets)?;
         self.pool.save(deps.storage, &pool)?;
 
         Ok(Response::new().add_attribute("method", "add_new_assets"))
@@ -610,7 +609,7 @@ impl Transmuter<'_> {
         let pool = self.pool.load(deps.storage)?;
 
         Ok(GetTotalPoolLiquidityResponse {
-            total_pool_liquidity: pool.pool_assets,
+            total_pool_liquidity: pool.pool_assets.iter().map(Asset::to_coin).collect(),
         })
     }
 
@@ -637,7 +636,7 @@ impl Transmuter<'_> {
         let swappable_assets = pool
             .pool_assets
             .iter()
-            .map(|c| c.denom.clone())
+            .map(|c| c.denom().to_string())
             .chain(vec![alloyed_denom])
             .collect::<Vec<_>>();
 
@@ -1089,7 +1088,10 @@ mod tests {
         // Attempt to add assets with invalid denom
         let invalid_denoms = vec!["invalid_asset1".to_string(), "invalid_asset2".to_string()];
         let add_invalid_assets_msg = ContractExecMsg::Transmuter(ExecMsg::AddNewAssets {
-            denoms: invalid_denoms,
+            asset_configs: invalid_denoms
+                .into_iter()
+                .map(|denom| AssetConfig::from_denom_str(denom.as_str()))
+                .collect(),
         });
 
         let res = execute(
@@ -1108,8 +1110,12 @@ mod tests {
         );
 
         let new_assets = vec!["new_asset1".to_string(), "new_asset2".to_string()];
-        let add_assets_msg =
-            ContractExecMsg::Transmuter(ExecMsg::AddNewAssets { denoms: new_assets });
+        let add_assets_msg = ContractExecMsg::Transmuter(ExecMsg::AddNewAssets {
+            asset_configs: new_assets
+                .into_iter()
+                .map(|denom| AssetConfig::from_denom_str(denom.as_str()))
+                .collect(),
+        });
 
         // Attempt to add assets by non-admin
         let non_admin_info = mock_info("non_admin", &[]);

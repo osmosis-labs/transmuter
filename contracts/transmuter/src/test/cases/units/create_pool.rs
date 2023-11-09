@@ -65,5 +65,3 @@ fn test_create_pool() {
     let IsActiveResponse { is_active } = t.contract.query(&QueryMsg::IsActive {}).unwrap();
     assert!(is_active);
 }
-
-// TODO: test create pool with invalid denom
