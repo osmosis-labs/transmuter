@@ -12,6 +12,8 @@ const TO_VERSION: &str = "2.1.0";
 #[cw_serde]
 pub struct MigrateMsg {}
 
+// TODO: add normalization factor for each asset
+
 pub fn execute_migration(deps: DepsMut, _msg: MigrateMsg) -> Result<Response, ContractError> {
     // Assert that the stored contract version matches the expected version before migration
     cw2::assert_contract_version(deps.storage, CONTRACT_NAME, FROM_VERSION)?;
