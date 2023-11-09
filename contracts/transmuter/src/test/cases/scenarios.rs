@@ -1,6 +1,7 @@
 use std::{str::FromStr, vec};
 
 use crate::{
+    asset::AssetConfig,
     contract::{
         ExecMsg, GetShareDenomResponse, GetSharesResponse, GetTotalPoolLiquidityResponse,
         GetTotalSharesResponse, InstantiateMsg, ListLimitersResponse, QueryMsg,
@@ -47,7 +48,10 @@ fn test_join_pool() {
             vec![Coin::new(2_000, COSMOS_USDC), Coin::new(2_000, AXL_USDC)],
         )
         .with_instantiate_msg(InstantiateMsg {
-            pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str(AXL_USDC),
+                AssetConfig::from_denom_str(COSMOS_USDC),
+            ],
             alloyed_asset_subdenom: "usdc".to_string(),
             admin: None,
             moderator: None,
@@ -211,7 +215,10 @@ fn test_swap() {
         .with_account("bob", vec![Coin::new(29_902, AXL_USDC)])
         .with_account("provider", vec![Coin::new(200_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
-            pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str(AXL_USDC),
+                AssetConfig::from_denom_str(COSMOS_USDC),
+            ],
             alloyed_asset_subdenom: "usdc".to_string(),
             admin: None,
             moderator: None,
@@ -468,7 +475,10 @@ fn test_exit_pool() {
         .with_account("provider_1", vec![Coin::new(100_000, COSMOS_USDC)])
         .with_account("provider_2", vec![Coin::new(100_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
-            pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str(AXL_USDC),
+                AssetConfig::from_denom_str(COSMOS_USDC),
+            ],
             alloyed_asset_subdenom: "usdc".to_string(),
             admin: None,
             moderator: None,
@@ -673,10 +683,10 @@ fn test_3_pool_swap() {
         .with_account("bob", vec![Coin::new(1_500, AXL_DAI)])
         .with_account("provider", vec![Coin::new(100_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
-            pool_asset_denoms: vec![
-                AXL_USDC.to_string(),
-                AXL_DAI.to_string(),
-                COSMOS_USDC.to_string(),
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str(AXL_USDC),
+                AssetConfig::from_denom_str(AXL_DAI),
+                AssetConfig::from_denom_str(COSMOS_USDC),
             ],
             alloyed_asset_subdenom: "usdc".to_string(),
             admin: None,
@@ -892,7 +902,10 @@ fn test_swap_alloyed_asset() {
             vec![Coin::new(100_000, AXL_ETH), Coin::new(100_000, WH_ETH)],
         )
         .with_instantiate_msg(InstantiateMsg {
-            pool_asset_denoms: vec![AXL_ETH.to_string(), WH_ETH.to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str(AXL_ETH),
+                AssetConfig::from_denom_str(WH_ETH),
+            ],
             alloyed_asset_subdenom: alloyed_asset_subdenom.to_string(),
             admin: None,
             moderator: None,
@@ -945,7 +958,10 @@ fn test_limiters() {
             ],
         )
         .with_instantiate_msg(InstantiateMsg {
-            pool_asset_denoms: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str(AXL_USDC),
+                AssetConfig::from_denom_str(COSMOS_USDC),
+            ],
             alloyed_asset_subdenom: "usdc".to_string(),
             admin: Some(admin.address()),
             moderator: None,

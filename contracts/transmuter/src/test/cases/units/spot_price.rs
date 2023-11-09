@@ -3,7 +3,7 @@ use cosmwasm_std::{
     Coin, Decimal,
 };
 
-use crate::{contract::Transmuter, ContractError};
+use crate::{asset::AssetConfig, contract::Transmuter, ContractError};
 
 #[test]
 fn test_spot_price_on_balanced_liquidity_must_be_one() {
@@ -30,7 +30,10 @@ fn test_spot_price(liquidity: &[Coin]) {
     transmuter
         .instantiate(
             (deps.as_mut(), mock_env(), mock_info("creator", &[])),
-            vec!["denom0".to_string(), "denom1".to_string()],
+            vec![
+                AssetConfig::from_denom_str("denom0"),
+                AssetConfig::from_denom_str("denom1"),
+            ],
             "transmuter/poolshare".to_string(),
             None,
             None,

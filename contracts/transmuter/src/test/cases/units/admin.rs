@@ -6,6 +6,7 @@ use osmosis_std::types::cosmos::bank::v1beta1::{
 use osmosis_test_tube::{OsmosisTestApp, Runner};
 
 use crate::{
+    asset::AssetConfig,
     contract::{ExecMsg, GetShareDenomResponse, InstantiateMsg, QueryMsg},
     test::test_env::{assert_contract_err, TestEnvBuilder},
 };
@@ -26,7 +27,10 @@ fn test_admin_set_denom_metadata() {
             vec![Coin::new(100_000, AXL_ETH), Coin::new(100_000, WH_ETH)],
         )
         .with_instantiate_msg(InstantiateMsg {
-            pool_asset_denoms: vec![AXL_ETH.to_string(), WH_ETH.to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str(AXL_ETH),
+                AssetConfig::from_denom_str(WH_ETH),
+            ],
             alloyed_asset_subdenom: alloyed_asset_subdenom.to_string(),
             admin: None,
             moderator: None,

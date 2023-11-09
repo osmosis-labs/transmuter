@@ -7,6 +7,7 @@ use osmosis_std::types::osmosis::poolmanager::v1beta1::{
 
 use osmosis_test_tube::{Account, Bank, Module, OsmosisTestApp};
 
+use crate::asset::AssetConfig;
 use crate::contract::{
     ExecMsg, GetShareDenomResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse, QueryMsg,
 };
@@ -413,7 +414,10 @@ fn pool_with_single_lp(app: &'_ OsmosisTestApp, pool_assets: Vec<Coin>) -> TestE
                 .collect(),
         )
         .with_instantiate_msg(crate::contract::InstantiateMsg {
-            pool_asset_denoms: pool_assets.iter().map(|c| c.denom.clone()).collect(),
+            pool_asset_configs: pool_assets
+                .iter()
+                .map(|c| AssetConfig::from_denom_str(c.denom.as_str()))
+                .collect(),
             alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
             admin: None,
             moderator: None,

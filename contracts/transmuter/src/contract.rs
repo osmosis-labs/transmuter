@@ -1,5 +1,6 @@
 use crate::{
     alloyed_asset::AlloyedAsset,
+    asset::AssetConfig,
     denom::Denom,
     ensure_admin_authority, ensure_moderator_authority,
     error::ContractError,
@@ -61,7 +62,7 @@ impl Transmuter<'_> {
     pub fn instantiate(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
-        pool_asset_denoms: Vec<String>,
+        pool_asset_configs: Vec<AssetConfig>,
         alloyed_asset_subdenom: String,
         admin: Option<String>,
         moderator: Option<String>,
@@ -85,9 +86,9 @@ impl Transmuter<'_> {
                 .init(deps.storage, deps.api.addr_validate(&moderator)?)?;
         }
 
-        let pool_asset_denoms = pool_asset_denoms
+        let pool_asset_denoms = pool_asset_configs
             .into_iter()
-            .map(|denom| Denom::validate(deps.as_ref(), denom))
+            .map(|info| Denom::validate(deps.as_ref(), info.denom))
             .collect::<Result<Vec<_>, ContractError>>()?;
 
         // store pool
@@ -1048,7 +1049,10 @@ mod tests {
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             alloyed_asset_subdenom: "uosmouion".to_string(),
             admin: Some(admin.to_string()),
             moderator: None,
@@ -1158,7 +1162,10 @@ mod tests {
         let admin = "admin";
         let moderator = "moderator";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             alloyed_asset_subdenom: "uosmouion".to_string(),
             admin: Some(admin.to_string()),
             moderator: Some(moderator.to_string()),
@@ -1346,7 +1353,10 @@ mod tests {
         let rejecting_candidate = "rejecting_candidate";
         let candidate = "candidate";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
             moderator: None,
@@ -1509,7 +1519,10 @@ mod tests {
 
         // Instantiate the contract.
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
             moderator: None,
@@ -1534,7 +1547,10 @@ mod tests {
 
         // Instantiate the contract.
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
             moderator: Some(moderator.to_string()),
@@ -1630,7 +1646,10 @@ mod tests {
         let admin = "admin";
         let user = "user";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             moderator: None,
             alloyed_asset_subdenom: "usomoion".to_string(),
@@ -2070,7 +2089,10 @@ mod tests {
         let admin = "admin";
         let non_admin = "non_admin";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             alloyed_asset_subdenom: "uosmouion".to_string(),
             admin: Some(admin.to_string()),
             moderator: None,
@@ -2130,7 +2152,10 @@ mod tests {
         let admin = "admin";
         let user = "user";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
             moderator: None,
@@ -2203,7 +2228,10 @@ mod tests {
         let admin = "admin";
         let user = "user";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
             moderator: None,
@@ -2319,7 +2347,10 @@ mod tests {
         let user_1 = "user_1";
         let user_2 = "user_2";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
             moderator: None,
@@ -2452,7 +2483,10 @@ mod tests {
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
             moderator: None,
@@ -2506,7 +2540,10 @@ mod tests {
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
             moderator: None,
@@ -2645,7 +2682,10 @@ mod tests {
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["axlusdc".to_string(), "whusdc".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("axlusdc"),
+                AssetConfig::from_denom_str("whusdc"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "alloyedusdc".to_string(),
             moderator: None,
@@ -2857,7 +2897,10 @@ mod tests {
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["axlusdc".to_string(), "whusdc".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("axlusdc"),
+                AssetConfig::from_denom_str("whusdc"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "alloyedusdc".to_string(),
             moderator: None,

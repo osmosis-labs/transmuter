@@ -307,6 +307,7 @@ pub struct SwapExactAmountOutResponseData {
 mod tests {
     use super::*;
     use crate::{
+        asset::AssetConfig,
         contract::{ContractExecMsg, ExecMsg, InstantiateMsg},
         execute, instantiate, reply, sudo,
     };
@@ -331,7 +332,10 @@ mod tests {
         let admin = "admin";
         let user = "user";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["axlusdc".to_string(), "whusdc".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("axlusdc"),
+                AssetConfig::from_denom_str("whusdc"),
+            ],
             alloyed_asset_subdenom: "uusdc".to_string(),
             admin: Some(admin.to_string()),
             moderator: None,
@@ -545,7 +549,10 @@ mod tests {
         let admin = "admin";
         let user = "user";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["axlusdc".to_string(), "whusdc".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("axlusdc"),
+                AssetConfig::from_denom_str("whusdc"),
+            ],
             alloyed_asset_subdenom: "uusdc".to_string(),
             admin: Some(admin.to_string()),
             moderator: None,

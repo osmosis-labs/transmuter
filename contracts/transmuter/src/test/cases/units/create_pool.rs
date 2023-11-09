@@ -1,6 +1,9 @@
-use crate::contract::{
-    GetShareDenomResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse, InstantiateMsg,
-    IsActiveResponse, QueryMsg,
+use crate::{
+    asset::AssetConfig,
+    contract::{
+        GetShareDenomResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse,
+        InstantiateMsg, IsActiveResponse, QueryMsg,
+    },
 };
 use cosmwasm_std::{Coin, Uint128};
 use osmosis_test_tube::OsmosisTestApp;
@@ -17,7 +20,10 @@ fn test_create_pool() {
 
     let t = TestEnvBuilder::new()
         .with_instantiate_msg(InstantiateMsg {
-            pool_asset_denoms: vec!["denom1".to_string(), "denom2".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("denom1"),
+                AssetConfig::from_denom_str("denom2"),
+            ],
             admin: None,
             alloyed_asset_subdenom: "denomx".to_string(),
             moderator: None,

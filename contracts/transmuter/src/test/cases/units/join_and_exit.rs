@@ -5,6 +5,7 @@ use itertools::Itertools;
 use osmosis_test_tube::{Account, OsmosisTestApp};
 
 use crate::{
+    asset::AssetConfig,
     contract::{
         ExecMsg, GetShareDenomResponse, GetSharesResponse, GetTotalPoolLiquidityResponse,
         GetTotalSharesResponse, InstantiateMsg, QueryMsg,
@@ -63,7 +64,10 @@ fn test_join_pool_with_single_lp_should_update_shares_and_liquidity_properly() {
         let app = OsmosisTestApp::new();
 
         // Find missing denom from funds
-        let all_denoms = vec!["denoma".to_string(), "denomb".to_string()];
+        let all_denoms = vec![
+            AssetConfig::from_denom_str("denoma"),
+            AssetConfig::from_denom_str("denomb"),
+        ];
         let funds_denoms = case
             .funds
             .iter()
@@ -73,7 +77,8 @@ fn test_join_pool_with_single_lp_should_update_shares_and_liquidity_properly() {
 
         let missing_denoms = all_denoms
             .into_iter()
-            .filter(|d| !funds_denoms.contains(d))
+            .filter(|info| !funds_denoms.contains(&info.denom))
+            .map(|info| info.denom)
             .collect::<Vec<_>>();
 
         // make supply non-zero
@@ -84,7 +89,10 @@ fn test_join_pool_with_single_lp_should_update_shares_and_liquidity_properly() {
         let t = TestEnvBuilder::new()
             .with_account("provider", case.funds.clone())
             .with_instantiate_msg(crate::contract::InstantiateMsg {
-                pool_asset_denoms: vec!["denoma".to_string(), "denomb".to_string()],
+                pool_asset_configs: vec![
+                    AssetConfig::from_denom_str("denoma"),
+                    AssetConfig::from_denom_str("denomb"),
+                ],
                 alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
                 admin: None,
                 moderator: None,
@@ -195,7 +203,10 @@ fn test_join_pool_should_update_shares_and_liquidity_properly() {
         let mut builder = TestEnvBuilder::new();
 
         // Find missing denom from joins
-        let all_denoms = vec!["denoma".to_string(), "denomb".to_string()];
+        let all_denoms = vec![
+            AssetConfig::from_denom_str("denoma"),
+            AssetConfig::from_denom_str("denomb"),
+        ];
         let join_denoms = case
             .joins
             .iter()
@@ -205,7 +216,8 @@ fn test_join_pool_should_update_shares_and_liquidity_properly() {
 
         let missing_denoms = all_denoms
             .into_iter()
-            .filter(|d| !join_denoms.contains(d))
+            .filter(|info| !join_denoms.contains(&info.denom))
+            .map(|info| info.denom)
             .collect::<Vec<_>>();
 
         // make supply non-zero
@@ -219,7 +231,10 @@ fn test_join_pool_should_update_shares_and_liquidity_properly() {
 
         let t = builder
             .with_instantiate_msg(InstantiateMsg {
-                pool_asset_denoms: vec!["denoma".to_string(), "denomb".to_string()],
+                pool_asset_configs: vec![
+                    AssetConfig::from_denom_str("denoma"),
+                    AssetConfig::from_denom_str("denomb"),
+                ],
                 alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
                 admin: None,
                 moderator: None,
@@ -338,7 +353,10 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
                 ],
             )
             .with_instantiate_msg(InstantiateMsg {
-                pool_asset_denoms: vec!["denoma".to_string(), "denomb".to_string()],
+                pool_asset_configs: vec![
+                    AssetConfig::from_denom_str("denoma"),
+                    AssetConfig::from_denom_str("denomb"),
+                ],
                 alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
                 admin: None,
                 moderator: None,
@@ -534,7 +552,10 @@ fn test_exit_pool_greater_than_their_shares_should_fail() {
         let t = TestEnvBuilder::new()
             .with_account("addr", case.join.clone())
             .with_instantiate_msg(InstantiateMsg {
-                pool_asset_denoms: vec!["denoma".to_string(), "denomb".to_string()],
+                pool_asset_configs: vec![
+                    AssetConfig::from_denom_str("denoma"),
+                    AssetConfig::from_denom_str("denomb"),
+                ],
                 alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
                 admin: None,
                 moderator: None,
@@ -582,7 +603,10 @@ fn test_exit_pool_within_shares_but_over_joined_denom_amount() {
         .with_account("instantiator", vec![Coin::new(100_000_000, "denoma")])
         .with_account("addr1", vec![Coin::new(200_000_000, "denomb")])
         .with_instantiate_msg(InstantiateMsg {
-            pool_asset_denoms: vec!["denoma".to_string(), "denomb".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("denoma"),
+                AssetConfig::from_denom_str("denomb"),
+            ],
             alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
             admin: None,
             moderator: None,
