@@ -27,6 +27,12 @@ impl AssetConfig {
             ContractError::DenomHasNoSupply { denom: self.denom }
         );
 
+        // check for zero normalization factor
+        ensure!(
+            self.normalization_factor > Uint128::zero(),
+            ContractError::NormalizationFactorMustBePositive {}
+        );
+
         Ok(Asset {
             amount: Uint128::zero(),
             denom: self.denom,
@@ -43,23 +49,21 @@ pub struct Asset {
 }
 
 impl Asset {
-    pub fn update_amount<F>(&mut self, f: F) -> Result<(), ContractError>
+    pub fn update_amount<F>(&'_ mut self, f: F) -> Result<&'_ Self, ContractError>
     where
         F: FnOnce(Uint128) -> Result<Uint128, ContractError>,
     {
         self.amount = f(self.amount)?;
-        Ok(())
+        Ok(self)
     }
 
     pub fn set_normalization_factor(
-        mut self,
+        &'_ mut self,
         normalization_factor: Uint128,
-    ) -> Result<Self, ContractError> {
+    ) -> Result<&'_ Self, ContractError> {
         ensure!(
             normalization_factor > Uint128::zero(),
-            ContractError::NormalizationFactorMustBePositive {
-                normalization_factor
-            }
+            ContractError::NormalizationFactorMustBePositive {}
         );
 
         self.normalization_factor = normalization_factor;
@@ -124,6 +128,17 @@ mod tests {
         ]);
 
         // denom1
+        // fail to init asset with zero normalization factor
+        let asset_config = AssetConfig {
+            denom: "denom1".to_string(),
+            normalization_factor: Uint128::zero(),
+        };
+        assert_eq!(
+            asset_config.checked_init_asset(deps.as_ref()).unwrap_err(),
+            ContractError::NormalizationFactorMustBePositive {}
+        );
+
+        // success to init asset with non-zero normalization factor
         let asset_config = AssetConfig::from_denom_str("denom1");
         assert_eq!(
             asset_config.checked_init_asset(deps.as_ref()).unwrap(),
@@ -155,6 +170,28 @@ mod tests {
             ContractError::DenomHasNoSupply {
                 denom: "denom3".to_string()
             }
+        );
+    }
+
+    #[test]
+    fn test_set_normalization_factor() {
+        let mut asset = Asset {
+            amount: Uint128::zero(),
+            denom: "denom1".to_string(),
+            normalization_factor: Uint128::one(),
+        };
+
+        assert_eq!(
+            asset
+                .set_normalization_factor(Uint128::from(1000000u128))
+                .unwrap()
+                .normalization_factor,
+            Uint128::from(1000000u128)
+        );
+
+        assert_eq!(
+            asset.set_normalization_factor(Uint128::zero()).unwrap_err(),
+            ContractError::NormalizationFactorMustBePositive {}
         );
     }
 }
