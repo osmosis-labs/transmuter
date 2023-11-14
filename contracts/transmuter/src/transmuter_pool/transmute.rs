@@ -11,9 +11,6 @@ impl TransmuterPool {
         token_in: &Coin,
         token_out_denom: &str,
     ) -> Result<Coin, ContractError> {
-        // token out has 1:1 amount ratio with token in
-        let token_out = Coin::new(token_in.amount.into(), token_out_denom);
-
         // ensure transmuting denom is one of the pool assets
         let pool_asset_by_denom = |denom: &str| {
             self.pool_assets
@@ -29,7 +26,7 @@ impl TransmuterPool {
             .collect();
 
         // check if token_in is in pool_assets
-        let _token_in_pool_asset = pool_asset_by_denom(&token_in.denom).ok_or_else(|| {
+        let token_in_pool_asset = pool_asset_by_denom(&token_in.denom).ok_or_else(|| {
             ContractError::InvalidTransmuteDenom {
                 denom: token_in.denom.clone(),
                 expected_denom: pool_asset_denoms.clone(),
@@ -43,6 +40,13 @@ impl TransmuterPool {
                 expected_denom: pool_asset_denoms,
             }
         })?;
+
+        // TODO: extract calculation and test separately for specific normalization factor
+        // Calculate the amount of token_out based on the normalization factor of token_in and token_out
+        let token_out_amount = token_out_pool_asset
+            .normalization_factor()
+            .checked_multiply_ratio(token_in.amount, token_in_pool_asset.normalization_factor())?;
+        let token_out = Coin::new(token_out_amount.u128(), token_out_denom);
 
         // ensure there is enough token_out_denom in the pool
         ensure!(
@@ -68,7 +72,7 @@ impl TransmuterPool {
             if token_out.denom == pool_asset.denom() {
                 pool_asset.update_amount(|amount| {
                     amount
-                        .checked_sub(token_in.amount)
+                        .checked_sub(token_out.amount)
                         .map_err(StdError::overflow)
                         .map_err(ContractError::Std)
                 })?;
@@ -81,11 +85,16 @@ impl TransmuterPool {
 
 #[cfg(test)]
 mod tests {
-    use crate::asset::Asset;
+    use cosmwasm_std::{testing::mock_dependencies, Uint128};
+
+    use crate::asset::{Asset, AssetConfig};
 
     use super::*;
     const ETH_USDC: &str = "ibc/AXLETHUSDC";
     const COSMOS_USDC: &str = "ibc/COSMOSUSDC";
+
+    const NBTC_SAT: &str = "usat";
+    const WBTC_SAT: &str = "wbtc-satoshi";
 
     #[test]
     fn test_transmute_succeed() {
@@ -200,6 +209,53 @@ mod tests {
                 denom: "urandom2".to_string(),
                 expected_denom: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()]
             }
+        );
+    }
+
+    #[test]
+    fn test_transmute_with_normalization_factor_10_power_n() {
+        let mut deps = mock_dependencies();
+        deps.querier.update_balance(
+            "creator",
+            vec![
+                Coin::new(70_000 * 10u128.pow(14), NBTC_SAT),
+                Coin::new(70_000 * 10u128.pow(8), WBTC_SAT),
+            ],
+        );
+
+        let mut pool = TransmuterPool::new(vec![
+            AssetConfig {
+                denom: NBTC_SAT.to_string(),                        // exponent = 14
+                normalization_factor: Uint128::from(10u128.pow(6)), // 10^14 / 10^6 = 10^8
+            }
+            .checked_init_asset(deps.as_ref())
+            .unwrap(),
+            AssetConfig {
+                denom: WBTC_SAT.to_string(),          // exponent = 8
+                normalization_factor: Uint128::one(), // 10^8 / 10^0 = 10^8
+            }
+            .checked_init_asset(deps.as_ref())
+            .unwrap(),
+        ])
+        .unwrap();
+
+        pool.join_pool(&[Coin::new(70_000 * 10u128.pow(14), NBTC_SAT)])
+            .unwrap();
+
+        assert_eq!(
+            pool.transmute(&Coin::new(70_000 * 10u128.pow(8), WBTC_SAT), NBTC_SAT)
+                .unwrap(),
+            Coin::new(70_000 * 10u128.pow(14), NBTC_SAT)
+        );
+
+        assert_eq!(
+            pool.pool_assets
+                .iter()
+                .map(|asset: &'_ Asset| -> (u128, &'_ str) {
+                    (asset.amount().u128(), asset.denom())
+                })
+                .collect::<Vec<_>>(),
+            vec![(0, NBTC_SAT), (70_000 * 10u128.pow(8), WBTC_SAT),]
         );
     }
 }
