@@ -1,6 +1,6 @@
 use cosmwasm_std::{
-    CheckedFromRatioError, CheckedMultiplyRatioError, Coin, Decimal, DivideByZeroError,
-    OverflowError, StdError, Timestamp, Uint128, Uint64,
+    CheckedFromRatioError, CheckedMultiplyRatioError, Coin, ConversionOverflowError, Decimal,
+    DivideByZeroError, OverflowError, StdError, Timestamp, Uint128, Uint64,
 };
 use thiserror::Error;
 
@@ -174,4 +174,7 @@ pub enum ContractError {
 
     #[error("{0}")]
     CheckedMultiplyRatioError(#[from] CheckedMultiplyRatioError),
+
+    #[error("{0}")]
+    ConversionOverflowError(#[from] ConversionOverflowError),
 }

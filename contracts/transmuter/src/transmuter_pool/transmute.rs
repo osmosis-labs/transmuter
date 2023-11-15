@@ -1,6 +1,6 @@
 use cosmwasm_std::{ensure, Coin, StdError};
 
-use crate::ContractError;
+use crate::{asset::Rounding, ContractError};
 
 use super::TransmuterPool;
 
@@ -41,11 +41,16 @@ impl TransmuterPool {
             }
         })?;
 
-        // TODO: extract calculation and test separately for specific normalization factor
         // Calculate the amount of token_out based on the normalization factor of token_in and token_out
-        let token_out_amount = token_out_pool_asset
-            .normalization_factor()
-            .checked_multiply_ratio(token_in.amount, token_in_pool_asset.normalization_factor())?;
+        let token_out_amount = token_in_pool_asset.convert_amount(
+            token_in.amount,
+            token_out_pool_asset.normalization_factor(),
+            // TODO: rounding down only make sense for swap exact amount in, this will have no loss in liquidity value-wise
+            // But for exact amount out, we should round up the amount in instead
+            // We need to trace the call of this function and determine how should we update this interface
+            // Since this is no longer 1:1 mapping
+            Rounding::DOWN,
+        )?;
         let token_out = Coin::new(token_out_amount.u128(), token_out_denom);
 
         // ensure there is enough token_out_denom in the pool

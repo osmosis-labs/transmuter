@@ -1,7 +1,13 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{ensure, Coin, Deps, Uint128};
+use cosmwasm_std::{ensure, Coin, Deps, Uint128, Uint256};
 
 use crate::ContractError;
+
+#[derive(PartialEq)]
+pub enum Rounding {
+    UP,
+    DOWN,
+}
 
 #[cw_serde]
 pub struct AssetConfig {
@@ -82,6 +88,34 @@ impl Asset {
         self.normalization_factor
     }
 
+    /// Convert amount to target asset's amount with the same value
+    ///
+    /// target_amount / target_normalization_factor = amount / self.normalization_factor
+    /// target_amount = amount * target_normalization_factor / self.normalization_factor
+    ///
+    /// Since amount unsigned int, we need to round up or down
+    /// This function gives control to the caller to decide how to round
+    pub fn convert_amount(
+        &self,
+        amount: Uint128,
+        target_normalization_factor: Uint128,
+        rounding: Rounding,
+    ) -> Result<Uint128, ContractError> {
+        let amount_by_target_norm = amount.full_mul(target_normalization_factor);
+        let quotient: Uint256 =
+            amount_by_target_norm.checked_div(Uint256::from(self.normalization_factor))?;
+
+        let has_rem = !amount_by_target_norm
+            .checked_rem(Uint256::from(self.normalization_factor))?
+            .is_zero();
+
+        return if has_rem && rounding == Rounding::UP {
+            Ok(quotient.checked_add(Uint256::one())?.try_into()?)
+        } else {
+            Ok(quotient.try_into()?)
+        };
+    }
+
     pub fn to_coin(&self) -> Coin {
         Coin {
             denom: self.denom.clone(),
@@ -119,6 +153,93 @@ impl Asset {
 mod tests {
     use super::*;
     use cosmwasm_std::{testing::mock_dependencies_with_balances, Coin};
+
+    #[test]
+    fn test_convert_amount() {
+        // 1 -> 1
+        let asset = Asset::unchecked(0u128.into(), "denom1", 1u128.into());
+        assert_eq!(
+            asset
+                .convert_amount(100u128.into(), 1u128.into(), Rounding::UP)
+                .unwrap(),
+            Uint128::from(100u128)
+        );
+
+        assert_eq!(
+            asset
+                .convert_amount(100u128.into(), 1u128.into(), Rounding::DOWN)
+                .unwrap(),
+            Uint128::from(100u128)
+        );
+
+        // 1 -> 10^12
+        let asset = Asset::unchecked(0u128.into(), "denom1", 1u128.into());
+        assert_eq!(
+            asset
+                .convert_amount(100u128.into(), 1000000000000u128.into(), Rounding::UP)
+                .unwrap(),
+            Uint128::from(100000000000000u128)
+        );
+
+        assert_eq!(
+            asset
+                .convert_amount(100u128.into(), 1000000000000u128.into(), Rounding::DOWN)
+                .unwrap(),
+            Uint128::from(100000000000000u128)
+        );
+
+        // 10^12 -> 1
+        let asset = Asset::unchecked(0u128.into(), "denom1", 1000000000000u128.into());
+        assert_eq!(
+            asset
+                .convert_amount(100u128.into(), 1u128.into(), Rounding::UP)
+                .unwrap(),
+            Uint128::from(1u128)
+        );
+
+        assert_eq!(
+            asset
+                .convert_amount(100u128.into(), 1u128.into(), Rounding::DOWN)
+                .unwrap(),
+            Uint128::from(0u128)
+        );
+
+        // 10^6 -> 10^18
+        let asset = Asset::unchecked(0u128.into(), "denom1", 10u128.pow(6).into());
+
+        // y = 10^18 * x / 10^6 = x * 10^12
+        assert_eq!(
+            asset
+                .convert_amount(10u128.pow(2).into(), 10u128.pow(18).into(), Rounding::UP)
+                .unwrap(),
+            Uint128::from(10u128.pow(14))
+        );
+
+        assert_eq!(
+            asset
+                .convert_amount(10u128.pow(2).into(), 10u128.pow(18).into(), Rounding::DOWN)
+                .unwrap(),
+            Uint128::from(10u128.pow(14))
+        );
+
+        // 2 -> 3
+        let asset = Asset::unchecked(0u128.into(), "denom1", 2u128.into());
+
+        // y = 3 * x / 2
+        assert_eq!(
+            asset
+                .convert_amount(3u128.into(), 3u128.into(), Rounding::UP)
+                .unwrap(),
+            Uint128::from(5u128)
+        );
+
+        assert_eq!(
+            asset
+                .convert_amount(3u128.into(), 3u128.into(), Rounding::DOWN)
+                .unwrap(),
+            Uint128::from(4u128)
+        );
+    }
 
     #[test]
     fn test_checked_init_asset() {
