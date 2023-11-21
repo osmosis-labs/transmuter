@@ -1,6 +1,9 @@
-use cosmwasm_std::{ensure, Coin, StdError, Uint128};
+use cosmwasm_std::{ensure, Coin, Uint128};
 
-use crate::{asset::Rounding, ContractError};
+use crate::{
+    asset::{Asset, Rounding},
+    ContractError,
+};
 
 use super::TransmuterPool;
 
@@ -21,68 +24,29 @@ impl AmountConstraint {
 }
 
 impl TransmuterPool {
-    // TODO: take normalization factor into account to how much the resulted token_out will be
     pub fn transmute(
         &mut self,
         amount_constraint: AmountConstraint,
         token_in_denom: &str,
         token_out_denom: &str,
     ) -> Result<Coin, ContractError> {
-        // ensure transmuting denom is one of the pool assets
-        let pool_asset_by_denom = |denom: &str| {
-            self.pool_assets
-                .iter()
-                .find(|pool_asset| pool_asset.denom() == denom)
-        };
+        let token_in_pool_asset = self.get_pool_asset_by_denom(&token_in_denom)?;
+        let token_out_pool_asset = self.get_pool_asset_by_denom(token_out_denom)?;
 
-        // get all pool asset denoms
-        let pool_asset_denoms: Vec<String> = self
-            .pool_assets
-            .iter()
-            .map(|pool_asset| pool_asset.denom().to_string())
-            .collect();
+        // calculate token in and token out amount based on normalized value
+        let token_out_amount = self.calc_token_out_amount(
+            token_in_pool_asset,
+            token_out_pool_asset,
+            &amount_constraint,
+        )?;
 
-        // check if token_in is in pool_assets
-        let token_in_pool_asset = pool_asset_by_denom(&token_in_denom).ok_or_else(|| {
-            ContractError::InvalidTransmuteDenom {
-                denom: token_in_denom.to_string(),
-                expected_denom: pool_asset_denoms.clone(),
-            }
-        })?;
+        let token_in_amount = self.calc_token_in_amount(
+            token_in_pool_asset,
+            token_out_pool_asset,
+            &amount_constraint,
+        )?;
 
-        // check if token_out_denom is in pool_assets
-        let token_out_pool_asset = pool_asset_by_denom(token_out_denom).ok_or_else(|| {
-            ContractError::InvalidTransmuteDenom {
-                denom: token_out_denom.to_string(),
-                expected_denom: pool_asset_denoms,
-            }
-        })?;
-
-        let token_out_amount = match amount_constraint {
-            AmountConstraint::ExactIn(in_amount) => token_in_pool_asset.convert_amount(
-                in_amount,
-                token_out_pool_asset.normalization_factor(),
-                // rounding down token out amount for swap exact amount in
-                // this will ensure no loss in liquidity value-wise
-                // since it keeps in out value <= in value
-                Rounding::DOWN,
-            )?,
-            AmountConstraint::ExactOut(out_amount) => out_amount,
-        };
-
-        let token_in_amount = match amount_constraint {
-            AmountConstraint::ExactIn(in_amount) => in_amount,
-            AmountConstraint::ExactOut(out_amount) => token_out_pool_asset.convert_amount(
-                out_amount,
-                token_in_pool_asset.normalization_factor(),
-                // rounding up token in amount for swap exact amount out
-                // this will ensure no loss in liquidity value-wise
-                // since it keeps in value >= out value
-                Rounding::UP,
-            )?,
-        };
-
-        // Calculate the amount of token_out based on the normalization factor of token_in and token_out
+        let token_in = Coin::new(token_in_amount.u128(), token_in_denom);
         let token_out = Coin::new(token_out_amount.u128(), token_out_denom);
 
         // ensure there is enough token_out_denom in the pool
@@ -94,29 +58,94 @@ impl TransmuterPool {
             }
         );
 
+        self.update_pool_assets(&token_in, &token_out)?;
+
+        Ok(token_out)
+    }
+
+    /// update pool assets based on assets flow
+    /// increase amount on token in
+    /// decrease amount on token out
+    fn update_pool_assets(
+        &mut self,
+        token_in: &Coin,
+        token_out: &Coin,
+    ) -> Result<(), ContractError> {
         for pool_asset in &mut self.pool_assets {
             // increase token in from pool assets
-            if token_in_denom == pool_asset.denom() {
-                pool_asset.update_amount(|amount| {
-                    amount
-                        .checked_add(token_in_amount)
-                        .map_err(StdError::overflow)
-                        .map_err(ContractError::Std)
-                })?;
+            if token_in.denom == pool_asset.denom() {
+                pool_asset.increase_amount(token_in.amount)?;
             }
 
             // decrease token out from pool assets
             if token_out.denom == pool_asset.denom() {
-                pool_asset.update_amount(|amount| {
-                    amount
-                        .checked_sub(token_out.amount)
-                        .map_err(StdError::overflow)
-                        .map_err(ContractError::Std)
-                })?;
+                pool_asset.decrease_amount(token_out.amount)?;
             }
         }
 
-        Ok(token_out)
+        Ok(())
+    }
+
+    // This function calculates the amount of token_out for a transmutation.
+    // The calculation depends on the amount constraint:
+    // - If the constraint is ExactIn, the function converts the in amount to the equivalent out amount.
+    //   This conversion takes into account the normalization factor of the tokens to ensure value consistency.
+    //   The function rounds down the result to ensure that the out value <= in value.
+    // - If the constraint is ExactOut, the function simply returns the out amount.
+    fn calc_token_out_amount(
+        &self,
+        token_in_pool_asset: &Asset,
+        token_out_pool_asset: &Asset,
+        amount_constraint: &AmountConstraint,
+    ) -> Result<Uint128, ContractError> {
+        let token_out_amount = match amount_constraint {
+            AmountConstraint::ExactIn(in_amount) => token_in_pool_asset.convert_amount(
+                in_amount.to_owned(),
+                token_out_pool_asset.normalization_factor(),
+                Rounding::DOWN,
+            )?,
+            AmountConstraint::ExactOut(out_amount) => out_amount.to_owned(),
+        };
+
+        Ok(token_out_amount)
+    }
+
+    // This function calculates the amount of token_in required for a transmutation.
+    // The calculation depends on the amount constraint:
+    // - If the constraint is ExactIn, the function simply returns the in amount.
+    // - If the constraint is ExactOut, the function converts the out amount to the equivalent in amount.
+    //   This conversion takes into account the normalization factor of the tokens to ensure value consistency.
+    //   The function rounds up the result to ensure that the in value >= out value.
+    fn calc_token_in_amount(
+        &self,
+        token_in_pool_asset: &Asset,
+        token_out_pool_asset: &Asset,
+        amount_constraint: &AmountConstraint,
+    ) -> Result<Uint128, ContractError> {
+        let token_in_amount = match amount_constraint {
+            AmountConstraint::ExactIn(in_amount) => in_amount.to_owned(),
+            AmountConstraint::ExactOut(out_amount) => token_out_pool_asset.convert_amount(
+                out_amount.to_owned(),
+                token_in_pool_asset.normalization_factor(),
+                Rounding::UP,
+            )?,
+        };
+
+        Ok(token_in_amount)
+    }
+
+    fn get_pool_asset_by_denom(&self, denom: &'_ str) -> Result<&'_ Asset, ContractError> {
+        self.pool_assets
+            .iter()
+            .find(|pool_asset| pool_asset.denom() == denom)
+            .ok_or_else(|| ContractError::InvalidTransmuteDenom {
+                denom: denom.to_string(),
+                expected_denom: self
+                    .pool_assets
+                    .iter()
+                    .map(|pool_asset| pool_asset.denom().to_string())
+                    .collect(),
+            })
     }
 }
 

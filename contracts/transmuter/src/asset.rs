@@ -1,5 +1,5 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{ensure, Coin, Deps, Uint128, Uint256};
+use cosmwasm_std::{ensure, Coin, Deps, StdError, Uint128, Uint256};
 
 use crate::ContractError;
 
@@ -61,6 +61,30 @@ impl Asset {
     {
         self.amount = f(self.amount)?;
         Ok(self)
+    }
+
+    pub fn increase_amount(
+        &'_ mut self,
+        increasing_amount: Uint128,
+    ) -> Result<&'_ Self, ContractError> {
+        self.update_amount(|amount| {
+            amount
+                .checked_add(increasing_amount)
+                .map_err(StdError::overflow)
+                .map_err(ContractError::Std)
+        })
+    }
+
+    pub fn decrease_amount(
+        &'_ mut self,
+        decreasing_amount: Uint128,
+    ) -> Result<&'_ Self, ContractError> {
+        self.update_amount(|amount| {
+            amount
+                .checked_sub(decreasing_amount)
+                .map_err(StdError::overflow)
+                .map_err(ContractError::Std)
+        })
     }
 
     pub fn set_normalization_factor(
