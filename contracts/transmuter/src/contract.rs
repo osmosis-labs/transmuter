@@ -5,7 +5,7 @@ use crate::{
     error::ContractError,
     limiter::{Limiter, LimiterParams, Limiters},
     role::Role,
-    transmuter_pool::TransmuterPool,
+    transmuter_pool::{AmountConstraint, TransmuterPool},
 };
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
@@ -735,7 +735,11 @@ impl Transmuter<'_> {
 
         let mut pool = self.pool.load(deps.storage)?;
 
-        let token_out = pool.transmute(&token_in, &token_out.denom)?;
+        let token_out = pool.transmute(
+            AmountConstraint::exact_in(token_in.amount),
+            &token_in.denom,
+            &token_out.denom,
+        )?;
 
         Ok((pool, token_out))
     }
@@ -803,7 +807,11 @@ impl Transmuter<'_> {
             return Ok((pool, token_in));
         }
 
-        let actual_token_out = pool.transmute(&token_in, &token_out.denom)?;
+        let actual_token_out = pool.transmute(
+            AmountConstraint::exact_out(token_out.amount),
+            &token_in.denom,
+            &token_out.denom,
+        )?;
 
         // ensure that actual_token_out is equal to token_out
         ensure_eq!(

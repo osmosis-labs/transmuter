@@ -12,6 +12,8 @@ use cosmwasm_std::{ensure, Uint64};
 
 use crate::{asset::Asset, ContractError};
 
+pub use transmute::AmountConstraint;
+
 /// Minimum number of pool assets. This is required since if the
 /// number of pool assets is less than 2, then the contract will
 /// not function as a pool.
