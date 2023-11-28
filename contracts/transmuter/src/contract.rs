@@ -406,6 +406,7 @@ impl Transmuter<'_> {
         pool.join_pool(tokens_in)?;
 
         let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+        // TODO: weight in normalization factor
         let out_amount = AlloyedAsset::amount_from(tokens_in)?;
         let alloyed_asset_out = Coin::new(out_amount.u128(), alloyed_denom);
 
@@ -517,6 +518,7 @@ impl Transmuter<'_> {
         };
 
         // check if sender's allooed asset balance is enough
+        // TODO: weight in normalization factor
         let alloyed_asset_to_burn = AlloyedAsset::amount_from(tokens_out)?;
 
         ensure!(

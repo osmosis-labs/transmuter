@@ -70,6 +70,8 @@ impl SudoMsg {
                 let sender = deps.api.addr_validate(&sender)?;
 
                 let alloyed_denom = transmuter.alloyed_asset.get_alloyed_denom(deps.storage)?;
+
+                // TODO: remove this as it's not valid anymore, need to calculate token_out amount
                 let token_out = Coin::new(token_in.amount.u128(), token_out_denom);
 
                 // ensure token_out amount is greater than or equal to token_out_min_amount
@@ -132,6 +134,7 @@ impl SudoMsg {
                     swap_fee,
                 )?;
 
+                // TODO: remove this as it's not valid anymore
                 // ensure that actual_token_out is equal to token_out
                 // this should never fail
                 ensure_eq!(
@@ -189,6 +192,7 @@ impl SudoMsg {
 
                 let alloyed_denom = transmuter.alloyed_asset.get_alloyed_denom(deps.storage)?;
 
+                // TODO: remove this as it's not valid anymore, need to calculate token_in amount
                 let token_in = Coin::new(token_out.amount.u128(), token_in_denom);
 
                 ensure!(
@@ -250,6 +254,7 @@ impl SudoMsg {
                     swap_fee,
                 )?;
 
+                // TODO: remove this as it's not valid anymore
                 // ensure that actual_token_in is equal to token_in
                 // this should never fail
                 ensure_eq!(
