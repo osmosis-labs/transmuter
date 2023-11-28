@@ -163,7 +163,7 @@ mod tests {
     const WBTC_SAT: &str = "wbtc-satoshi";
 
     #[test]
-    fn test_transmute_succeed() {
+    fn test_transmute_exact_in_succeed() {
         let mut pool =
             TransmuterPool::new(Asset::unchecked_equal_assets(&[ETH_USDC, COSMOS_USDC])).unwrap();
 
@@ -235,6 +235,38 @@ mod tests {
             Asset::unchecked_equal_assets_from_coins(&[
                 Coin::new(70_000, ETH_USDC),
                 Coin::new(100_000, COSMOS_USDC)
+            ])
+        );
+    }
+
+    #[test]
+    fn test_transmute_exact_out_succeed() {
+        let mut pool =
+            TransmuterPool::new(Asset::unchecked_equal_assets(&[ETH_USDC, COSMOS_USDC])).unwrap();
+
+        pool.join_pool(&[Coin::new(170_000, COSMOS_USDC)]).unwrap();
+
+        assert_eq!(
+            pool.transmute(
+                AmountConstraint::exact_out(70_000u128),
+                &ETH_USDC,
+                &COSMOS_USDC
+            )
+            .unwrap(),
+            Coin::new(70_000, COSMOS_USDC)
+        );
+
+        assert_eq!(
+            pool.transmute(AmountConstraint::exact_out(0u128), &ETH_USDC, &COSMOS_USDC)
+                .unwrap(),
+            Coin::new(0, COSMOS_USDC)
+        );
+
+        assert_eq!(
+            pool.pool_assets,
+            Asset::unchecked_equal_assets_from_coins(&[
+                Coin::new(70_000, ETH_USDC),
+                Coin::new(100_000, COSMOS_USDC),
             ])
         );
     }
@@ -366,5 +398,137 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(0, NBTC_SAT), (70_000 * 10u128.pow(8), WBTC_SAT),]
         );
+    }
+
+    #[test]
+    fn test_transmute_exact_in_round_down_token_out() {
+        let mut deps = mock_dependencies();
+        // a:b = 1:3
+        deps.querier.update_balance(
+            "creator",
+            vec![
+                Coin::new(70_000 * 3 * 10u128.pow(14), "ua"),
+                Coin::new(70_000 * 10u128.pow(8), "ub"),
+            ],
+        );
+
+        let mut pool = TransmuterPool::new(vec![
+            AssetConfig {
+                denom: "ua".to_string(),
+                normalization_factor: Uint128::from(3 * 10u128.pow(6)),
+            }
+            .checked_init_asset(deps.as_ref())
+            .unwrap(),
+            AssetConfig {
+                denom: "ub".to_string(),
+                normalization_factor: Uint128::one(),
+            }
+            .checked_init_asset(deps.as_ref())
+            .unwrap(),
+        ])
+        .unwrap();
+
+        pool.join_pool(&[Coin::new(70_000 * 10u128.pow(8), "ub")])
+            .unwrap();
+
+        // Transmute with ExactIn, where the output needs to be rounded down
+        let result = pool
+            .transmute(
+                AmountConstraint::exact_in(3 * 10u128.pow(14) + 1), // Add 1 to trigger rounding
+                &"ua",
+                &"ub",
+            )
+            .unwrap();
+
+        // Check that the output is as expected, rounded down
+        assert_eq!(result, Coin::new(10u128.pow(8), "ub"));
+
+        let result = pool
+            .transmute(
+                AmountConstraint::exact_in(3 * 10u128.pow(14) - 1), // Sub 1 to trigger rounding
+                &"ua",
+                &"ub",
+            )
+            .unwrap();
+
+        // Check that the output is as expected, rounded down
+        assert_eq!(result, Coin::new(10u128.pow(8) - 1, "ub"));
+    }
+
+    #[test]
+    fn test_transmute_exact_out_round_up_token_in() {
+        let mut deps = mock_dependencies();
+        // a:b = 1:3
+        deps.querier.update_balance(
+            "creator",
+            vec![
+                Coin::new(70_000 * 3 * 10u128.pow(14), "ua"),
+                Coin::new(70_000 * 10u128.pow(8), "ub"),
+            ],
+        );
+
+        let mut pool = TransmuterPool::new(vec![
+            AssetConfig {
+                denom: "ua".to_string(),
+                normalization_factor: Uint128::from(3 * 10u128.pow(6)),
+            }
+            .checked_init_asset(deps.as_ref())
+            .unwrap(),
+            AssetConfig {
+                denom: "ub".to_string(),
+                normalization_factor: Uint128::one(),
+            }
+            .checked_init_asset(deps.as_ref())
+            .unwrap(),
+        ])
+        .unwrap();
+
+        pool.join_pool(&[Coin::new(70_000 * 3 * 10u128.pow(14), "ua")])
+            .unwrap();
+
+        // Transmute with ExactOut, where the input needs to be rounded up
+        let result = pool
+            .transmute(
+                AmountConstraint::exact_out(3 * 10u128.pow(14) - 1), // Sub 1 to trigger rounding
+                &"ub",
+                &"ua",
+            )
+            .unwrap();
+
+        // Check that output is exact
+        assert_eq!(result, Coin::new(3 * 10u128.pow(14) - 1, "ua"));
+
+        let updated_ub = pool
+            .pool_assets
+            .iter()
+            .find(|asset| asset.denom() == "ub")
+            .unwrap()
+            .amount();
+
+        // Check that the input is as expected, rounded up
+        assert_eq!(updated_ub, Uint128::from(10u128.pow(8)));
+
+        // Transmute with ExactOut, where the input needs to be rounded up
+        let result = pool
+            .transmute(
+                AmountConstraint::exact_out(3 * 10u128.pow(14) + 1), // Add 1 to trigger rounding
+                &"ub",
+                &"ua",
+            )
+            .unwrap();
+
+        // Check that output is exact
+        assert_eq!(result, Coin::new(3 * 10u128.pow(14) + 1, "ua"));
+
+        let updated_ub = pool
+            .pool_assets
+            .iter()
+            .find(|asset| asset.denom() == "ub")
+            .unwrap()
+            .amount()
+            - updated_ub;
+
+        // Check that the input is as expected, rounded up
+        assert_eq!(updated_ub, Uint128::from(10u128.pow(8) + 1));
     }
 }
