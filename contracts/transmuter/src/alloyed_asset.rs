@@ -53,10 +53,9 @@ impl<'a> AlloyedAsset<'a> {
     // TODO: take normalization factor into account
     // - note:
     //   - take transmuter pool as argument to get the normalization factor
-    //   - if normalization factor changes, value of the alloyed asset might change
-    //   - some invariant check might be needed, and factor for alloyed asset should be fixed
-    //   - setting it as exponent will make things better since it can't be changed asset added
-    //   - (and don't need to) the downside is that it will cost gas a bit more (which is fine)
+    //   - existing normalization factor can't change but can rescale to accomodate potential new assets
+    //   - rescaling normalization factor will apply to all assets including alloyed asset
+    //   - with that, value of the alloyed asset will stay the same
     pub fn amount_from(tokens: &[Coin]) -> StdResult<Uint128> {
         let mut total = Uint128::zero();
         for coin in tokens {
