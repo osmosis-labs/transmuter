@@ -1,7 +1,7 @@
 use cosmwasm_std::{ensure, Coin, Uint128};
 
 use crate::{
-    asset::{Asset, Rounding},
+    asset::{convert_amount, Asset, Rounding},
     ContractError,
 };
 
@@ -99,10 +99,11 @@ impl TransmuterPool {
         amount_constraint: &AmountConstraint,
     ) -> Result<Uint128, ContractError> {
         let token_out_amount = match amount_constraint {
-            AmountConstraint::ExactIn(in_amount) => token_in_pool_asset.convert_amount(
+            AmountConstraint::ExactIn(in_amount) => convert_amount(
                 in_amount.to_owned(),
+                token_in_pool_asset.normalization_factor(),
                 token_out_pool_asset.normalization_factor(),
-                Rounding::DOWN,
+                &Rounding::DOWN,
             )?,
             AmountConstraint::ExactOut(out_amount) => out_amount.to_owned(),
         };
@@ -124,28 +125,15 @@ impl TransmuterPool {
     ) -> Result<Uint128, ContractError> {
         let token_in_amount = match amount_constraint {
             AmountConstraint::ExactIn(in_amount) => in_amount.to_owned(),
-            AmountConstraint::ExactOut(out_amount) => token_out_pool_asset.convert_amount(
+            AmountConstraint::ExactOut(out_amount) => convert_amount(
                 out_amount.to_owned(),
+                token_out_pool_asset.normalization_factor(),
                 token_in_pool_asset.normalization_factor(),
-                Rounding::UP,
+                &Rounding::UP,
             )?,
         };
 
         Ok(token_in_amount)
-    }
-
-    fn get_pool_asset_by_denom(&self, denom: &'_ str) -> Result<&'_ Asset, ContractError> {
-        self.pool_assets
-            .iter()
-            .find(|pool_asset| pool_asset.denom() == denom)
-            .ok_or_else(|| ContractError::InvalidTransmuteDenom {
-                denom: denom.to_string(),
-                expected_denom: self
-                    .pool_assets
-                    .iter()
-                    .map(|pool_asset| pool_asset.denom().to_string())
-                    .collect(),
-            })
     }
 }
 

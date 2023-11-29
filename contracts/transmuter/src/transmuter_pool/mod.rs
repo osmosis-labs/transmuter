@@ -8,7 +8,7 @@ mod weight;
 use std::collections::HashSet;
 
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{ensure, Uint64};
+use cosmwasm_std::{ensure, Coin, Uint128, Uint64};
 
 use crate::{asset::Asset, ContractError};
 
@@ -65,6 +65,36 @@ impl TransmuterPool {
         }
 
         Ok(())
+    }
+
+    pub fn get_pool_asset_by_denom(&self, denom: &'_ str) -> Result<&'_ Asset, ContractError> {
+        self.pool_assets
+            .iter()
+            .find(|pool_asset| pool_asset.denom() == denom)
+            .ok_or_else(|| ContractError::InvalidTransmuteDenom {
+                denom: denom.to_string(),
+                expected_denom: self
+                    .pool_assets
+                    .iter()
+                    .map(|pool_asset| pool_asset.denom().to_string())
+                    .collect(),
+            })
+    }
+
+    pub fn pair_coins_with_normalization_factor(
+        &self,
+        coins: &[Coin],
+    ) -> Result<Vec<(Coin, Uint128)>, ContractError> {
+        coins
+            .into_iter()
+            .map(|coin| {
+                Ok((
+                    coin.clone(),
+                    self.get_pool_asset_by_denom(coin.denom.as_str())?
+                        .normalization_factor(),
+                ))
+            })
+            .collect::<Result<Vec<_>, ContractError>>()
     }
 }
 

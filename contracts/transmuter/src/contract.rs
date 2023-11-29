@@ -1,6 +1,6 @@
 use crate::{
     alloyed_asset::AlloyedAsset,
-    asset::{Asset, AssetConfig},
+    asset::{Asset, AssetConfig, Rounding},
     ensure_admin_authority, ensure_moderator_authority,
     error::ContractError,
     limiter::{Limiter, LimiterParams, Limiters},
@@ -406,8 +406,14 @@ impl Transmuter<'_> {
         pool.join_pool(tokens_in)?;
 
         let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
-        // TODO: weight in normalization factor
-        let out_amount = AlloyedAsset::amount_from(tokens_in)?;
+
+        let out_amount = AlloyedAsset::amount_from(
+            pool.pair_coins_with_normalization_factor(tokens_in)?
+                .as_slice(),
+            // swap token for alloyed asset output keeps alloyed asset value <= tokens_in value
+            // if conversion has remainder to not over mint alloyed asset
+            Rounding::DOWN,
+        )?;
         let alloyed_asset_out = Coin::new(out_amount.u128(), alloyed_denom);
 
         Ok((pool, alloyed_asset_out))
@@ -517,9 +523,16 @@ impl Transmuter<'_> {
             }
         };
 
+        let mut pool = self.pool.load(deps.storage)?;
+
         // check if sender's allooed asset balance is enough
-        // TODO: weight in normalization factor
-        let alloyed_asset_to_burn = AlloyedAsset::amount_from(tokens_out)?;
+        let alloyed_asset_to_burn = AlloyedAsset::amount_from(
+            pool.pair_coins_with_normalization_factor(tokens_out)?
+                .as_slice(),
+            // swap alloyed asset for token requires more alloyed asset value >= tokens_out
+            // if conversion has remainder to not over burn alloyed asset
+            Rounding::UP,
+        )?;
 
         ensure!(
             alloyed_asset_available >= alloyed_asset_to_burn,
@@ -530,7 +543,6 @@ impl Transmuter<'_> {
         );
 
         // exit pool
-        let mut pool = self.pool.load(deps.storage)?;
         pool.exit_pool(tokens_out)?;
 
         Ok((

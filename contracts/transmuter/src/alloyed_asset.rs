@@ -1,6 +1,14 @@
 use cosmwasm_std::{Addr, Coin, Deps, StdResult, Storage, Uint128};
 use cw_storage_plus::Item;
 
+use crate::{
+    asset::{convert_amount, Rounding},
+    ContractError,
+};
+
+// TODO: make this a state var
+const ALLOYED_DENOM_NORMALIZATION_FACTOR: Uint128 = Uint128::one();
+
 /// Alloyed asset represents the shares of the pool
 /// and since the pool is a 1:1 multi-asset pool, it act
 /// as a composite of the underlying assets and assume 1:1
@@ -50,16 +58,19 @@ impl<'a> AlloyedAsset<'a> {
     }
 
     /// calculate the amount of alloyed asset to mint/burn
-    // TODO: take normalization factor into account
-    // - note:
-    //   - take transmuter pool as argument to get the normalization factor
-    //   - existing normalization factor can't change but can rescale to accomodate potential new assets
-    //   - rescaling normalization factor will apply to all assets including alloyed asset
-    //   - with that, value of the alloyed asset will stay the same
-    pub fn amount_from(tokens: &[Coin]) -> StdResult<Uint128> {
+    /// `tokens` is a slice of (coin, normalization factor) pair
+    pub fn amount_from(
+        tokens: &[(Coin, Uint128)],
+        rounding: Rounding,
+    ) -> Result<Uint128, ContractError> {
         let mut total = Uint128::zero();
-        for coin in tokens {
-            total = total.checked_add(coin.amount)?;
+        for (coin, coin_normalization_factor) in tokens {
+            total = total.checked_add(convert_amount(
+                coin.amount,
+                *coin_normalization_factor,
+                ALLOYED_DENOM_NORMALIZATION_FACTOR,
+                &rounding,
+            )?)?;
         }
         Ok(total)
     }
@@ -115,5 +126,46 @@ mod tests {
             alloyed_assets.get_total_supply(deps.as_ref()).unwrap(),
             Uint128::from(1_000_000_000_000_000_000_000u128)
         );
+    }
+
+    #[test]
+    fn test_amount_from() {
+        let alloyed_assets = AlloyedAsset::new("alloyed_assets");
+        let mut deps = mock_dependencies();
+
+        let alloyed_denom = "alloyed_denom".to_string();
+        alloyed_assets
+            .set_alloyed_denom(&mut deps.storage, &alloyed_denom)
+            .unwrap();
+
+        // same normalization factor
+        let amount = AlloyedAsset::amount_from(
+            &[(Coin::new(100, "ua"), ALLOYED_DENOM_NORMALIZATION_FACTOR)],
+            Rounding::UP,
+        )
+        .unwrap();
+
+        assert_eq!(amount, Uint128::from(100u128));
+
+        // different normalization factor
+        let amount = AlloyedAsset::amount_from(
+            &[
+                (Coin::new(100, "ua"), Uint128::from(2u128)),
+                (Coin::new(100, "ub"), Uint128::from(3u128)),
+            ],
+            Rounding::UP,
+        );
+
+        assert_eq!(amount.unwrap(), Uint128::from(84u128));
+
+        let amount = AlloyedAsset::amount_from(
+            &[
+                (Coin::new(100, "ua"), Uint128::from(2u128)),
+                (Coin::new(100, "ub"), Uint128::from(3u128)),
+            ],
+            Rounding::DOWN,
+        );
+
+        assert_eq!(amount.unwrap(), Uint128::from(83u128));
     }
 }
