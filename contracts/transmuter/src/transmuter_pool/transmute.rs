@@ -29,7 +29,7 @@ impl TransmuterPool {
         amount_constraint: AmountConstraint,
         token_in_denom: &str,
         token_out_denom: &str,
-    ) -> Result<Coin, ContractError> {
+    ) -> Result<(Coin, Coin), ContractError> {
         let token_in_pool_asset = self.get_pool_asset_by_denom(&token_in_denom)?;
         let token_out_pool_asset = self.get_pool_asset_by_denom(token_out_denom)?;
 
@@ -60,7 +60,7 @@ impl TransmuterPool {
 
         self.update_pool_assets(&token_in, &token_out)?;
 
-        Ok(token_out)
+        Ok((token_in, token_out))
     }
 
     /// update pool assets based on assets flow
@@ -163,7 +163,7 @@ mod tests {
                 &COSMOS_USDC
             )
             .unwrap(),
-            Coin::new(70_000, COSMOS_USDC)
+            (Coin::new(70_000, ETH_USDC), Coin::new(70_000, COSMOS_USDC))
         );
 
         pool.join_pool(&[Coin::new(100_000, COSMOS_USDC)]).unwrap();
@@ -174,7 +174,7 @@ mod tests {
                 &COSMOS_USDC
             )
             .unwrap(),
-            Coin::new(60_000, COSMOS_USDC)
+            (Coin::new(60_000, ETH_USDC), Coin::new(60_000, COSMOS_USDC))
         );
         assert_eq!(
             pool.transmute(
@@ -183,7 +183,7 @@ mod tests {
                 &COSMOS_USDC
             )
             .unwrap(),
-            Coin::new(20_000, COSMOS_USDC)
+            (Coin::new(20_000, ETH_USDC), Coin::new(20_000, COSMOS_USDC))
         );
         assert_eq!(
             pool.transmute(
@@ -192,12 +192,12 @@ mod tests {
                 &COSMOS_USDC
             )
             .unwrap(),
-            Coin::new(20_000, COSMOS_USDC)
+            (Coin::new(20_000, ETH_USDC), Coin::new(20_000, COSMOS_USDC))
         );
         assert_eq!(
             pool.transmute(AmountConstraint::exact_in(0u128), &ETH_USDC, &COSMOS_USDC)
                 .unwrap(),
-            Coin::new(0, COSMOS_USDC)
+            (Coin::new(0, ETH_USDC), Coin::new(0, COSMOS_USDC))
         );
 
         assert_eq!(
@@ -215,7 +215,10 @@ mod tests {
                 &ETH_USDC
             )
             .unwrap(),
-            Coin::new(100_000, ETH_USDC)
+            (
+                Coin::new(100_000, COSMOS_USDC),
+                Coin::new(100_000, ETH_USDC)
+            )
         );
 
         assert_eq!(
@@ -241,13 +244,13 @@ mod tests {
                 &COSMOS_USDC
             )
             .unwrap(),
-            Coin::new(70_000, COSMOS_USDC)
+            (Coin::new(70_000, ETH_USDC), Coin::new(70_000, COSMOS_USDC))
         );
 
         assert_eq!(
             pool.transmute(AmountConstraint::exact_out(0u128), &ETH_USDC, &COSMOS_USDC)
                 .unwrap(),
-            Coin::new(0, COSMOS_USDC)
+            (Coin::new(0, ETH_USDC), Coin::new(0, COSMOS_USDC))
         );
 
         assert_eq!(
@@ -273,7 +276,10 @@ mod tests {
                 COSMOS_USDC
             )
             .unwrap(),
-            Coin::new(70_000, COSMOS_USDC)
+            (
+                Coin::new(70_000, COSMOS_USDC),
+                Coin::new(70_000, COSMOS_USDC)
+            )
         );
     }
 
@@ -374,7 +380,10 @@ mod tests {
                 &NBTC_SAT
             )
             .unwrap(),
-            Coin::new(70_000 * 10u128.pow(14), NBTC_SAT)
+            (
+                Coin::new(70_000 * 10u128.pow(8), WBTC_SAT),
+                Coin::new(70_000 * 10u128.pow(14), NBTC_SAT)
+            )
         );
 
         assert_eq!(
@@ -429,7 +438,13 @@ mod tests {
             .unwrap();
 
         // Check that the output is as expected, rounded down
-        assert_eq!(result, Coin::new(10u128.pow(8), "ub"));
+        assert_eq!(
+            result,
+            (
+                Coin::new(3 * 10u128.pow(14) + 1, "ua"),
+                Coin::new(10u128.pow(8), "ub")
+            )
+        );
 
         let result = pool
             .transmute(
@@ -440,7 +455,13 @@ mod tests {
             .unwrap();
 
         // Check that the output is as expected, rounded down
-        assert_eq!(result, Coin::new(10u128.pow(8) - 1, "ub"));
+        assert_eq!(
+            result,
+            (
+                Coin::new(3 * 10u128.pow(14) - 1, "ua"),
+                Coin::new(10u128.pow(8) - 1, "ub")
+            )
+        );
     }
 
     #[test]
@@ -484,7 +505,13 @@ mod tests {
             .unwrap();
 
         // Check that output is exact
-        assert_eq!(result, Coin::new(3 * 10u128.pow(14) - 1, "ua"));
+        assert_eq!(
+            result,
+            (
+                Coin::new(10u128.pow(8), "ub"),
+                Coin::new(3 * 10u128.pow(14) - 1, "ua")
+            )
+        );
 
         let updated_ub = pool
             .pool_assets
@@ -506,7 +533,13 @@ mod tests {
             .unwrap();
 
         // Check that output is exact
-        assert_eq!(result, Coin::new(3 * 10u128.pow(14) + 1, "ua"));
+        assert_eq!(
+            result,
+            (
+                Coin::new(10u128.pow(8) + 1, "ub"),
+                Coin::new(3 * 10u128.pow(14) + 1, "ua")
+            )
+        );
 
         let updated_ub = pool
             .pool_assets

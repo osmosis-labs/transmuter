@@ -749,7 +749,7 @@ impl Transmuter<'_> {
 
         let mut pool = self.pool.load(deps.storage)?;
 
-        let token_out = pool.transmute(
+        let (_, token_out) = pool.transmute(
             AmountConstraint::exact_in(token_in.amount),
             &token_in.denom,
             &token_out.denom,
@@ -821,7 +821,7 @@ impl Transmuter<'_> {
             return Ok((pool, token_in));
         }
 
-        let actual_token_out = pool.transmute(
+        let (token_in, actual_token_out) = pool.transmute(
             AmountConstraint::exact_out(token_out.amount),
             &token_in.denom,
             &token_out.denom,

@@ -415,7 +415,7 @@ fn pool_with_single_lp(
             non_zero_pool_assets
                 .iter()
                 .filter(|coin| !coin.amount.is_zero())
-                .map(|coin| Coin::new(100000000000000000000, coin.denom.clone()))
+                .map(|coin| Coin::new(10000000000000000000000000, coin.denom.clone()))
                 .collect(),
         )
         .with_instantiate_msg(crate::contract::InstantiateMsg {

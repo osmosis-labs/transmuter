@@ -148,8 +148,6 @@ fn non_empty_pool_with_normalization_factor(app: &'_ OsmosisTestApp) -> TestEnv<
     )
 }
 
-// d0 / 3 * 10^16 = d1 / 10^14
-// d1 = d0 / 3 * 10^2
 test_swap! {
     swap_with_1denom1_with_normalization_factor_should_succeed [expect ok] {
         setup = non_empty_pool_with_normalization_factor,
@@ -161,7 +159,7 @@ test_swap! {
             },
             SwapMsg::SwapExactAmountOut {
                 token_in_denom: "denom0".to_string(),
-                token_in_max_amount: (1u128).into(),
+                token_in_max_amount: (300u128).into(),
                 token_out: Coin::new(1, "denom1"),
             },
         ],

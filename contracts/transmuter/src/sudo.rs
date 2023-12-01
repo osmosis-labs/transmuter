@@ -75,6 +75,14 @@ impl SudoMsg {
 
                 // if token in is share denom, swap alloyed asset for tokens
                 if token_in.denom == alloyed_denom {
+                    // TODO: fix this, it's wrong
+                    ensure!(
+                        token_out.amount >= token_out_min_amount,
+                        ContractError::InsufficientTokenOut {
+                            required: token_out_min_amount,
+                            available: token_out.amount
+                        }
+                    );
                     let swap_result = to_binary(&SwapExactAmountInResponseData {
                         token_out_amount: token_out.amount,
                     })?;
@@ -98,6 +106,14 @@ impl SudoMsg {
 
                 // if token out is share denom, swap token for shares
                 if token_out.denom == alloyed_denom {
+                    // TODO: fix this, it's wrong
+                    ensure!(
+                        token_out.amount >= token_out_min_amount,
+                        ContractError::InsufficientTokenOut {
+                            required: token_out_min_amount,
+                            available: token_out.amount
+                        }
+                    );
                     let swap_result = to_binary(&SwapExactAmountInResponseData {
                         token_out_amount: token_out.amount,
                     })?;
@@ -184,6 +200,14 @@ impl SudoMsg {
 
                 // if token in is share denom, swap shares for tokens
                 if token_in.denom == alloyed_denom {
+                    // TODO: fix this, it's wrong
+                    ensure!(
+                        token_in.amount <= token_in_max_amount,
+                        ContractError::ExcessiveRequiredTokenIn {
+                            limit: token_in_max_amount,
+                            required: token_in.amount,
+                        }
+                    );
                     let swap_result = to_binary(&SwapExactAmountOutResponseData {
                         token_in_amount: token_in.amount,
                     })?;
@@ -207,6 +231,14 @@ impl SudoMsg {
 
                 // if token out is share denom, swap token for shares
                 if token_out.denom == alloyed_denom {
+                    // TODO: fix this, it's wrong
+                    ensure!(
+                        token_in.amount <= token_in_max_amount,
+                        ContractError::ExcessiveRequiredTokenIn {
+                            limit: token_in_max_amount,
+                            required: token_in.amount,
+                        }
+                    );
                     let swap_result = to_binary(&SwapExactAmountOutResponseData {
                         token_in_amount: token_in.amount,
                     })?;
@@ -232,11 +264,6 @@ impl SudoMsg {
                     token_in.denom.clone(),
                     swap_fee,
                 )?;
-
-                deps.api.debug(&format!(
-                    "actual_token_in: {}",
-                    actual_token_in.amount.u128()
-                ));
 
                 ensure!(
                     actual_token_in.amount <= token_in_max_amount,
