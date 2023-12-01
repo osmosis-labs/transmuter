@@ -1,7 +1,6 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_eq, to_binary, BankMsg, Coin, Decimal, DepsMut, Env, MessageInfo, Response,
-    Uint128,
+    ensure, to_binary, BankMsg, Coin, Decimal, DepsMut, Env, MessageInfo, Response, Uint128,
 };
 
 use crate::{
@@ -74,15 +73,6 @@ impl SudoMsg {
                 // TODO: remove this as it's not valid anymore, need to calculate token_out amount
                 let token_out = Coin::new(token_in.amount.u128(), token_out_denom);
 
-                // ensure token_out amount is greater than or equal to token_out_min_amount
-                ensure!(
-                    token_out.amount >= token_out_min_amount,
-                    ContractError::InsufficientTokenOut {
-                        required: token_out_min_amount,
-                        available: token_out.amount
-                    }
-                );
-
                 // if token in is share denom, swap alloyed asset for tokens
                 if token_in.denom == alloyed_denom {
                     let swap_result = to_binary(&SwapExactAmountInResponseData {
@@ -134,15 +124,12 @@ impl SudoMsg {
                     swap_fee,
                 )?;
 
-                // TODO: remove this as it's not valid anymore
-                // ensure that actual_token_out is equal to token_out
-                // this should never fail
-                ensure_eq!(
-                    token_out,
-                    actual_token_out,
-                    ContractError::InvalidTokenOutAmount {
-                        expected: token_out.amount,
-                        actual: actual_token_out.amount
+                // ensure token_out amount is greater than or equal to token_out_min_amount
+                ensure!(
+                    actual_token_out.amount >= token_out_min_amount,
+                    ContractError::InsufficientTokenOut {
+                        required: token_out_min_amount,
+                        available: actual_token_out.amount
                     }
                 );
 
@@ -160,11 +147,11 @@ impl SudoMsg {
 
                 let send_token_out_to_sender_msg = BankMsg::Send {
                     to_address: sender.to_string(),
-                    amount: vec![token_out.clone()],
+                    amount: vec![actual_token_out.clone()],
                 };
 
                 let swap_result = SwapExactAmountInResponseData {
-                    token_out_amount: token_out.amount,
+                    token_out_amount: actual_token_out.amount,
                 };
 
                 Ok(Response::new()
@@ -194,14 +181,6 @@ impl SudoMsg {
 
                 // TODO: remove this as it's not valid anymore, need to calculate token_in amount
                 let token_in = Coin::new(token_out.amount.u128(), token_in_denom);
-
-                ensure!(
-                    token_in.amount <= token_in_max_amount,
-                    ContractError::ExcessiveRequiredTokenIn {
-                        limit: token_in_max_amount,
-                        required: token_in.amount,
-                    }
-                );
 
                 // if token in is share denom, swap shares for tokens
                 if token_in.denom == alloyed_denom {
@@ -254,15 +233,16 @@ impl SudoMsg {
                     swap_fee,
                 )?;
 
-                // TODO: remove this as it's not valid anymore
-                // ensure that actual_token_in is equal to token_in
-                // this should never fail
-                ensure_eq!(
-                    token_in,
-                    actual_token_in,
-                    ContractError::InvalidTokenInAmount {
-                        expected: token_in.amount,
-                        actual: actual_token_in.amount
+                deps.api.debug(&format!(
+                    "actual_token_in: {}",
+                    actual_token_in.amount.u128()
+                ));
+
+                ensure!(
+                    actual_token_in.amount <= token_in_max_amount,
+                    ContractError::ExcessiveRequiredTokenIn {
+                        limit: token_in_max_amount,
+                        required: actual_token_in.amount,
                     }
                 );
 
