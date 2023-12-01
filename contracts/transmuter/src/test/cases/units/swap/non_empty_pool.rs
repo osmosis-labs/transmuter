@@ -1,7 +1,7 @@
 use super::*;
 
-const REMAINING_DENOM0: u128 = 1_000_000_000_000_000_000_000_000;
-const REMAINING_DENOM1: u128 = 1_000_000_000_000_000_000_000_000;
+const REMAINING_DENOM0: u128 = 1_000_000_000_000_000_000;
+const REMAINING_DENOM1: u128 = 1_000_000_000_000_000_000;
 
 fn non_empty_pool(app: &'_ OsmosisTestApp) -> TestEnv<'_> {
     pool_with_single_lp(
@@ -182,16 +182,16 @@ test_swap! {
     }
 }
 
-// test_swap! {
-//     swap_exact_out_4denom1_with_normalization_factor_should_succeed_with_round_up_token_in [expect ok] {
-//         setup = non_empty_pool_with_normalization_factor,
-//         msgs = [
-//             SwapMsg::SwapExactAmountOut {
-//                 token_in_denom: "denom0".to_string(),
-//                 token_in_max_amount: (1000u128).into(),
-//                 token_out: Coin::new(4, "denom1"),
-//             },
-//         ],
-//         received = Coin::new(4, "denom1")
-//     }
-// }
+test_swap! {
+    swap_exact_out_3denom1_with_normalization_factor_should_succeed_with_round_up_token_in [expect ok] {
+        setup = non_empty_pool_with_normalization_factor,
+        msgs = [
+            SwapMsg::SwapExactAmountOut {
+                token_in_denom: "denom0".to_string(),
+                token_in_max_amount: (900u128).into(),
+                token_out: Coin::new(3, "denom1"),
+            },
+        ],
+        received = Coin::new(3, "denom1")
+    }
+}

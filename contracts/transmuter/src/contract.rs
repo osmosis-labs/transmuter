@@ -555,6 +555,24 @@ impl Transmuter<'_> {
     // === queries ===
 
     #[msg(query)]
+    fn list_asset_configs(
+        &self,
+        ctx: (Deps, Env),
+    ) -> Result<ListAssetConfigsResponse, ContractError> {
+        let (deps, _env) = ctx;
+
+        let pool = self.pool.load(deps.storage)?;
+
+        Ok(ListAssetConfigsResponse {
+            asset_configs: pool
+                .pool_assets
+                .iter()
+                .map(|asset| asset.config())
+                .collect(),
+        })
+    }
+
+    #[msg(query)]
     fn list_limiters(&self, ctx: (Deps, Env)) -> Result<ListLimitersResponse, ContractError> {
         let (deps, _env) = ctx;
 
@@ -975,6 +993,11 @@ pub enum BurnAlloyedAssetFrom {
     /// This is used when the sender wants to swap tokens for alloyed assets,
     /// since alloyed asset needs to be sent to the contract before swapping.
     SentFunds,
+}
+
+#[cw_serde]
+pub struct ListAssetConfigsResponse {
+    pub asset_configs: Vec<AssetConfig>,
 }
 
 #[cw_serde]

@@ -112,6 +112,13 @@ impl Asset {
         self.normalization_factor
     }
 
+    pub fn config(&self) -> AssetConfig {
+        AssetConfig {
+            denom: self.denom.clone(),
+            normalization_factor: self.normalization_factor,
+        }
+    }
+
     pub fn to_coin(&self) -> Coin {
         Coin {
             denom: self.denom.clone(),
