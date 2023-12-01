@@ -15,6 +15,7 @@ fn test_swap_exact_amount_in_with_share_denom() {
             Coin::new(REMAINING_DENOM0, "denom0"),
             Coin::new(REMAINING_DENOM1, "denom1"),
         ],
+        vec![],
     );
 
     // get share denom
@@ -56,6 +57,7 @@ fn test_swap_exact_amount_out_with_share_denom() {
             Coin::new(REMAINING_DENOM0, "denom0"),
             Coin::new(REMAINING_DENOM1, "denom1"),
         ],
+        vec![],
     );
 
     // get share denom
@@ -97,6 +99,7 @@ fn test_swap_exact_amount_out_with_share_denom_where_token_in_max_is_exceeding_e
             Coin::new(REMAINING_DENOM0, "denom0"),
             Coin::new(REMAINING_DENOM1, "denom1"),
         ],
+        vec![],
     );
 
     // get share denom

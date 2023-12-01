@@ -10,6 +10,7 @@ fn pool_with_assets(app: &'_ OsmosisTestApp) -> TestEnv<'_> {
             Coin::new(REMAINING_DENOM0, "denom0"),
             Coin::new(REMAINING_DENOM1, "denom1"),
         ],
+        vec![],
     )
 }
 

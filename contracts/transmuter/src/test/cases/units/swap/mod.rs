@@ -396,7 +396,11 @@ fn test_swap_failed_case(t: TestEnv, msg: SwapMsg, err: ContractError) {
     });
 }
 
-fn pool_with_single_lp(app: &'_ OsmosisTestApp, pool_assets: Vec<Coin>) -> TestEnv<'_> {
+fn pool_with_single_lp(
+    app: &'_ OsmosisTestApp,
+    pool_assets: Vec<Coin>,
+    asset_configs: Vec<AssetConfig>,
+) -> TestEnv<'_> {
     let non_zero_pool_assets = pool_assets
         .clone()
         .into_iter()
@@ -416,7 +420,13 @@ fn pool_with_single_lp(app: &'_ OsmosisTestApp, pool_assets: Vec<Coin>) -> TestE
         .with_instantiate_msg(crate::contract::InstantiateMsg {
             pool_asset_configs: pool_assets
                 .iter()
-                .map(|c| AssetConfig::from_denom_str(c.denom.as_str()))
+                .map(|c| {
+                    asset_configs
+                        .iter()
+                        .find(|ac| ac.denom == c.denom)
+                        .cloned()
+                        .unwrap_or_else(|| AssetConfig::from_denom_str(c.denom.as_str()))
+                })
                 .collect(),
             alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
             admin: None,
