@@ -412,7 +412,7 @@ impl Transmuter<'_> {
                 .as_slice(),
             // swap token for alloyed asset output keeps alloyed asset value <= tokens_in value
             // if conversion has remainder to not over mint alloyed asset
-            Rounding::DOWN,
+            Rounding::Down,
         )?;
         let alloyed_asset_out = Coin::new(out_amount.u128(), alloyed_denom);
 
@@ -531,7 +531,7 @@ impl Transmuter<'_> {
                 .as_slice(),
             // swap alloyed asset for token requires more alloyed asset value >= tokens_out
             // if conversion has remainder to not over burn alloyed asset
-            Rounding::UP,
+            Rounding::Up,
         )?;
 
         ensure!(
@@ -1183,7 +1183,7 @@ mod tests {
         // Check if the new assets were added
         let res = query(
             deps.as_ref(),
-            env.clone(),
+            env,
             ContractQueryMsg::Transmuter(QueryMsg::GetTotalPoolLiquidity {}),
         )
         .unwrap();

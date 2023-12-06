@@ -261,7 +261,7 @@ impl SudoMsg {
                 let (pool, actual_token_in) = transmuter.do_calc_in_amt_given_out(
                     (deps.as_ref(), env.clone()),
                     token_out.clone(),
-                    token_in.denom.clone(),
+                    token_in.denom,
                     swap_fee,
                 )?;
 

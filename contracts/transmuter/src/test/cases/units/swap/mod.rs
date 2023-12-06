@@ -91,7 +91,7 @@ fn assert_invariants(t: TestEnv, act: impl FnOnce(&TestEnv) -> String) {
     let gcd_normalization_factor = asset_configs
         .iter()
         .map(|config| config.normalization_factor)
-        .fold(Uint128::from(1u128), |acc, x| gcd(acc, x));
+        .fold(Uint128::from(1u128), gcd);
 
     let lcm_normalization_factor = asset_configs
         .iter()
@@ -110,7 +110,7 @@ fn assert_invariants(t: TestEnv, act: impl FnOnce(&TestEnv) -> String) {
                 c.amount,
                 normalization_factor,
                 lcm_normalization_factor,
-                &Rounding::DOWN,
+                &Rounding::Down,
             )
             .unwrap()
         })
@@ -145,7 +145,7 @@ fn assert_invariants(t: TestEnv, act: impl FnOnce(&TestEnv) -> String) {
                 c.amount,
                 normalization_factor,
                 lcm_normalization_factor,
-                &Rounding::DOWN,
+                &Rounding::Down,
             )
             .unwrap()
         })
@@ -165,7 +165,7 @@ fn assert_invariants(t: TestEnv, act: impl FnOnce(&TestEnv) -> String) {
                 Uint128::one(),
                 normalization_factor,
                 lcm_normalization_factor,
-                &Rounding::DOWN,
+                &Rounding::Down,
             )
             .unwrap();
         assert!(sum_updated_pool_asset_value < prev_pool_value_with_rounding_bound);

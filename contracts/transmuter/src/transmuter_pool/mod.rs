@@ -86,7 +86,7 @@ impl TransmuterPool {
         coins: &[Coin],
     ) -> Result<Vec<(Coin, Uint128)>, ContractError> {
         coins
-            .into_iter()
+            .iter()
             .map(|coin| {
                 Ok((
                     coin.clone(),

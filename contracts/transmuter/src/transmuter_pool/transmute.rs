@@ -30,7 +30,7 @@ impl TransmuterPool {
         token_in_denom: &str,
         token_out_denom: &str,
     ) -> Result<(Coin, Coin), ContractError> {
-        let token_in_pool_asset = self.get_pool_asset_by_denom(&token_in_denom)?;
+        let token_in_pool_asset = self.get_pool_asset_by_denom(token_in_denom)?;
         let token_out_pool_asset = self.get_pool_asset_by_denom(token_out_denom)?;
 
         // calculate token in and token out amount based on normalized value
@@ -103,7 +103,7 @@ impl TransmuterPool {
                 in_amount.to_owned(),
                 token_in_pool_asset.normalization_factor(),
                 token_out_pool_asset.normalization_factor(),
-                &Rounding::DOWN,
+                &Rounding::Down,
             )?,
             AmountConstraint::ExactOut(out_amount) => out_amount.to_owned(),
         };
@@ -129,7 +129,7 @@ impl TransmuterPool {
                 out_amount.to_owned(),
                 token_out_pool_asset.normalization_factor(),
                 token_in_pool_asset.normalization_factor(),
-                &Rounding::UP,
+                &Rounding::Up,
             )?,
         };
 
@@ -159,8 +159,8 @@ mod tests {
         assert_eq!(
             pool.transmute(
                 AmountConstraint::exact_in(70_000u128),
-                &ETH_USDC,
-                &COSMOS_USDC
+                ETH_USDC,
+                COSMOS_USDC
             )
             .unwrap(),
             (Coin::new(70_000, ETH_USDC), Coin::new(70_000, COSMOS_USDC))
@@ -170,8 +170,8 @@ mod tests {
         assert_eq!(
             pool.transmute(
                 AmountConstraint::exact_in(60_000u128),
-                &ETH_USDC,
-                &COSMOS_USDC
+                ETH_USDC,
+                COSMOS_USDC
             )
             .unwrap(),
             (Coin::new(60_000, ETH_USDC), Coin::new(60_000, COSMOS_USDC))
@@ -179,8 +179,8 @@ mod tests {
         assert_eq!(
             pool.transmute(
                 AmountConstraint::exact_in(20_000u128),
-                &ETH_USDC,
-                &COSMOS_USDC
+                ETH_USDC,
+                COSMOS_USDC
             )
             .unwrap(),
             (Coin::new(20_000, ETH_USDC), Coin::new(20_000, COSMOS_USDC))
@@ -188,14 +188,14 @@ mod tests {
         assert_eq!(
             pool.transmute(
                 AmountConstraint::exact_in(20_000u128),
-                &ETH_USDC,
-                &COSMOS_USDC
+                ETH_USDC,
+                COSMOS_USDC
             )
             .unwrap(),
             (Coin::new(20_000, ETH_USDC), Coin::new(20_000, COSMOS_USDC))
         );
         assert_eq!(
-            pool.transmute(AmountConstraint::exact_in(0u128), &ETH_USDC, &COSMOS_USDC)
+            pool.transmute(AmountConstraint::exact_in(0u128), ETH_USDC, COSMOS_USDC)
                 .unwrap(),
             (Coin::new(0, ETH_USDC), Coin::new(0, COSMOS_USDC))
         );
@@ -211,8 +211,8 @@ mod tests {
         assert_eq!(
             pool.transmute(
                 AmountConstraint::exact_in(100_000u128),
-                &COSMOS_USDC,
-                &ETH_USDC
+                COSMOS_USDC,
+                ETH_USDC
             )
             .unwrap(),
             (
@@ -240,15 +240,15 @@ mod tests {
         assert_eq!(
             pool.transmute(
                 AmountConstraint::exact_out(70_000u128),
-                &ETH_USDC,
-                &COSMOS_USDC
+                ETH_USDC,
+                COSMOS_USDC
             )
             .unwrap(),
             (Coin::new(70_000, ETH_USDC), Coin::new(70_000, COSMOS_USDC))
         );
 
         assert_eq!(
-            pool.transmute(AmountConstraint::exact_out(0u128), &ETH_USDC, &COSMOS_USDC)
+            pool.transmute(AmountConstraint::exact_out(0u128), ETH_USDC, COSMOS_USDC)
                 .unwrap(),
             (Coin::new(0, ETH_USDC), Coin::new(0, COSMOS_USDC))
         );
@@ -292,8 +292,8 @@ mod tests {
         assert_eq!(
             pool.transmute(
                 AmountConstraint::exact_in(70_001u128),
-                &ETH_USDC,
-                &COSMOS_USDC
+                ETH_USDC,
+                COSMOS_USDC
             )
             .unwrap_err(),
             ContractError::InsufficientPoolAsset {
@@ -332,7 +332,7 @@ mod tests {
         assert_eq!(
             pool.transmute(
                 AmountConstraint::exact_in(70_000u128),
-                &COSMOS_USDC,
+                COSMOS_USDC,
                 "urandom2"
             )
             .unwrap_err(),
@@ -376,8 +376,8 @@ mod tests {
         assert_eq!(
             pool.transmute(
                 AmountConstraint::exact_in(70_000 * 10u128.pow(8)),
-                &WBTC_SAT,
-                &NBTC_SAT
+                WBTC_SAT,
+                NBTC_SAT
             )
             .unwrap(),
             (
@@ -432,8 +432,8 @@ mod tests {
         let result = pool
             .transmute(
                 AmountConstraint::exact_in(3 * 10u128.pow(14) + 1), // Add 1 to trigger rounding
-                &"ua",
-                &"ub",
+                "ua",
+                "ub",
             )
             .unwrap();
 
@@ -449,8 +449,8 @@ mod tests {
         let result = pool
             .transmute(
                 AmountConstraint::exact_in(3 * 10u128.pow(14) - 1), // Sub 1 to trigger rounding
-                &"ua",
-                &"ub",
+                "ua",
+                "ub",
             )
             .unwrap();
 
@@ -499,8 +499,8 @@ mod tests {
         let result = pool
             .transmute(
                 AmountConstraint::exact_out(3 * 10u128.pow(14) - 1), // Sub 1 to trigger rounding
-                &"ub",
-                &"ua",
+                "ub",
+                "ua",
             )
             .unwrap();
 
@@ -527,8 +527,8 @@ mod tests {
         let result = pool
             .transmute(
                 AmountConstraint::exact_out(3 * 10u128.pow(14) + 1), // Add 1 to trigger rounding
-                &"ub",
-                &"ua",
+                "ub",
+                "ua",
             )
             .unwrap();
 

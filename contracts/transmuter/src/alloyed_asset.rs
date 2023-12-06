@@ -141,7 +141,7 @@ mod tests {
         // same normalization factor
         let amount = AlloyedAsset::amount_from(
             &[(Coin::new(100, "ua"), ALLOYED_DENOM_NORMALIZATION_FACTOR)],
-            Rounding::UP,
+            Rounding::Up,
         )
         .unwrap();
 
@@ -153,7 +153,7 @@ mod tests {
                 (Coin::new(100, "ua"), Uint128::from(2u128)),
                 (Coin::new(100, "ub"), Uint128::from(3u128)),
             ],
-            Rounding::UP,
+            Rounding::Up,
         );
 
         assert_eq!(amount.unwrap(), Uint128::from(84u128));
@@ -163,7 +163,7 @@ mod tests {
                 (Coin::new(100, "ua"), Uint128::from(2u128)),
                 (Coin::new(100, "ub"), Uint128::from(3u128)),
             ],
-            Rounding::DOWN,
+            Rounding::Down,
         );
 
         assert_eq!(amount.unwrap(), Uint128::from(83u128));

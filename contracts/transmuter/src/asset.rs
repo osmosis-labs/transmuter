@@ -5,8 +5,8 @@ use crate::ContractError;
 
 #[derive(PartialEq)]
 pub enum Rounding {
-    UP,
-    DOWN,
+    Up,
+    Down,
 }
 
 #[cw_serde]
@@ -173,11 +173,11 @@ pub fn convert_amount(
         .checked_rem(Uint256::from(source_normalization_factor))?
         .is_zero();
 
-    return if has_rem && rounding == &Rounding::UP {
+    if has_rem && rounding == &Rounding::Up {
         Ok(quotient.checked_add(Uint256::one())?.try_into()?)
     } else {
         Ok(quotient.try_into()?)
-    };
+    }
 }
 
 #[cfg(test)]
@@ -194,7 +194,7 @@ mod tests {
                 100u128.into(),
                 asset.normalization_factor(),
                 1u128.into(),
-                &Rounding::UP
+                &Rounding::Up
             )
             .unwrap(),
             Uint128::from(100u128)
@@ -205,7 +205,7 @@ mod tests {
                 100u128.into(),
                 asset.normalization_factor(),
                 1u128.into(),
-                &Rounding::DOWN
+                &Rounding::Down
             )
             .unwrap(),
             Uint128::from(100u128)
@@ -218,7 +218,7 @@ mod tests {
                 100u128.into(),
                 asset.normalization_factor(),
                 1000000000000u128.into(),
-                &Rounding::UP
+                &Rounding::Up
             )
             .unwrap(),
             Uint128::from(100000000000000u128)
@@ -229,7 +229,7 @@ mod tests {
                 100u128.into(),
                 asset.normalization_factor(),
                 1000000000000u128.into(),
-                &Rounding::DOWN
+                &Rounding::Down
             )
             .unwrap(),
             Uint128::from(100000000000000u128)
@@ -242,7 +242,7 @@ mod tests {
                 100u128.into(),
                 asset.normalization_factor(),
                 1u128.into(),
-                &Rounding::UP
+                &Rounding::Up
             )
             .unwrap(),
             Uint128::from(1u128)
@@ -253,7 +253,7 @@ mod tests {
                 100u128.into(),
                 asset.normalization_factor(),
                 1u128.into(),
-                &Rounding::DOWN
+                &Rounding::Down
             )
             .unwrap(),
             Uint128::from(0u128)
@@ -268,7 +268,7 @@ mod tests {
                 10u128.pow(2).into(),
                 asset.normalization_factor(),
                 10u128.pow(18).into(),
-                &Rounding::UP
+                &Rounding::Up
             )
             .unwrap(),
             Uint128::from(10u128.pow(14))
@@ -279,7 +279,7 @@ mod tests {
                 10u128.pow(2).into(),
                 asset.normalization_factor(),
                 10u128.pow(18).into(),
-                &Rounding::DOWN
+                &Rounding::Down
             )
             .unwrap(),
             Uint128::from(10u128.pow(14))
@@ -294,7 +294,7 @@ mod tests {
                 3u128.into(),
                 asset.normalization_factor(),
                 3u128.into(),
-                &Rounding::UP
+                &Rounding::Up
             )
             .unwrap(),
             Uint128::from(5u128)
@@ -305,7 +305,7 @@ mod tests {
                 3u128.into(),
                 asset.normalization_factor(),
                 3u128.into(),
-                &Rounding::DOWN
+                &Rounding::Down
             )
             .unwrap(),
             Uint128::from(4u128)
