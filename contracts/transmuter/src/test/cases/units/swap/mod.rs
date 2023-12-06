@@ -88,33 +88,7 @@ fn assert_invariants(t: TestEnv, act: impl FnOnce(&TestEnv) -> String) {
         .unwrap()
         .asset_configs;
 
-    let gcd_normalization_factor = asset_configs
-        .iter()
-        .map(|config| config.normalization_factor)
-        .fold(Uint128::from(1u128), gcd);
-
-    let lcm_normalization_factor = asset_configs
-        .iter()
-        .map(|config| config.normalization_factor / gcd_normalization_factor)
-        .fold(Uint128::from(1u128), |acc, x| acc * x);
-
-    let sum_prev_pool_asset_value = prev_pool_assets
-        .iter()
-        .map(|c| {
-            let normalization_factor = asset_configs
-                .iter()
-                .find(|ac| ac.denom == c.denom)
-                .unwrap()
-                .normalization_factor;
-            convert_amount(
-                c.amount,
-                normalization_factor,
-                lcm_normalization_factor,
-                &Rounding::Down,
-            )
-            .unwrap()
-        })
-        .fold(Uint128::zero(), |acc, x| acc + x);
+    let sum_prev_pool_asset_value = total_pool_asset_value(&asset_configs, &prev_pool_assets);
 
     // run the action
     let rounding_denom = act(&t);
@@ -133,23 +107,7 @@ fn assert_invariants(t: TestEnv, act: impl FnOnce(&TestEnv) -> String) {
         .query::<GetTotalPoolLiquidityResponse>(&QueryMsg::GetTotalPoolLiquidity {})
         .unwrap()
         .total_pool_liquidity;
-    let sum_updated_pool_asset_value = updated_pool_assets
-        .iter()
-        .map(|c| {
-            let normalization_factor = asset_configs
-                .iter()
-                .find(|ac| ac.denom == c.denom)
-                .unwrap()
-                .normalization_factor;
-            convert_amount(
-                c.amount,
-                normalization_factor,
-                lcm_normalization_factor,
-                &Rounding::Down,
-            )
-            .unwrap()
-        })
-        .fold(Uint128::zero(), |acc, x| acc + x);
+    let sum_updated_pool_asset_value = total_pool_asset_value(&asset_configs, &updated_pool_assets);
 
     // in case of rounding up token_in or rounding down token out
 
@@ -164,7 +122,7 @@ fn assert_invariants(t: TestEnv, act: impl FnOnce(&TestEnv) -> String) {
             + convert_amount(
                 Uint128::one(),
                 normalization_factor,
-                lcm_normalization_factor,
+                lcm_normalization_factor(&asset_configs),
                 &Rounding::Down,
             )
             .unwrap();
@@ -172,6 +130,38 @@ fn assert_invariants(t: TestEnv, act: impl FnOnce(&TestEnv) -> String) {
     } else {
         assert_eq!(sum_prev_pool_asset_value, sum_updated_pool_asset_value);
     }
+}
+
+fn total_pool_asset_value(asset_configs: &[AssetConfig], pool_assets: &[Coin]) -> Uint128 {
+    pool_assets
+        .iter()
+        .map(|c| {
+            let normalization_factor = asset_configs
+                .iter()
+                .find(|ac| ac.denom == c.denom)
+                .unwrap()
+                .normalization_factor;
+            convert_amount(
+                c.amount,
+                normalization_factor,
+                lcm_normalization_factor(asset_configs),
+                &Rounding::Down,
+            )
+            .unwrap()
+        })
+        .fold(Uint128::zero(), |acc, x| acc + x)
+}
+
+fn lcm_normalization_factor(configs: &[AssetConfig]) -> Uint128 {
+    let gcd_normalization_factor = configs
+        .iter()
+        .map(|config| config.normalization_factor)
+        .fold(Uint128::from(1u128), gcd);
+
+    configs
+        .iter()
+        .map(|config| config.normalization_factor / gcd_normalization_factor)
+        .fold(Uint128::from(1u128), |acc, x| acc * x)
 }
 
 fn gcd(mut n: Uint128, mut m: Uint128) -> Uint128 {
@@ -269,6 +259,17 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin,
     let cp = CosmwasmPool::new(t.app);
     let bank = Bank::new(t.app);
 
+    let asset_configs = t
+        .contract
+        .query::<ListAssetConfigsResponse>(&QueryMsg::ListAssetConfigs {})
+        .unwrap()
+        .asset_configs;
+
+    let asset_config_map = asset_configs
+        .iter()
+        .map(|ac| (ac.denom.clone(), ac.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
+
     let share_denom = t
         .contract
         .query::<GetShareDenomResponse>(&QueryMsg::GetShareDenom {})
@@ -306,10 +307,7 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin,
         .unwrap()
         .total_pool_liquidity;
 
-    let sum_prev_pool_asset_amount = prev_pool_assets
-        .iter()
-        .map(|c| c.amount)
-        .fold(Uint128::zero(), |acc, x| acc + x);
+    let sum_prev_pool_asset_value = total_pool_asset_value(&asset_configs, &prev_pool_assets);
 
     // swap
     match msg {
@@ -358,10 +356,7 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin,
         .query::<GetTotalPoolLiquidityResponse>(&QueryMsg::GetTotalPoolLiquidity {})
         .unwrap()
         .total_pool_liquidity;
-    let sum_updated_pool_asset_amount = updated_pool_assets
-        .iter()
-        .map(|c| c.amount)
-        .fold(Uint128::zero(), |acc, x| acc + x);
+    let sum_updated_pool_asset_value = total_pool_asset_value(&asset_configs, &updated_pool_assets);
 
     // updated out denom balance
     let updated_out_denom_balance = bank
@@ -390,6 +385,16 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin,
         .total_shares
         .u128();
 
+    // let sent_factor = asset_config_map
+    //     .get(&sent.denom)
+    //     .map(|c| c.normalization_factor)
+    //     .unwrap_or(Uint128::one()); // TODO: use share denom normalization factor
+
+    let received_factor = asset_config_map
+        .get(&received.denom)
+        .map(|c| c.normalization_factor)
+        .unwrap_or(Uint128::one()); // TODO: use share denom normalization factor
+
     // join pool equivalent
     if received.denom == share_denom {
         // -> minted new share tokens to swapper
@@ -399,8 +404,15 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin,
         );
 
         assert_eq!(
-            sum_updated_pool_asset_amount,
-            sum_prev_pool_asset_amount + received.amount
+            sum_updated_pool_asset_value,
+            sum_prev_pool_asset_value
+                + convert_amount(
+                    received.amount,
+                    received_factor,
+                    lcm_normalization_factor(&asset_configs),
+                    &Rounding::Up // TODO: must based on exact-in / exact-out
+                )
+                .unwrap()
         );
     } else {
         // assume share denom is part of token in
@@ -408,12 +420,19 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin,
         // -> burned share tokens from swapper
         assert_eq!(
             updated_total_shares,
-            prev_total_shares - received.amount.u128()
+            prev_total_shares - dbg!(received.amount.u128())
         );
 
         assert_eq!(
-            sum_updated_pool_asset_amount,
-            sum_prev_pool_asset_amount - received.amount
+            sum_updated_pool_asset_value,
+            sum_prev_pool_asset_value
+                - convert_amount(
+                    received.amount,
+                    received_factor,
+                    lcm_normalization_factor(&asset_configs),
+                    &Rounding::Down // TODO: must based on exact-in / exact-out
+                )
+                .unwrap()
         );
     }
 

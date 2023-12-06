@@ -74,7 +74,7 @@ fn test_join_pool() {
         .unwrap_err();
 
     assert_contract_err(
-        ContractError::InvalidJoinPoolDenom {
+        ContractError::InvalidTransmuteDenom {
             denom: "urandom".to_string(),
             expected_denom: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
         },

@@ -4,7 +4,7 @@ use cosmwasm_std::{
 };
 
 use crate::{
-    contract::{BurnAlloyedAssetFrom, Transmuter},
+    contract::{BurnAlloyedAssetFrom, Entrypoint, SwapToAlloyedConstraint, Transmuter},
     ContractError,
 };
 
@@ -71,7 +71,7 @@ impl SudoMsg {
                 let alloyed_denom = transmuter.alloyed_asset.get_alloyed_denom(deps.storage)?;
 
                 // TODO: remove this as it's not valid anymore, need to calculate token_out amount
-                let token_out = Coin::new(token_in.amount.u128(), token_out_denom);
+                let token_out = Coin::new(token_in.amount.u128(), token_out_denom.clone());
 
                 // if token in is share denom, swap alloyed asset for tokens
                 if token_in.denom == alloyed_denom {
@@ -105,32 +105,19 @@ impl SudoMsg {
                 }
 
                 // if token out is share denom, swap token for shares
-                if token_out.denom == alloyed_denom {
-                    // TODO: fix this, it's wrong
-                    ensure!(
-                        token_out.amount >= token_out_min_amount,
-                        ContractError::InsufficientTokenOut {
-                            required: token_out_min_amount,
-                            available: token_out.amount
-                        }
-                    );
-                    let swap_result = to_binary(&SwapExactAmountInResponseData {
-                        token_out_amount: token_out.amount,
-                    })?;
-
+                if token_out_denom == alloyed_denom {
                     return transmuter
-                        .swap_tokens_for_alloyed_asset(
-                            method,
-                            (
-                                deps,
-                                env,
-                                MessageInfo {
-                                    sender,
-                                    funds: vec![token_in],
-                                },
-                            ),
+                        .swap_tokens_to_alloyed_asset(
+                            Entrypoint::Sudo,
+                            SwapToAlloyedConstraint::ExactIn {
+                                tokens_in: &[token_in],
+                                token_out_min_amount,
+                            },
+                            sender,
+                            deps,
+                            env,
                         )
-                        .map(|res| res.set_data(swap_result));
+                        .map(|res| res.add_attribute("method", method));
                 }
 
                 let (pool, actual_token_out) = transmuter.do_calc_out_amt_given_in(
@@ -231,31 +218,19 @@ impl SudoMsg {
 
                 // if token out is share denom, swap token for shares
                 if token_out.denom == alloyed_denom {
-                    // TODO: fix this, it's wrong
-                    ensure!(
-                        token_in.amount <= token_in_max_amount,
-                        ContractError::ExcessiveRequiredTokenIn {
-                            limit: token_in_max_amount,
-                            required: token_in.amount,
-                        }
-                    );
-                    let swap_result = to_binary(&SwapExactAmountOutResponseData {
-                        token_in_amount: token_in.amount,
-                    })?;
-
                     return transmuter
-                        .swap_tokens_for_alloyed_asset(
-                            method,
-                            (
-                                deps,
-                                env,
-                                MessageInfo {
-                                    sender,
-                                    funds: vec![token_in],
-                                },
-                            ),
+                        .swap_tokens_to_alloyed_asset(
+                            Entrypoint::Sudo,
+                            SwapToAlloyedConstraint::ExactOut {
+                                token_in_denom: &token_in.denom,
+                                token_in_max_amount,
+                                token_out_amount: token_out.amount,
+                            },
+                            sender,
+                            deps,
+                            env,
                         )
-                        .map(|res| res.set_data(swap_result));
+                        .map(|res| res.add_attribute("method", method));
                 }
 
                 let (pool, actual_token_in) = transmuter.do_calc_in_amt_given_out(

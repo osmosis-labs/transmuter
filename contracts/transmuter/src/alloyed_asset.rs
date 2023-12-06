@@ -1,4 +1,4 @@
-use cosmwasm_std::{Addr, Coin, Deps, StdResult, Storage, Uint128};
+use cosmwasm_std::{ensure, Addr, Coin, Deps, StdResult, Storage, Uint128};
 use cw_storage_plus::Item;
 
 use crate::{
@@ -73,6 +73,55 @@ impl<'a> AlloyedAsset<'a> {
             )?)?;
         }
         Ok(total)
+    }
+}
+
+pub mod swap_to_alloyed {
+    use super::*;
+
+    pub fn out_amount_via_exact_in(
+        tokens_in_with_norm_factor: Vec<(Coin, Uint128)>,
+        token_out_min_amount: Uint128,
+    ) -> Result<Uint128, ContractError> {
+        // swap token for alloyed asset output keeps alloyed asset value <= tokens_in value
+        // if conversion has remainder to not over mint alloyed asset
+        let out_amount = AlloyedAsset::amount_from(&tokens_in_with_norm_factor, Rounding::Down)?;
+
+        ensure!(
+            out_amount >= token_out_min_amount,
+            ContractError::InsufficientTokenOut {
+                required: token_out_min_amount,
+                available: out_amount
+            }
+        );
+
+        Ok(out_amount)
+    }
+
+    /// With exact out, only one token in is allowed
+    /// Since it needs to calculate the exact amount of token in
+    /// returns token in amount
+    pub fn in_amount_via_exact_out(
+        token_in_norm_factor: Uint128,
+        token_in_max_amount: Uint128,
+        token_out_amount: Uint128,
+    ) -> Result<Uint128, ContractError> {
+        let token_in_amount = convert_amount(
+            token_out_amount,
+            ALLOYED_DENOM_NORMALIZATION_FACTOR,
+            token_in_norm_factor,
+            &Rounding::Up,
+        )?;
+
+        ensure!(
+            token_in_amount <= token_in_max_amount,
+            ContractError::ExcessiveRequiredTokenIn {
+                limit: token_in_max_amount,
+                required: token_in_amount
+            }
+        );
+
+        Ok(token_in_amount)
     }
 }
 

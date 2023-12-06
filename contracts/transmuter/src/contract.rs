@@ -1,16 +1,17 @@
 use crate::{
-    alloyed_asset::AlloyedAsset,
+    alloyed_asset::{swap_to_alloyed, AlloyedAsset},
     asset::{Asset, AssetConfig, Rounding},
     ensure_admin_authority, ensure_moderator_authority,
     error::ContractError,
     limiter::{Limiter, LimiterParams, Limiters},
     role::Role,
+    sudo::{SwapExactAmountInResponseData, SwapExactAmountOutResponseData},
     transmuter_pool::{AmountConstraint, TransmuterPool},
 };
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_eq, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Reply,
-    Response, StdError, SubMsg, Uint128,
+    ensure, ensure_eq, to_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env, MessageInfo,
+    Reply, Response, StdError, SubMsg, Uint128,
 };
 
 use cw_storage_plus::Item;
@@ -349,30 +350,99 @@ impl Transmuter<'_> {
     /// Token used to join pool is sent to the contract via `funds` in `MsgExecuteContract`.
     #[msg(exec)]
     pub fn join_pool(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
-        self.swap_tokens_for_alloyed_asset("join_pool", ctx)
+        let (deps, env, info) = ctx;
+        self.swap_tokens_to_alloyed_asset(
+            Entrypoint::Exec,
+            SwapToAlloyedConstraint::ExactIn {
+                tokens_in: &info.funds,
+                token_out_min_amount: Uint128::zero(),
+            },
+            info.sender,
+            deps,
+            env,
+        )
+        .map(|res| res.add_attribute("method", "join_pool"))
     }
 
-    pub fn swap_tokens_for_alloyed_asset(
+    pub fn swap_tokens_to_alloyed_asset(
         &self,
-        method: &str,
-        ctx: (DepsMut, Env, MessageInfo),
+        entrypoint: Entrypoint,
+        constraint: SwapToAlloyedConstraint,
+        mint_to_address: Addr,
+        deps: DepsMut,
+        env: Env,
     ) -> Result<Response, ContractError> {
-        let (deps, env, info) = ctx;
+        let mut pool: TransmuterPool = self.pool.load(deps.storage)?;
+
+        let response = Response::new();
+
+        let (tokens_in, out_amount, response) = match constraint {
+            SwapToAlloyedConstraint::ExactIn {
+                tokens_in,
+                token_out_min_amount,
+            } => {
+                let tokens_in_with_norm_factor =
+                    pool.pair_coins_with_normalization_factor(tokens_in)?;
+                let out_amount = swap_to_alloyed::out_amount_via_exact_in(
+                    tokens_in_with_norm_factor,
+                    token_out_min_amount,
+                )?;
+
+                // set response data if calling from sudo
+                let response = match entrypoint {
+                    Entrypoint::Sudo => {
+                        response.set_data(to_binary(&SwapExactAmountInResponseData {
+                            token_out_amount: out_amount,
+                        })?)
+                    }
+                    Entrypoint::Exec => response,
+                };
+
+                (tokens_in.to_owned(), out_amount, response)
+            }
+
+            SwapToAlloyedConstraint::ExactOut {
+                token_in_denom,
+                token_in_max_amount,
+                token_out_amount,
+            } => {
+                let token_in_norm_factor = pool
+                    .get_pool_asset_by_denom(token_in_denom)?
+                    .normalization_factor();
+                let in_amount = swap_to_alloyed::in_amount_via_exact_out(
+                    token_in_norm_factor,
+                    token_in_max_amount,
+                    token_out_amount,
+                )?;
+                let tokens_in = vec![Coin::new(in_amount.u128(), token_in_denom)];
+
+                // set response data if calling from sudo
+                let response = match entrypoint {
+                    Entrypoint::Sudo => {
+                        response.set_data(to_binary(&SwapExactAmountOutResponseData {
+                            token_in_amount: in_amount,
+                        })?)
+                    }
+                    Entrypoint::Exec => response,
+                };
+
+                (tokens_in, token_out_amount, response)
+            }
+        };
 
         // ensure funds not empty
         ensure!(
-            !info.funds.is_empty(),
+            !tokens_in.is_empty(),
             ContractError::AtLeastSingleTokenExpected {}
         );
 
         // ensure funds does not have zero coin
         ensure!(
-            info.funds.iter().all(|coin| coin.amount > Uint128::zero()),
+            tokens_in.iter().all(|coin| coin.amount > Uint128::zero()),
             ContractError::ZeroValueOperation {}
         );
 
-        let (pool, alloyed_asset_out) =
-            self.calc_swap_tokens_for_alloyed_asset(deps.as_ref(), &info.funds)?;
+        pool.join_pool(&tokens_in)?;
 
         // check and update limiters only if pool assets are not zero
         if let Some(denom_weight_pairs) = pool.weights()? {
@@ -385,38 +455,18 @@ impl Transmuter<'_> {
 
         self.pool.save(deps.storage, &pool)?;
 
-        let mint_msg = MsgMint {
+        let alloyed_asset_out = Coin::new(
+            out_amount.u128(),
+            self.alloyed_asset.get_alloyed_denom(deps.storage)?,
+        );
+
+        let response = response.add_message(MsgMint {
             sender: env.contract.address.to_string(),
             amount: Some(alloyed_asset_out.into()),
-            mint_to_address: info.sender.to_string(),
-        };
+            mint_to_address: mint_to_address.to_string(),
+        });
 
-        Ok(Response::new()
-            .add_attribute("method", method)
-            .add_message(mint_msg))
-    }
-
-    fn calc_swap_tokens_for_alloyed_asset(
-        &self,
-        deps: Deps,
-        tokens_in: &[Coin],
-    ) -> Result<(TransmuterPool, Coin), ContractError> {
-        // join pool
-        let mut pool = self.pool.load(deps.storage)?;
-        pool.join_pool(tokens_in)?;
-
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
-
-        let out_amount = AlloyedAsset::amount_from(
-            pool.pair_coins_with_normalization_factor(tokens_in)?
-                .as_slice(),
-            // swap token for alloyed asset output keeps alloyed asset value <= tokens_in value
-            // if conversion has remainder to not over mint alloyed asset
-            Rounding::Down,
-        )?;
-        let alloyed_asset_out = Coin::new(out_amount.u128(), alloyed_denom);
-
-        Ok((pool, alloyed_asset_out))
+        Ok(response)
     }
 
     /// Exit pool with `tokens_out` amount of tokens.
@@ -983,6 +1033,22 @@ impl Transmuter<'_> {
     }
 }
 
+pub enum Entrypoint {
+    Exec,
+    Sudo,
+}
+pub enum SwapToAlloyedConstraint<'a> {
+    ExactIn {
+        tokens_in: &'a [Coin],
+        token_out_min_amount: Uint128,
+    },
+    ExactOut {
+        token_in_denom: &'a str,
+        token_in_max_amount: Uint128,
+        token_out_amount: Uint128,
+    },
+}
+
 /// Determines where to burn alloyed assets from.
 pub enum BurnAlloyedAssetFrom {
     /// Burn alloyed asset from the sender's account.
@@ -1067,12 +1133,11 @@ pub struct GetModeratorResponse {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::limiter::{ChangeLimiter, StaticLimiter, WindowConfig};
     use crate::sudo::SudoMsg;
-
     use crate::*;
+
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
     use cosmwasm_std::{attr, from_binary, SubMsgResponse, SubMsgResult, Uint64};
 
