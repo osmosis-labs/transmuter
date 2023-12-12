@@ -6,6 +6,7 @@ mod limiter;
 mod migrations;
 mod role;
 mod sudo;
+mod swap;
 mod transmuter_pool;
 pub use crate::error::ContractError;
 

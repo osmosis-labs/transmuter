@@ -92,6 +92,9 @@ pub enum ContractError {
     #[error("Pool asset not be share denom")]
     ShareDenomNotAllowedAsPoolAsset {},
 
+    #[error("Token in must not have the same denom as token out: {denom}")]
+    SameDenomNotAllowed { denom: String },
+
     #[error("Unauthorized")]
     Unauthorized {},
 
