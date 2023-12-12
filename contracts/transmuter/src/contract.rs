@@ -21,6 +21,7 @@ use osmosis_std::types::{
         MsgBurn, MsgCreateDenom, MsgCreateDenomResponse, MsgMint, MsgSetDenomMetadata,
     },
 };
+use serde::Serialize;
 use sylvia::contract;
 
 /// version info for migration
@@ -388,15 +389,13 @@ impl Transmuter<'_> {
                     token_out_min_amount,
                 )?;
 
-                // set response data if calling from sudo
-                let response = match entrypoint {
-                    Entrypoint::Sudo => {
-                        response.set_data(to_binary(&SwapExactAmountInResponseData {
-                            token_out_amount: out_amount,
-                        })?)
-                    }
-                    Entrypoint::Exec => response,
-                };
+                let response = set_data_if_sudo(
+                    response,
+                    &entrypoint,
+                    &SwapExactAmountInResponseData {
+                        token_out_amount: out_amount,
+                    },
+                )?;
 
                 (tokens_in.to_owned(), out_amount, response)
             }
@@ -416,15 +415,13 @@ impl Transmuter<'_> {
                 )?;
                 let tokens_in = vec![Coin::new(in_amount.u128(), token_in_denom)];
 
-                // set response data if calling from sudo
-                let response = match entrypoint {
-                    Entrypoint::Sudo => {
-                        response.set_data(to_binary(&SwapExactAmountOutResponseData {
-                            token_in_amount: in_amount,
-                        })?)
-                    }
-                    Entrypoint::Exec => response,
-                };
+                let response = set_data_if_sudo(
+                    response,
+                    &entrypoint,
+                    &SwapExactAmountOutResponseData {
+                        token_in_amount: in_amount,
+                    },
+                )?;
 
                 (tokens_in, token_out_amount, response)
             }
@@ -513,7 +510,7 @@ impl Transmuter<'_> {
                 token_in_amount,
             } => {
                 let token_out_norm_factor = pool
-                    .get_pool_asset_by_denom(&token_out_denom)?
+                    .get_pool_asset_by_denom(token_out_denom)?
                     .normalization_factor();
                 let out_amount = swap_from_alloyed::out_amount_via_exact_in(
                     token_in_amount,
@@ -521,15 +518,13 @@ impl Transmuter<'_> {
                     token_out_min_amount,
                 )?;
 
-                // set response data if calling from sudo
-                let response = match entrypoint {
-                    Entrypoint::Sudo => {
-                        response.set_data(to_binary(&SwapExactAmountInResponseData {
-                            token_out_amount: out_amount,
-                        })?)
-                    }
-                    Entrypoint::Exec => response,
-                };
+                let response = set_data_if_sudo(
+                    response,
+                    &entrypoint,
+                    &SwapExactAmountInResponseData {
+                        token_out_amount: out_amount,
+                    },
+                )?;
 
                 let tokens_out = vec![Coin::new(out_amount.u128(), token_out_denom)];
 
@@ -546,16 +541,13 @@ impl Transmuter<'_> {
                     tokens_out_with_norm_factor,
                 )?;
 
-                // set response data if calling from sudo
-                // TODO: refactor this
-                let response = match entrypoint {
-                    Entrypoint::Sudo => {
-                        response.set_data(to_binary(&SwapExactAmountOutResponseData {
-                            token_in_amount: in_amount,
-                        })?)
-                    }
-                    Entrypoint::Exec => response,
-                };
+                let response = set_data_if_sudo(
+                    response,
+                    &entrypoint,
+                    &SwapExactAmountOutResponseData {
+                        token_in_amount: in_amount,
+                    },
+                )?;
 
                 (in_amount, tokens_out.to_vec(), response)
             }
@@ -1055,6 +1047,20 @@ impl Transmuter<'_> {
 pub enum Entrypoint {
     Exec,
     Sudo,
+}
+
+pub fn set_data_if_sudo<T>(
+    response: Response,
+    entrypoint: &Entrypoint,
+    data: &T,
+) -> Result<Response, StdError>
+where
+    T: Serialize + ?Sized,
+{
+    Ok(match entrypoint {
+        Entrypoint::Sudo => response.set_data(to_binary(data)?),
+        Entrypoint::Exec => response,
+    })
 }
 pub enum SwapToAlloyedConstraint<'a> {
     ExactIn {
