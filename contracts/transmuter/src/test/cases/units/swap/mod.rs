@@ -415,13 +415,8 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin,
                 .unwrap()
         );
     } else {
-        // assume share denom is part of token in
-        // exit pool equivalent
-        // -> burned share tokens from swapper
-        assert_eq!(
-            updated_total_shares,
-            prev_total_shares - dbg!(received.amount.u128())
-        );
+        // sent is alloyed denom, so we subtract the amount from total shares
+        assert_eq!(updated_total_shares, prev_total_shares - sent.amount.u128());
 
         assert_eq!(
             sum_updated_pool_asset_value,

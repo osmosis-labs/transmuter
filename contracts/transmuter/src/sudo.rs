@@ -1,10 +1,10 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{
-    ensure, to_binary, BankMsg, Coin, Decimal, DepsMut, Env, MessageInfo, Response, Uint128,
-};
+use cosmwasm_std::{ensure, to_binary, BankMsg, Coin, Decimal, DepsMut, Env, Response, Uint128};
 
 use crate::{
-    contract::{BurnAlloyedAssetFrom, Entrypoint, SwapToAlloyedConstraint, Transmuter},
+    contract::{
+        BurnTarget, Entrypoint, SwapFromAlloyedConstraint, SwapToAlloyedConstraint, Transmuter,
+    },
     ContractError,
 };
 
@@ -70,38 +70,22 @@ impl SudoMsg {
 
                 let alloyed_denom = transmuter.alloyed_asset.get_alloyed_denom(deps.storage)?;
 
-                // TODO: remove this as it's not valid anymore, need to calculate token_out amount
-                let token_out = Coin::new(token_in.amount.u128(), token_out_denom.clone());
-
                 // if token in is share denom, swap alloyed asset for tokens
                 if token_in.denom == alloyed_denom {
-                    // TODO: fix this, it's wrong
-                    ensure!(
-                        token_out.amount >= token_out_min_amount,
-                        ContractError::InsufficientTokenOut {
-                            required: token_out_min_amount,
-                            available: token_out.amount
-                        }
-                    );
-                    let swap_result = to_binary(&SwapExactAmountInResponseData {
-                        token_out_amount: token_out.amount,
-                    })?;
-
                     return transmuter
                         .swap_alloyed_asset_for_tokens(
-                            method,
-                            BurnAlloyedAssetFrom::SentFunds,
-                            (
-                                deps,
-                                env,
-                                MessageInfo {
-                                    sender,
-                                    funds: vec![token_in],
-                                },
-                            ),
-                            vec![token_out],
+                            Entrypoint::Sudo,
+                            SwapFromAlloyedConstraint::ExactIn {
+                                token_in_amount: token_in.amount,
+                                token_out_denom: &token_out_denom,
+                                token_out_min_amount,
+                            },
+                            BurnTarget::SentFunds,
+                            sender,
+                            deps,
+                            env,
                         )
-                        .map(|res| res.set_data(swap_result));
+                        .map(|res| res.add_attribute("method", method));
                 }
 
                 // if token out is share denom, swap token for shares
@@ -123,7 +107,7 @@ impl SudoMsg {
                 let (pool, actual_token_out) = transmuter.do_calc_out_amt_given_in(
                     (deps.as_ref(), env.clone()),
                     token_in,
-                    &token_out.denom,
+                    &token_out_denom,
                     swap_fee,
                 )?;
 
@@ -182,38 +166,21 @@ impl SudoMsg {
 
                 let alloyed_denom = transmuter.alloyed_asset.get_alloyed_denom(deps.storage)?;
 
-                // TODO: remove this as it's not valid anymore, need to calculate token_in amount
-                let token_in = Coin::new(token_out.amount.u128(), token_in_denom);
-
                 // if token in is share denom, swap shares for tokens
-                if token_in.denom == alloyed_denom {
-                    // TODO: fix this, it's wrong
-                    ensure!(
-                        token_in.amount <= token_in_max_amount,
-                        ContractError::ExcessiveRequiredTokenIn {
-                            limit: token_in_max_amount,
-                            required: token_in.amount,
-                        }
-                    );
-                    let swap_result = to_binary(&SwapExactAmountOutResponseData {
-                        token_in_amount: token_in.amount,
-                    })?;
-
+                if token_in_denom == alloyed_denom {
                     return transmuter
                         .swap_alloyed_asset_for_tokens(
-                            method,
-                            BurnAlloyedAssetFrom::SentFunds,
-                            (
-                                deps,
-                                env,
-                                MessageInfo {
-                                    sender,
-                                    funds: vec![token_in],
-                                },
-                            ),
-                            vec![token_out],
+                            Entrypoint::Sudo,
+                            SwapFromAlloyedConstraint::ExactOut {
+                                tokens_out: &[token_out],
+                                token_in_max_amount,
+                            },
+                            BurnTarget::SentFunds,
+                            sender,
+                            deps,
+                            env,
                         )
-                        .map(|res| res.set_data(swap_result));
+                        .map(|res| res.add_attribute("method", method));
                 }
 
                 // if token out is share denom, swap token for shares
@@ -222,7 +189,7 @@ impl SudoMsg {
                         .swap_tokens_to_alloyed_asset(
                             Entrypoint::Sudo,
                             SwapToAlloyedConstraint::ExactOut {
-                                token_in_denom: &token_in.denom,
+                                token_in_denom: &token_in_denom,
                                 token_in_max_amount,
                                 token_out_amount: token_out.amount,
                             },
@@ -236,7 +203,7 @@ impl SudoMsg {
                 let (pool, actual_token_in) = transmuter.do_calc_in_amt_given_out(
                     (deps.as_ref(), env.clone()),
                     token_out.clone(),
-                    token_in.denom,
+                    token_in_denom,
                     swap_fee,
                 )?;
 

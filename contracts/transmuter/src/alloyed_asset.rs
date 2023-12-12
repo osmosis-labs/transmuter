@@ -125,6 +125,56 @@ pub mod swap_to_alloyed {
     }
 }
 
+pub mod swap_from_alloyed {
+    use super::*;
+
+    pub fn out_amount_via_exact_in(
+        amount_in: Uint128,
+        token_out_norm_factor: Uint128,
+        token_out_min_amount: Uint128,
+    ) -> Result<Uint128, ContractError> {
+        // swap token from alloyed asset output keeps token_out value <= alloyed asset burnt value (amount_in)
+        // makes sure it's not under burning alloyed asset
+        let out_amount = convert_amount(
+            amount_in,
+            ALLOYED_DENOM_NORMALIZATION_FACTOR,
+            token_out_norm_factor,
+            &Rounding::Down,
+        )?;
+
+        ensure!(
+            out_amount >= token_out_min_amount,
+            ContractError::InsufficientTokenOut {
+                required: token_out_min_amount,
+                available: out_amount
+            }
+        );
+
+        Ok(out_amount)
+    }
+
+    /// With exact out, only one token in is allowed
+    /// Since it needs to calculate the exact amount of token in
+    /// returns token in amount
+    pub fn in_amount_via_exact_out(
+        token_in_max_amount: Uint128,
+        tokens_out_with_norm_factor: Vec<(Coin, Uint128)>,
+    ) -> Result<Uint128, ContractError> {
+        let token_in_amount =
+            AlloyedAsset::amount_from(&tokens_out_with_norm_factor, Rounding::Up)?;
+
+        ensure!(
+            token_in_amount <= token_in_max_amount,
+            ContractError::ExcessiveRequiredTokenIn {
+                limit: token_in_max_amount,
+                required: token_in_amount
+            }
+        );
+
+        Ok(token_in_amount)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use cosmwasm_std::testing::mock_dependencies;

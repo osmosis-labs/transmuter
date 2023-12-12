@@ -1,6 +1,6 @@
 use crate::{
-    alloyed_asset::{swap_to_alloyed, AlloyedAsset},
-    asset::{Asset, AssetConfig, Rounding},
+    alloyed_asset::{swap_from_alloyed, swap_to_alloyed, AlloyedAsset},
+    asset::{Asset, AssetConfig},
     ensure_admin_authority, ensure_moderator_authority,
     error::ContractError,
     limiter::{Limiter, LimiterParams, Limiters},
@@ -478,22 +478,88 @@ impl Transmuter<'_> {
         ctx: (DepsMut, Env, MessageInfo),
         tokens_out: Vec<Coin>,
     ) -> Result<Response, ContractError> {
+        let (deps, env, info) = ctx;
         self.swap_alloyed_asset_for_tokens(
-            "exit_pool",
-            BurnAlloyedAssetFrom::SenderAccount,
-            ctx,
-            tokens_out,
+            Entrypoint::Exec,
+            SwapFromAlloyedConstraint::ExactOut {
+                tokens_out: &tokens_out,
+                token_in_max_amount: Uint128::MAX,
+            },
+            BurnTarget::SenderAccount,
+            info.sender,
+            deps,
+            env,
         )
+        .map(|res| res.add_attribute("method", "exit_pool"))
     }
 
     pub fn swap_alloyed_asset_for_tokens(
         &self,
-        method: &str,
-        burn_alloyed_asset_from: BurnAlloyedAssetFrom,
-        ctx: (DepsMut, Env, MessageInfo),
-        tokens_out: Vec<Coin>,
+        entrypoint: Entrypoint,
+        constraint: SwapFromAlloyedConstraint,
+        burn_target: BurnTarget,
+        sender: Addr,
+        deps: DepsMut,
+        env: Env,
     ) -> Result<Response, ContractError> {
-        let (deps, env, info) = ctx;
+        let mut pool: TransmuterPool = self.pool.load(deps.storage)?;
+
+        let response = Response::new();
+
+        let (in_amount, tokens_out, response) = match constraint {
+            SwapFromAlloyedConstraint::ExactIn {
+                token_out_denom,
+                token_out_min_amount,
+                token_in_amount,
+            } => {
+                let token_out_norm_factor = pool
+                    .get_pool_asset_by_denom(&token_out_denom)?
+                    .normalization_factor();
+                let out_amount = swap_from_alloyed::out_amount_via_exact_in(
+                    token_in_amount,
+                    token_out_norm_factor,
+                    token_out_min_amount,
+                )?;
+
+                // set response data if calling from sudo
+                let response = match entrypoint {
+                    Entrypoint::Sudo => {
+                        response.set_data(to_binary(&SwapExactAmountInResponseData {
+                            token_out_amount: out_amount,
+                        })?)
+                    }
+                    Entrypoint::Exec => response,
+                };
+
+                let tokens_out = vec![Coin::new(out_amount.u128(), token_out_denom)];
+
+                (token_in_amount, tokens_out, response)
+            }
+            SwapFromAlloyedConstraint::ExactOut {
+                tokens_out,
+                token_in_max_amount,
+            } => {
+                let tokens_out_with_norm_factor =
+                    pool.pair_coins_with_normalization_factor(tokens_out)?;
+                let in_amount = swap_from_alloyed::in_amount_via_exact_out(
+                    token_in_max_amount,
+                    tokens_out_with_norm_factor,
+                )?;
+
+                // set response data if calling from sudo
+                // TODO: refactor this
+                let response = match entrypoint {
+                    Entrypoint::Sudo => {
+                        response.set_data(to_binary(&SwapExactAmountOutResponseData {
+                            token_in_amount: in_amount,
+                        })?)
+                    }
+                    Entrypoint::Exec => response,
+                };
+
+                (in_amount, tokens_out.to_vec(), response)
+            }
+        };
 
         // ensure tokens out has no zero value
         ensure!(
@@ -501,14 +567,27 @@ impl Transmuter<'_> {
             ContractError::ZeroValueOperation {}
         );
 
-        let (pool, alloyed_asset_to_burn, burn_from_address) = self
-            .calc_swap_alloyed_asset_for_tokens(
-                deps.as_ref(),
-                &env,
-                &info,
-                burn_alloyed_asset_from,
-                &tokens_out,
-            )?;
+        let burn_from_address = match burn_target {
+            BurnTarget::SenderAccount => {
+                // Check if the sender's shares is sufficient to burn
+                let shares = self.alloyed_asset.get_balance(deps.as_ref(), &sender)?;
+                ensure!(
+                    shares >= in_amount,
+                    ContractError::InsufficientShares {
+                        required: in_amount,
+                        available: shares
+                    }
+                );
+
+                Ok::<&Addr, ContractError>(&sender)
+            }
+
+            // no need to check shares sufficiency since it requires pre-sending shares to the contract
+            BurnTarget::SentFunds => Ok(&env.contract.address),
+        }?
+        .to_string();
+
+        pool.exit_pool(&tokens_out)?;
 
         // check and update limiters only if pool assets are not zero
         if let Some(denom_weight_pairs) = pool.weights()? {
@@ -522,84 +601,24 @@ impl Transmuter<'_> {
         self.pool.save(deps.storage, &pool)?;
 
         let bank_send_msg = BankMsg::Send {
-            to_address: info.sender.to_string(),
+            to_address: sender.to_string(),
             amount: tokens_out,
         };
+
+        let alloyed_asset_to_burn = Coin::new(
+            in_amount.u128(),
+            self.alloyed_asset.get_alloyed_denom(deps.storage)?,
+        )
+        .into();
 
         // burn alloyed assets
         let burn_msg = MsgBurn {
             sender: env.contract.address.to_string(),
-            amount: Some(alloyed_asset_to_burn.into()),
+            amount: Some(alloyed_asset_to_burn),
             burn_from_address,
         };
 
-        Ok(Response::new()
-            .add_attribute("method", method)
-            .add_message(burn_msg)
-            .add_message(bank_send_msg))
-    }
-
-    fn calc_swap_alloyed_asset_for_tokens(
-        &self,
-        deps: Deps,
-        env: &Env,
-        info: &MessageInfo,
-        burn_alloyed_asset_from: BurnAlloyedAssetFrom,
-        tokens_out: &[Coin],
-    ) -> Result<(TransmuterPool, Coin, String), ContractError> {
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
-
-        let (alloyed_asset_available, burn_from_address) = match burn_alloyed_asset_from {
-            BurnAlloyedAssetFrom::SenderAccount => {
-                ensure!(info.funds.is_empty(), ContractError::EmptyFundsExpected {});
-
-                let alloyed_asset_available = self.alloyed_asset.get_balance(deps, &info.sender)?;
-                let burn_from_address = info.sender.to_string();
-                (alloyed_asset_available, burn_from_address)
-            }
-            BurnAlloyedAssetFrom::SentFunds => {
-                ensure!(info.funds.len() == 1, ContractError::SingleTokenExpected {});
-                ensure!(
-                    info.funds[0].denom == alloyed_denom,
-                    ContractError::UnexpectedDenom {
-                        expected: info.funds[0].clone().denom,
-                        actual: alloyed_denom
-                    }
-                );
-
-                let alloyed_asset_available = info.funds[0].amount;
-                let burn_from_address = env.contract.address.to_string();
-                (alloyed_asset_available, burn_from_address)
-            }
-        };
-
-        let mut pool = self.pool.load(deps.storage)?;
-
-        // check if sender's allooed asset balance is enough
-        let alloyed_asset_to_burn = AlloyedAsset::amount_from(
-            pool.pair_coins_with_normalization_factor(tokens_out)?
-                .as_slice(),
-            // swap alloyed asset for token requires more alloyed asset value >= tokens_out
-            // if conversion has remainder to not over burn alloyed asset
-            Rounding::Up,
-        )?;
-
-        ensure!(
-            alloyed_asset_available >= alloyed_asset_to_burn,
-            ContractError::InsufficientShares {
-                required: alloyed_asset_to_burn,
-                available: alloyed_asset_available
-            }
-        );
-
-        // exit pool
-        pool.exit_pool(tokens_out)?;
-
-        Ok((
-            pool,
-            Coin::new(alloyed_asset_to_burn.u128(), alloyed_denom),
-            burn_from_address,
-        ))
+        Ok(response.add_message(burn_msg).add_message(bank_send_msg))
     }
 
     // === queries ===
@@ -1049,8 +1068,20 @@ pub enum SwapToAlloyedConstraint<'a> {
     },
 }
 
+pub enum SwapFromAlloyedConstraint<'a> {
+    ExactIn {
+        token_out_denom: &'a str,
+        token_out_min_amount: Uint128,
+        token_in_amount: Uint128,
+    },
+    ExactOut {
+        tokens_out: &'a [Coin],
+        token_in_max_amount: Uint128,
+    },
+}
+
 /// Determines where to burn alloyed assets from.
-pub enum BurnAlloyedAssetFrom {
+pub enum BurnTarget {
     /// Burn alloyed asset from the sender's account.
     /// This is used when the sender wants to exit pool
     /// forcing no funds attached in the process.
@@ -2378,6 +2409,11 @@ mod tests {
             },
         )
         .unwrap();
+
+        // join pool by others for sufficient amount
+        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+        let info = mock_info(admin, &[Coin::new(1000, "uion"), Coin::new(1000, "uosmo")]);
+        execute(deps.as_mut(), env.clone(), info, join_pool_msg).unwrap();
 
         // User tries to exit pool
         let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
