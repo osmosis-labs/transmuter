@@ -163,28 +163,11 @@ impl SudoMsg {
 
                 let sender = deps.api.addr_validate(&sender)?;
 
-                let alloyed_denom = transmuter.alloyed_asset.get_alloyed_denom(deps.storage)?;
+                let swap_variant =
+                    transmuter.swap_varaint(&token_in_denom, &token_out.denom, deps.as_ref())?;
 
-                // if token in is share denom, swap shares for tokens
-                if token_in_denom == alloyed_denom {
-                    return transmuter
-                        .swap_alloyed_asset_to_tokens(
-                            Entrypoint::Sudo,
-                            SwapFromAlloyedConstraint::ExactOut {
-                                tokens_out: &[token_out],
-                                token_in_max_amount,
-                            },
-                            BurnTarget::SentFunds,
-                            sender,
-                            deps,
-                            env,
-                        )
-                        .map(|res| res.add_attribute("method", method));
-                }
-
-                // if token out is share denom, swap token for shares
-                if token_out.denom == alloyed_denom {
-                    return transmuter
+                match swap_variant {
+                    SwapVariant::TokenToAlloyed => transmuter
                         .swap_tokens_to_alloyed_asset(
                             Entrypoint::Sudo,
                             SwapToAlloyedConstraint::ExactOut {
@@ -196,49 +179,63 @@ impl SudoMsg {
                             deps,
                             env,
                         )
-                        .map(|res| res.add_attribute("method", method));
-                }
+                        .map(|res| res.add_attribute("method", method)),
+                    SwapVariant::AlloyedToToken => transmuter
+                        .swap_alloyed_asset_to_tokens(
+                            Entrypoint::Sudo,
+                            SwapFromAlloyedConstraint::ExactOut {
+                                tokens_out: &[token_out],
+                                token_in_max_amount,
+                            },
+                            BurnTarget::SentFunds,
+                            sender,
+                            deps,
+                            env,
+                        )
+                        .map(|res| res.add_attribute("method", method)),
+                    SwapVariant::TokenToToken => {
+                        let (pool, actual_token_in) = transmuter.do_calc_in_amt_given_out(
+                            (deps.as_ref(), env.clone()),
+                            token_out.clone(),
+                            token_in_denom,
+                            swap_fee,
+                        )?;
 
-                let (pool, actual_token_in) = transmuter.do_calc_in_amt_given_out(
-                    (deps.as_ref(), env.clone()),
-                    token_out.clone(),
-                    token_in_denom,
-                    swap_fee,
-                )?;
+                        ensure!(
+                            actual_token_in.amount <= token_in_max_amount,
+                            ContractError::ExcessiveRequiredTokenIn {
+                                limit: token_in_max_amount,
+                                required: actual_token_in.amount,
+                            }
+                        );
 
-                ensure!(
-                    actual_token_in.amount <= token_in_max_amount,
-                    ContractError::ExcessiveRequiredTokenIn {
-                        limit: token_in_max_amount,
-                        required: actual_token_in.amount,
+                        // check and update limiters only if pool assets are not zero
+                        if let Some(denom_weight_pairs) = pool.weights()? {
+                            transmuter.limiters.check_limits_and_update(
+                                deps.storage,
+                                denom_weight_pairs,
+                                env.block.time,
+                            )?;
+                        }
+
+                        // save pool
+                        transmuter.pool.save(deps.storage, &pool)?;
+
+                        let send_token_out_to_sender_msg = BankMsg::Send {
+                            to_address: sender.to_string(),
+                            amount: vec![token_out],
+                        };
+
+                        let swap_result = SwapExactAmountOutResponseData {
+                            token_in_amount: actual_token_in.amount,
+                        };
+
+                        Ok(Response::new()
+                            .add_attribute("method", "swap_exact_amount_out")
+                            .add_message(send_token_out_to_sender_msg)
+                            .set_data(to_binary(&swap_result)?))
                     }
-                );
-
-                // check and update limiters only if pool assets are not zero
-                if let Some(denom_weight_pairs) = pool.weights()? {
-                    transmuter.limiters.check_limits_and_update(
-                        deps.storage,
-                        denom_weight_pairs,
-                        env.block.time,
-                    )?;
                 }
-
-                // save pool
-                transmuter.pool.save(deps.storage, &pool)?;
-
-                let send_token_out_to_sender_msg = BankMsg::Send {
-                    to_address: sender.to_string(),
-                    amount: vec![token_out],
-                };
-
-                let swap_result = SwapExactAmountOutResponseData {
-                    token_in_amount: actual_token_in.amount,
-                };
-
-                Ok(Response::new()
-                    .add_attribute("method", "swap_exact_amount_out")
-                    .add_message(send_token_out_to_sender_msg)
-                    .set_data(to_binary(&swap_result)?))
             }
         }
     }
