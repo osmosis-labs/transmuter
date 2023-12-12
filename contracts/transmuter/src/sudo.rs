@@ -64,8 +64,6 @@ impl SudoMsg {
                     ContractError::ZeroValueOperation {}
                 );
 
-                let method = "swap_exact_amount_in";
-
                 let (deps, env) = ctx;
                 let sender = deps.api.addr_validate(&sender)?;
 
@@ -73,33 +71,28 @@ impl SudoMsg {
                     transmuter.swap_varaint(&token_in.denom, &token_out_denom, deps.as_ref())?;
 
                 match swap_variant {
-                    SwapVariant::TokenToAlloyed => transmuter
-                        .swap_tokens_to_alloyed_asset(
-                            Entrypoint::Sudo,
-                            SwapToAlloyedConstraint::ExactIn {
-                                tokens_in: &[token_in],
-                                token_out_min_amount,
-                            },
-                            sender,
-                            deps,
-                            env,
-                        )
-                        .map(|res| res.add_attribute("method", method)),
-
-                    SwapVariant::AlloyedToToken => transmuter
-                        .swap_alloyed_asset_to_tokens(
-                            Entrypoint::Sudo,
-                            SwapFromAlloyedConstraint::ExactIn {
-                                token_in_amount: token_in.amount,
-                                token_out_denom: &token_out_denom,
-                                token_out_min_amount,
-                            },
-                            BurnTarget::SentFunds,
-                            sender,
-                            deps,
-                            env,
-                        )
-                        .map(|res| res.add_attribute("method", method)),
+                    SwapVariant::TokenToAlloyed => transmuter.swap_tokens_to_alloyed_asset(
+                        Entrypoint::Sudo,
+                        SwapToAlloyedConstraint::ExactIn {
+                            tokens_in: &[token_in],
+                            token_out_min_amount,
+                        },
+                        sender,
+                        deps,
+                        env,
+                    ),
+                    SwapVariant::AlloyedToToken => transmuter.swap_alloyed_asset_to_tokens(
+                        Entrypoint::Sudo,
+                        SwapFromAlloyedConstraint::ExactIn {
+                            token_in_amount: token_in.amount,
+                            token_out_denom: &token_out_denom,
+                            token_out_min_amount,
+                        },
+                        BurnTarget::SentFunds,
+                        sender,
+                        deps,
+                        env,
+                    ),
                     SwapVariant::TokenToToken => {
                         let (pool, actual_token_out) = transmuter.do_calc_out_amt_given_in(
                             (deps.as_ref(), env.clone()),
@@ -139,11 +132,11 @@ impl SudoMsg {
                         };
 
                         Ok(Response::new()
-                            .add_attribute("method", method)
                             .add_message(send_token_out_to_sender_msg)
                             .set_data(to_binary(&swap_result)?))
                     }
                 }
+                .map(|res| res.add_attribute("method", "swap_exact_amount_in"))
             }
             SudoMsg::SwapExactAmountOut {
                 sender,
@@ -158,7 +151,6 @@ impl SudoMsg {
                     ContractError::ZeroValueOperation {}
                 );
 
-                let method = "swap_exact_amount_out";
                 let (deps, env) = ctx;
 
                 let sender = deps.api.addr_validate(&sender)?;
@@ -167,32 +159,28 @@ impl SudoMsg {
                     transmuter.swap_varaint(&token_in_denom, &token_out.denom, deps.as_ref())?;
 
                 match swap_variant {
-                    SwapVariant::TokenToAlloyed => transmuter
-                        .swap_tokens_to_alloyed_asset(
-                            Entrypoint::Sudo,
-                            SwapToAlloyedConstraint::ExactOut {
-                                token_in_denom: &token_in_denom,
-                                token_in_max_amount,
-                                token_out_amount: token_out.amount,
-                            },
-                            sender,
-                            deps,
-                            env,
-                        )
-                        .map(|res| res.add_attribute("method", method)),
-                    SwapVariant::AlloyedToToken => transmuter
-                        .swap_alloyed_asset_to_tokens(
-                            Entrypoint::Sudo,
-                            SwapFromAlloyedConstraint::ExactOut {
-                                tokens_out: &[token_out],
-                                token_in_max_amount,
-                            },
-                            BurnTarget::SentFunds,
-                            sender,
-                            deps,
-                            env,
-                        )
-                        .map(|res| res.add_attribute("method", method)),
+                    SwapVariant::TokenToAlloyed => transmuter.swap_tokens_to_alloyed_asset(
+                        Entrypoint::Sudo,
+                        SwapToAlloyedConstraint::ExactOut {
+                            token_in_denom: &token_in_denom,
+                            token_in_max_amount,
+                            token_out_amount: token_out.amount,
+                        },
+                        sender,
+                        deps,
+                        env,
+                    ),
+                    SwapVariant::AlloyedToToken => transmuter.swap_alloyed_asset_to_tokens(
+                        Entrypoint::Sudo,
+                        SwapFromAlloyedConstraint::ExactOut {
+                            tokens_out: &[token_out],
+                            token_in_max_amount,
+                        },
+                        BurnTarget::SentFunds,
+                        sender,
+                        deps,
+                        env,
+                    ),
                     SwapVariant::TokenToToken => {
                         let (pool, actual_token_in) = transmuter.do_calc_in_amt_given_out(
                             (deps.as_ref(), env.clone()),
@@ -231,11 +219,11 @@ impl SudoMsg {
                         };
 
                         Ok(Response::new()
-                            .add_attribute("method", "swap_exact_amount_out")
                             .add_message(send_token_out_to_sender_msg)
                             .set_data(to_binary(&swap_result)?))
                     }
                 }
+                .map(|res| res.add_attribute("method", "swap_exact_amount_out"))
             }
         }
     }
