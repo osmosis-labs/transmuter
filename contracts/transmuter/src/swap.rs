@@ -316,34 +316,65 @@ impl Transmuter<'_> {
             .set_data(to_binary(&swap_result)?))
     }
 
-    pub fn in_amt_given_out(
+    pub fn swap_non_alloyed_exact_amount_out(
         &self,
-        ctx: (Deps, Env),
+        token_in_denom: &str,
+        token_in_max_amount: Uint128,
         token_out: Coin,
-        token_in_denom: String,
-        swap_fee: Decimal,
-    ) -> Result<(TransmuterPool, Coin), ContractError> {
-        let (deps, env) = ctx;
+        sender: Addr,
+        deps: DepsMut,
+        env: Env,
+    ) -> Result<Response, ContractError> {
+        let (pool, actual_token_in) =
+            self.in_amt_given_out(deps.as_ref(), token_out.clone(), token_in_denom.to_string())?;
 
-        // ensure swap fee is the same as one from get_swap_fee which essentially is always 0
-        // in case where the swap fee mismatch, it can cause the pool to be imbalanced
-        let contract_swap_fee = self.get_swap_fee((deps, env))?.swap_fee;
-        ensure_eq!(
-            swap_fee,
-            contract_swap_fee,
-            ContractError::InvalidSwapFee {
-                expected: contract_swap_fee,
-                actual: swap_fee
+        ensure!(
+            actual_token_in.amount <= token_in_max_amount,
+            ContractError::ExcessiveRequiredTokenIn {
+                limit: token_in_max_amount,
+                required: actual_token_in.amount,
             }
         );
 
+        // check and update limiters only if pool assets are not zero
+        if let Some(denom_weight_pairs) = pool.weights()? {
+            self.limiters.check_limits_and_update(
+                deps.storage,
+                denom_weight_pairs,
+                env.block.time,
+            )?;
+        }
+
+        // save pool
+        self.pool.save(deps.storage, &pool)?;
+
+        let send_token_out_to_sender_msg = BankMsg::Send {
+            to_address: sender.to_string(),
+            amount: vec![token_out],
+        };
+
+        let swap_result = SwapExactAmountOutResponseData {
+            token_in_amount: actual_token_in.amount,
+        };
+
+        Ok(Response::new()
+            .add_message(send_token_out_to_sender_msg)
+            .set_data(to_binary(&swap_result)?))
+    }
+
+    pub fn in_amt_given_out(
+        &self,
+        deps: Deps,
+        token_out: Coin,
+        token_in_denom: String,
+    ) -> Result<(TransmuterPool, Coin), ContractError> {
         // ensure token in denom and token out denom are not the same
         ensure!(
             token_out.denom != token_in_denom,
             StdError::generic_err("token_in_denom and token_out_denom cannot be the same")
         );
 
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(ctx.0.storage)?;
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
 
         let token_in = Coin::new(token_out.amount.u128(), token_in_denom);
         let mut pool = self.pool.load(deps.storage)?;

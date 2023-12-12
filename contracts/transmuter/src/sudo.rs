@@ -1,11 +1,10 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{ensure, to_binary, BankMsg, Coin, Decimal, DepsMut, Env, Response, Uint128};
+use cosmwasm_std::{ensure, Coin, Decimal, DepsMut, Env, Response, Uint128};
 
 use crate::{
     contract::Transmuter,
     swap::{
-        BurnTarget, Entrypoint, SwapExactAmountOutResponseData, SwapFromAlloyedConstraint,
-        SwapToAlloyedConstraint, SwapVariant,
+        BurnTarget, Entrypoint, SwapFromAlloyedConstraint, SwapToAlloyedConstraint, SwapVariant,
     },
     ContractError,
 };
@@ -152,47 +151,14 @@ impl SudoMsg {
                         deps,
                         env,
                     ),
-                    SwapVariant::TokenToToken => {
-                        let (pool, actual_token_in) = transmuter.in_amt_given_out(
-                            (deps.as_ref(), env.clone()),
-                            token_out.clone(),
-                            token_in_denom,
-                            swap_fee,
-                        )?;
-
-                        ensure!(
-                            actual_token_in.amount <= token_in_max_amount,
-                            ContractError::ExcessiveRequiredTokenIn {
-                                limit: token_in_max_amount,
-                                required: actual_token_in.amount,
-                            }
-                        );
-
-                        // check and update limiters only if pool assets are not zero
-                        if let Some(denom_weight_pairs) = pool.weights()? {
-                            transmuter.limiters.check_limits_and_update(
-                                deps.storage,
-                                denom_weight_pairs,
-                                env.block.time,
-                            )?;
-                        }
-
-                        // save pool
-                        transmuter.pool.save(deps.storage, &pool)?;
-
-                        let send_token_out_to_sender_msg = BankMsg::Send {
-                            to_address: sender.to_string(),
-                            amount: vec![token_out],
-                        };
-
-                        let swap_result = SwapExactAmountOutResponseData {
-                            token_in_amount: actual_token_in.amount,
-                        };
-
-                        Ok(Response::new()
-                            .add_message(send_token_out_to_sender_msg)
-                            .set_data(to_binary(&swap_result)?))
-                    }
+                    SwapVariant::TokenToToken => transmuter.swap_non_alloyed_exact_amount_out(
+                        token_in_denom.as_str(),
+                        token_in_max_amount,
+                        token_out,
+                        sender,
+                        deps,
+                        env,
+                    ),
                 }
                 .map(|res| res.add_attribute("method", "swap_exact_amount_out"))
             }
@@ -207,11 +173,11 @@ mod tests {
         asset::AssetConfig,
         contract::{ContractExecMsg, ExecMsg, InstantiateMsg},
         execute, instantiate, reply, sudo,
-        swap::SwapExactAmountInResponseData,
+        swap::{SwapExactAmountInResponseData, SwapExactAmountOutResponseData},
     };
     use cosmwasm_std::{
         testing::{mock_dependencies, mock_env, mock_info},
-        to_binary, Reply, SubMsgResponse, SubMsgResult,
+        to_binary, BankMsg, Reply, SubMsgResponse, SubMsgResult,
     };
     use osmosis_std::types::osmosis::tokenfactory::v1beta1::{
         MsgBurn, MsgCreateDenomResponse, MsgMint,
