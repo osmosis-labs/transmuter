@@ -5,13 +5,13 @@ use crate::{
     error::ContractError,
     limiter::{Limiter, LimiterParams, Limiters},
     role::Role,
-    swap::Entrypoint,
-    transmuter_pool::{AmountConstraint, TransmuterPool},
+    swap::{BurnTarget, Entrypoint, SwapFromAlloyedConstraint, SwapToAlloyedConstraint},
+    transmuter_pool::TransmuterPool,
 };
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_eq, Addr, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Reply, Response,
-    StdError, SubMsg, Uint128,
+    ensure, Addr, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Reply, Response, StdError,
+    SubMsg, Uint128,
 };
 
 use cw_storage_plus::Item;
@@ -547,68 +547,9 @@ impl Transmuter<'_> {
         swap_fee: Decimal,
     ) -> Result<CalcOutAmtGivenInResponse, ContractError> {
         let (_pool, token_out) =
-            self.do_calc_out_amt_given_in(ctx, token_in, &token_out_denom, swap_fee)?;
+            self.out_amt_given_in(ctx, token_in, &token_out_denom, swap_fee)?;
 
         Ok(CalcOutAmtGivenInResponse { token_out })
-    }
-
-    pub(crate) fn do_calc_out_amt_given_in(
-        &self,
-        ctx: (Deps, Env),
-        token_in: Coin,
-        token_out_denom: &str,
-        swap_fee: Decimal,
-    ) -> Result<(TransmuterPool, Coin), ContractError> {
-        let (deps, env) = ctx;
-
-        // ensure swap fee is the same as one from get_swap_fee which essentially is always 0
-        // in case where the swap fee mismatch, it can cause the pool to be imbalanced
-        let contract_swap_fee = self.get_swap_fee((deps, env))?.swap_fee;
-        ensure_eq!(
-            swap_fee,
-            contract_swap_fee,
-            ContractError::InvalidSwapFee {
-                expected: contract_swap_fee,
-                actual: swap_fee
-            }
-        );
-
-        // ensure token in denom and token out denom are not the same
-        ensure!(
-            token_out_denom != token_in.denom,
-            StdError::generic_err("token_in_denom and token_out_denom cannot be the same")
-        );
-
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(ctx.0.storage)?;
-
-        let token_out = Coin::new(token_in.amount.u128(), token_out_denom);
-        let mut pool = self.pool.load(ctx.0.storage)?;
-
-        // In case where token_in_denom or token_out_denom is alloyed_denom:
-
-        if token_in.denom == alloyed_denom {
-            // token_in_denom == alloyed_denom: is the same as exit pool
-            // so we ensure that exit pool has no problem
-            pool.exit_pool(&[token_out.clone()])?;
-            return Ok((pool, token_out));
-        }
-
-        if token_out.denom == alloyed_denom {
-            // token_out_denom == alloyed_denom: is the same as join pool
-            // so we ensure that join pool has no problem
-            pool.join_pool(&[token_in])?;
-            return Ok((pool, token_out));
-        }
-
-        let mut pool = self.pool.load(deps.storage)?;
-
-        let (_, token_out) = pool.transmute(
-            AmountConstraint::exact_in(token_in.amount),
-            &token_in.denom,
-            &token_out.denom,
-        )?;
-
-        Ok((pool, token_out))
     }
 
     #[msg(query)]
@@ -619,78 +560,9 @@ impl Transmuter<'_> {
         token_in_denom: String,
         swap_fee: Decimal,
     ) -> Result<CalcInAmtGivenOutResponse, ContractError> {
-        // else we call do_calc_in_amt_given_out to ensure constraint on the pool
-        let (_pool, token_in) =
-            self.do_calc_in_amt_given_out(ctx, token_out, token_in_denom, swap_fee)?;
+        let (_pool, token_in) = self.in_amt_given_out(ctx, token_out, token_in_denom, swap_fee)?;
 
         Ok(CalcInAmtGivenOutResponse { token_in })
-    }
-
-    pub(crate) fn do_calc_in_amt_given_out(
-        &self,
-        ctx: (Deps, Env),
-        token_out: Coin,
-        token_in_denom: String,
-        swap_fee: Decimal,
-    ) -> Result<(TransmuterPool, Coin), ContractError> {
-        let (deps, env) = ctx;
-
-        // ensure swap fee is the same as one from get_swap_fee which essentially is always 0
-        // in case where the swap fee mismatch, it can cause the pool to be imbalanced
-        let contract_swap_fee = self.get_swap_fee((deps, env))?.swap_fee;
-        ensure_eq!(
-            swap_fee,
-            contract_swap_fee,
-            ContractError::InvalidSwapFee {
-                expected: contract_swap_fee,
-                actual: swap_fee
-            }
-        );
-
-        // ensure token in denom and token out denom are not the same
-        ensure!(
-            token_out.denom != token_in_denom,
-            StdError::generic_err("token_in_denom and token_out_denom cannot be the same")
-        );
-
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(ctx.0.storage)?;
-
-        let token_in = Coin::new(token_out.amount.u128(), token_in_denom);
-        let mut pool = self.pool.load(deps.storage)?;
-
-        // In case where token_in_denom or token_out_denom is alloyed_denom:
-
-        if token_in.denom == alloyed_denom {
-            // token_in_denom == alloyed_denom: is the same as exit pool
-            // so we ensure that exit pool has no problem
-            pool.exit_pool(&[token_out])?;
-            return Ok((pool, token_in));
-        }
-
-        if token_out.denom == alloyed_denom {
-            // token_out_denom == alloyed_denom: is the same as join pool
-            // so we ensure that join pool has no problem
-            pool.join_pool(&[token_in.clone()])?;
-            return Ok((pool, token_in));
-        }
-
-        let (token_in, actual_token_out) = pool.transmute(
-            AmountConstraint::exact_out(token_out.amount),
-            &token_in.denom,
-            &token_out.denom,
-        )?;
-
-        // ensure that actual_token_out is equal to token_out
-        ensure_eq!(
-            token_out,
-            actual_token_out,
-            ContractError::InvalidTokenOutAmount {
-                expected: token_out.amount,
-                actual: actual_token_out.amount
-            }
-        );
-
-        Ok((pool, token_in))
     }
 
     // --- admin ---
@@ -816,44 +688,6 @@ impl Transmuter<'_> {
             moderator: self.role.moderator.get(deps)?,
         })
     }
-}
-
-#[derive(Debug)]
-pub enum SwapToAlloyedConstraint<'a> {
-    ExactIn {
-        tokens_in: &'a [Coin],
-        token_out_min_amount: Uint128,
-    },
-    ExactOut {
-        token_in_denom: &'a str,
-        token_in_max_amount: Uint128,
-        token_out_amount: Uint128,
-    },
-}
-
-#[derive(Debug)]
-pub enum SwapFromAlloyedConstraint<'a> {
-    ExactIn {
-        token_out_denom: &'a str,
-        token_out_min_amount: Uint128,
-        token_in_amount: Uint128,
-    },
-    ExactOut {
-        tokens_out: &'a [Coin],
-        token_in_max_amount: Uint128,
-    },
-}
-
-/// Determines where to burn alloyed assets from.
-pub enum BurnTarget {
-    /// Burn alloyed asset from the sender's account.
-    /// This is used when the sender wants to exit pool
-    /// forcing no funds attached in the process.
-    SenderAccount,
-    /// Burn alloyed assets from the sent funds.
-    /// This is used when the sender wants to swap tokens for alloyed assets,
-    /// since alloyed asset needs to be sent to the contract before swapping.
-    SentFunds,
 }
 
 #[cw_serde]

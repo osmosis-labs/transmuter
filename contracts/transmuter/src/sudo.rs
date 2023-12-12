@@ -2,9 +2,10 @@ use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{ensure, to_binary, BankMsg, Coin, Decimal, DepsMut, Env, Response, Uint128};
 
 use crate::{
-    contract::{BurnTarget, SwapFromAlloyedConstraint, SwapToAlloyedConstraint, Transmuter},
+    contract::Transmuter,
     swap::{
-        Entrypoint, SwapExactAmountInResponseData, SwapExactAmountOutResponseData, SwapVariant,
+        BurnTarget, Entrypoint, SwapExactAmountInResponseData, SwapExactAmountOutResponseData,
+        SwapFromAlloyedConstraint, SwapToAlloyedConstraint, SwapVariant,
     },
     ContractError,
 };
@@ -94,7 +95,7 @@ impl SudoMsg {
                         env,
                     ),
                     SwapVariant::TokenToToken => {
-                        let (pool, actual_token_out) = transmuter.do_calc_out_amt_given_in(
+                        let (pool, actual_token_out) = transmuter.out_amt_given_in(
                             (deps.as_ref(), env.clone()),
                             token_in,
                             &token_out_denom,
@@ -182,7 +183,7 @@ impl SudoMsg {
                         env,
                     ),
                     SwapVariant::TokenToToken => {
-                        let (pool, actual_token_in) = transmuter.do_calc_in_amt_given_out(
+                        let (pool, actual_token_in) = transmuter.in_amt_given_out(
                             (deps.as_ref(), env.clone()),
                             token_out.clone(),
                             token_in_denom,
