@@ -5,7 +5,7 @@ use crate::{
     error::ContractError,
     limiter::{Limiter, LimiterParams, Limiters},
     role::Role,
-    swap::{BurnTarget, Entrypoint, SwapFromAlloyedConstraint, SwapToAlloyedConstraint},
+    swap::{BurnTarget, Entrypoint, SwapFromAlloyedConstraint, SwapToAlloyedConstraint, SWAP_FEE},
     transmuter_pool::TransmuterPool,
 };
 use cosmwasm_schema::cw_serde;
@@ -25,9 +25,6 @@ use sylvia::contract;
 /// version info for migration
 pub const CONTRACT_NAME: &str = "crates.io:transmuter";
 pub const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// Swap fee is hardcoded to zero intentionally.
-const SWAP_FEE: Decimal = Decimal::zero();
 
 const CREATE_ALLOYED_DENOM_REPLY_ID: u64 = 1;
 
@@ -546,8 +543,8 @@ impl Transmuter<'_> {
         token_out_denom: String,
         swap_fee: Decimal,
     ) -> Result<CalcOutAmtGivenInResponse, ContractError> {
-        let (_pool, token_out) =
-            self.out_amt_given_in(ctx, token_in, &token_out_denom, swap_fee)?;
+        self.ensure_valid_swap_fee(swap_fee)?;
+        let (_pool, token_out) = self.out_amt_given_in(ctx.0, token_in, &token_out_denom)?;
 
         Ok(CalcOutAmtGivenInResponse { token_out })
     }

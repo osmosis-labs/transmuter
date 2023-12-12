@@ -4,8 +4,8 @@ use cosmwasm_std::{ensure, to_binary, BankMsg, Coin, Decimal, DepsMut, Env, Resp
 use crate::{
     contract::Transmuter,
     swap::{
-        BurnTarget, Entrypoint, SwapExactAmountInResponseData, SwapExactAmountOutResponseData,
-        SwapFromAlloyedConstraint, SwapToAlloyedConstraint, SwapVariant,
+        BurnTarget, Entrypoint, SwapExactAmountOutResponseData, SwapFromAlloyedConstraint,
+        SwapToAlloyedConstraint, SwapVariant,
     },
     ContractError,
 };
@@ -65,6 +65,8 @@ impl SudoMsg {
                     ContractError::ZeroValueOperation {}
                 );
 
+                transmuter.ensure_valid_swap_fee(swap_fee)?;
+
                 let (deps, env) = ctx;
                 let sender = deps.api.addr_validate(&sender)?;
 
@@ -94,48 +96,14 @@ impl SudoMsg {
                         deps,
                         env,
                     ),
-                    SwapVariant::TokenToToken => {
-                        let (pool, actual_token_out) = transmuter.out_amt_given_in(
-                            (deps.as_ref(), env.clone()),
-                            token_in,
-                            &token_out_denom,
-                            swap_fee,
-                        )?;
-
-                        // ensure token_out amount is greater than or equal to token_out_min_amount
-                        ensure!(
-                            actual_token_out.amount >= token_out_min_amount,
-                            ContractError::InsufficientTokenOut {
-                                required: token_out_min_amount,
-                                available: actual_token_out.amount
-                            }
-                        );
-
-                        // check and update limiters only if pool assets are not zero
-                        if let Some(denom_weight_pairs) = pool.weights()? {
-                            transmuter.limiters.check_limits_and_update(
-                                deps.storage,
-                                denom_weight_pairs,
-                                env.block.time,
-                            )?;
-                        }
-
-                        // save pool
-                        transmuter.pool.save(deps.storage, &pool)?;
-
-                        let send_token_out_to_sender_msg = BankMsg::Send {
-                            to_address: sender.to_string(),
-                            amount: vec![actual_token_out.clone()],
-                        };
-
-                        let swap_result = SwapExactAmountInResponseData {
-                            token_out_amount: actual_token_out.amount,
-                        };
-
-                        Ok(Response::new()
-                            .add_message(send_token_out_to_sender_msg)
-                            .set_data(to_binary(&swap_result)?))
-                    }
+                    SwapVariant::TokenToToken => transmuter.swap_non_alloyed_exact_amount_in(
+                        token_in,
+                        token_out_denom.as_str(),
+                        token_out_min_amount,
+                        sender,
+                        deps,
+                        env,
+                    ),
                 }
                 .map(|res| res.add_attribute("method", "swap_exact_amount_in"))
             }
@@ -151,6 +119,8 @@ impl SudoMsg {
                     token_out.amount > Uint128::zero(),
                     ContractError::ZeroValueOperation {}
                 );
+
+                transmuter.ensure_valid_swap_fee(swap_fee)?;
 
                 let (deps, env) = ctx;
 
@@ -237,6 +207,7 @@ mod tests {
         asset::AssetConfig,
         contract::{ContractExecMsg, ExecMsg, InstantiateMsg},
         execute, instantiate, reply, sudo,
+        swap::SwapExactAmountInResponseData,
     };
     use cosmwasm_std::{
         testing::{mock_dependencies, mock_env, mock_info},

@@ -13,6 +13,9 @@ use crate::{
     ContractError,
 };
 
+/// Swap fee is hardcoded to zero intentionally.
+pub const SWAP_FEE: Decimal = Decimal::zero();
+
 impl Transmuter<'_> {
     /// Getting the [SwapVariant] of the swap operation
     /// assuming the swap token is not
@@ -266,6 +269,53 @@ impl Transmuter<'_> {
         Ok(response.add_message(burn_msg).add_message(bank_send_msg))
     }
 
+    pub fn swap_non_alloyed_exact_amount_in(
+        &self,
+        token_in: Coin,
+        token_out_denom: &str,
+        token_out_min_amount: Uint128,
+        sender: Addr,
+        deps: DepsMut,
+        env: Env,
+    ) -> Result<Response, ContractError> {
+        let (pool, actual_token_out) =
+            self.out_amt_given_in(deps.as_ref(), token_in, &token_out_denom)?;
+
+        // ensure token_out amount is greater than or equal to token_out_min_amount
+        ensure!(
+            actual_token_out.amount >= token_out_min_amount,
+            ContractError::InsufficientTokenOut {
+                required: token_out_min_amount,
+                available: actual_token_out.amount
+            }
+        );
+
+        // check and update limiters only if pool assets are not zero
+        if let Some(denom_weight_pairs) = pool.weights()? {
+            self.limiters.check_limits_and_update(
+                deps.storage,
+                denom_weight_pairs,
+                env.block.time,
+            )?;
+        }
+
+        // save pool
+        self.pool.save(deps.storage, &pool)?;
+
+        let send_token_out_to_sender_msg = BankMsg::Send {
+            to_address: sender.to_string(),
+            amount: vec![actual_token_out.clone()],
+        };
+
+        let swap_result = SwapExactAmountInResponseData {
+            token_out_amount: actual_token_out.amount,
+        };
+
+        Ok(Response::new()
+            .add_message(send_token_out_to_sender_msg)
+            .set_data(to_binary(&swap_result)?))
+    }
+
     pub fn in_amt_given_out(
         &self,
         ctx: (Deps, Env),
@@ -335,35 +385,20 @@ impl Transmuter<'_> {
 
     pub fn out_amt_given_in(
         &self,
-        ctx: (Deps, Env),
+        deps: Deps,
         token_in: Coin,
         token_out_denom: &str,
-        swap_fee: Decimal,
     ) -> Result<(TransmuterPool, Coin), ContractError> {
-        let (deps, env) = ctx;
-
-        // ensure swap fee is the same as one from get_swap_fee which essentially is always 0
-        // in case where the swap fee mismatch, it can cause the pool to be imbalanced
-        let contract_swap_fee = self.get_swap_fee((deps, env))?.swap_fee;
-        ensure_eq!(
-            swap_fee,
-            contract_swap_fee,
-            ContractError::InvalidSwapFee {
-                expected: contract_swap_fee,
-                actual: swap_fee
-            }
-        );
-
         // ensure token in denom and token out denom are not the same
         ensure!(
             token_out_denom != token_in.denom,
             StdError::generic_err("token_in_denom and token_out_denom cannot be the same")
         );
 
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(ctx.0.storage)?;
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
 
         let token_out = Coin::new(token_in.amount.u128(), token_out_denom);
-        let mut pool = self.pool.load(ctx.0.storage)?;
+        let mut pool = self.pool.load(deps.storage)?;
 
         // In case where token_in_denom or token_out_denom is alloyed_denom:
 
@@ -390,6 +425,20 @@ impl Transmuter<'_> {
         )?;
 
         Ok((pool, token_out))
+    }
+
+    pub fn ensure_valid_swap_fee(&self, swap_fee: Decimal) -> Result<(), ContractError> {
+        // ensure swap fee is the same as one from get_swap_fee which essentially is always 0
+        // in case where the swap fee mismatch, it can cause the pool to be imbalanced
+        ensure_eq!(
+            swap_fee,
+            SWAP_FEE,
+            ContractError::InvalidSwapFee {
+                expected: SWAP_FEE,
+                actual: swap_fee
+            }
+        );
+        Ok(())
     }
 }
 
