@@ -375,29 +375,44 @@ impl Transmuter<'_> {
         );
 
         let swap_variant = self.swap_varaint(&token_in_denom, &token_out.denom, deps)?;
-
-        // TODO: normalize these stuffs
-        let token_in = Coin::new(token_out.amount.u128(), token_in_denom);
         let mut pool = self.pool.load(deps.storage)?;
 
         Ok(match swap_variant {
             SwapVariant::TokenToAlloyed => {
+                let token_in_norm_factor = pool
+                    .get_pool_asset_by_denom(&token_in_denom)?
+                    .normalization_factor();
+
+                let token_in_amount = swap_to_alloyed::in_amount_via_exact_out(
+                    token_in_norm_factor,
+                    Uint128::MAX,
+                    token_out.amount,
+                )?;
+                let token_in = Coin::new(token_in_amount.u128(), token_in_denom);
                 pool.join_pool(&[token_in.clone()])?;
                 (pool, token_in)
             }
             SwapVariant::AlloyedToToken => {
+                let token_out_norm_factor = pool
+                    .get_pool_asset_by_denom(&token_out.denom)?
+                    .normalization_factor();
+
+                let token_in_amount = swap_from_alloyed::in_amount_via_exact_out(
+                    Uint128::MAX,
+                    vec![(token_out.clone(), token_out_norm_factor)],
+                )?;
+                let token_in = Coin::new(token_in_amount.u128(), token_in_denom);
                 pool.exit_pool(&[token_out])?;
                 (pool, token_in)
             }
             SwapVariant::TokenToToken => {
                 let (token_in, actual_token_out) = pool.transmute(
                     AmountConstraint::exact_out(token_out.amount),
-                    &token_in.denom,
+                    &token_in_denom,
                     &token_out.denom,
                 )?;
 
                 // ensure that actual_token_out is equal to token_out
-                // TODO: fix this, it's wrong
                 ensure_eq!(
                     token_out,
                     actual_token_out,
