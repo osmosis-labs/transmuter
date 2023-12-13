@@ -374,45 +374,42 @@ impl Transmuter<'_> {
             StdError::generic_err("token_in_denom and token_out_denom cannot be the same")
         );
 
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+        let swap_variant = self.swap_varaint(&token_in_denom, &token_out.denom, deps)?;
 
         // TODO: normalize these stuffs
         let token_in = Coin::new(token_out.amount.u128(), token_in_denom);
         let mut pool = self.pool.load(deps.storage)?;
 
-        // In case where token_in_denom or token_out_denom is alloyed_denom:
-        // TODO: use swap variant instead of checking the denom
-        if token_in.denom == alloyed_denom {
-            // token_in_denom == alloyed_denom: is the same as exit pool
-            // so we ensure that exit pool has no problem
-            pool.exit_pool(&[token_out])?;
-            return Ok((pool, token_in));
-        }
-
-        if token_out.denom == alloyed_denom {
-            // token_out_denom == alloyed_denom: is the same as join pool
-            // so we ensure that join pool has no problem
-            pool.join_pool(&[token_in.clone()])?;
-            return Ok((pool, token_in));
-        }
-
-        let (token_in, actual_token_out) = pool.transmute(
-            AmountConstraint::exact_out(token_out.amount),
-            &token_in.denom,
-            &token_out.denom,
-        )?;
-
-        // ensure that actual_token_out is equal to token_out
-        ensure_eq!(
-            token_out,
-            actual_token_out,
-            ContractError::InvalidTokenOutAmount {
-                expected: token_out.amount,
-                actual: actual_token_out.amount
+        Ok(match swap_variant {
+            SwapVariant::TokenToAlloyed => {
+                pool.join_pool(&[token_in.clone()])?;
+                (pool, token_in)
             }
-        );
+            SwapVariant::AlloyedToToken => {
+                pool.exit_pool(&[token_out])?;
+                (pool, token_in)
+            }
+            SwapVariant::TokenToToken => {
+                let (token_in, actual_token_out) = pool.transmute(
+                    AmountConstraint::exact_out(token_out.amount),
+                    &token_in.denom,
+                    &token_out.denom,
+                )?;
 
-        Ok((pool, token_in))
+                // ensure that actual_token_out is equal to token_out
+                // TODO: fix this, it's wrong
+                ensure_eq!(
+                    token_out,
+                    actual_token_out,
+                    ContractError::InvalidTokenOutAmount {
+                        expected: token_out.amount,
+                        actual: actual_token_out.amount
+                    }
+                );
+
+                (pool, token_in)
+            }
+        })
     }
 
     pub fn out_amt_given_in(
@@ -427,38 +424,31 @@ impl Transmuter<'_> {
             StdError::generic_err("token_in_denom and token_out_denom cannot be the same")
         );
 
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
-
         // TODO: normalize these stuffs
         let token_out = Coin::new(token_in.amount.u128(), token_out_denom);
         let mut pool = self.pool.load(deps.storage)?;
 
-        // In case where token_in_denom or token_out_denom is alloyed_denom:
+        let swap_variant = self.swap_varaint(&token_in.denom, &token_out.denom, deps)?;
 
-        // TODO: use swap variant instead of checking the denom
-        if token_in.denom == alloyed_denom {
-            // token_in_denom == alloyed_denom: is the same as exit pool
-            // so we ensure that exit pool has no problem
-            pool.exit_pool(&[token_out.clone()])?;
-            return Ok((pool, token_out));
-        }
+        Ok(match swap_variant {
+            SwapVariant::TokenToAlloyed => {
+                pool.join_pool(&[token_in])?;
+                (pool, token_out)
+            }
+            SwapVariant::AlloyedToToken => {
+                pool.exit_pool(&[token_out.clone()])?;
+                (pool, token_out)
+            }
+            SwapVariant::TokenToToken => {
+                let (_, token_out) = pool.transmute(
+                    AmountConstraint::exact_in(token_in.amount),
+                    &token_in.denom,
+                    &token_out.denom,
+                )?;
 
-        if token_out.denom == alloyed_denom {
-            // token_out_denom == alloyed_denom: is the same as join pool
-            // so we ensure that join pool has no problem
-            pool.join_pool(&[token_in])?;
-            return Ok((pool, token_out));
-        }
-
-        let mut pool = self.pool.load(deps.storage)?;
-
-        let (_, token_out) = pool.transmute(
-            AmountConstraint::exact_in(token_in.amount),
-            &token_in.denom,
-            &token_out.denom,
-        )?;
-
-        Ok((pool, token_out))
+                (pool, token_out)
+            }
+        })
     }
 
     pub fn ensure_valid_swap_fee(&self, swap_fee: Decimal) -> Result<(), ContractError> {
