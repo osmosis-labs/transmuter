@@ -439,18 +439,34 @@ impl Transmuter<'_> {
             StdError::generic_err("token_in_denom and token_out_denom cannot be the same")
         );
 
-        // TODO: normalize these stuffs
-        let token_out = Coin::new(token_in.amount.u128(), token_out_denom);
         let mut pool = self.pool.load(deps.storage)?;
-
-        let swap_variant = self.swap_varaint(&token_in.denom, &token_out.denom, deps)?;
+        let swap_variant = self.swap_varaint(&token_in.denom, &token_out_denom, deps)?;
 
         Ok(match swap_variant {
             SwapVariant::TokenToAlloyed => {
+                let token_in_norm_factor = pool
+                    .get_pool_asset_by_denom(&token_in.denom)?
+                    .normalization_factor();
+
+                let token_out_amount = swap_to_alloyed::out_amount_via_exact_in(
+                    vec![(token_in.clone(), token_in_norm_factor)],
+                    Uint128::zero(),
+                )?;
+                let token_out = Coin::new(token_out_amount.u128(), token_out_denom);
                 pool.join_pool(&[token_in])?;
                 (pool, token_out)
             }
             SwapVariant::AlloyedToToken => {
+                let token_out_norm_factor = pool
+                    .get_pool_asset_by_denom(token_out_denom)?
+                    .normalization_factor();
+
+                let token_out_amount = swap_from_alloyed::out_amount_via_exact_in(
+                    token_in.amount,
+                    token_out_norm_factor,
+                    Uint128::zero(),
+                )?;
+                let token_out = Coin::new(token_out_amount.u128(), token_out_denom);
                 pool.exit_pool(&[token_out.clone()])?;
                 (pool, token_out)
             }
@@ -458,7 +474,7 @@ impl Transmuter<'_> {
                 let (_, token_out) = pool.transmute(
                     AmountConstraint::exact_in(token_in.amount),
                     &token_in.denom,
-                    &token_out.denom,
+                    &token_out_denom,
                 )?;
 
                 (pool, token_out)
