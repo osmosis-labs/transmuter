@@ -68,6 +68,8 @@ fn test_admin_set_denom_metadata() {
         display: "eth".to_string(),
         name: "Canonical ETH".to_string(),
         symbol: "ETH".to_string(),
+        uri: String::new(),
+        uri_hash: String::new(),
     };
 
     // set denom metadata by non admin should fail

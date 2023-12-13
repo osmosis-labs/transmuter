@@ -323,6 +323,7 @@ fn test_swap() {
         .app
         .query(
             "/osmosis.poolmanager.v1beta1.Query/EstimateSwapExactAmountIn",
+            #[allow(deprecated)]
             &EstimateSwapExactAmountInRequest {
                 pool_id: t.contract.pool_id,
                 token_in: format!("1500{AXL_USDC}"),

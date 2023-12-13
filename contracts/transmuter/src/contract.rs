@@ -1854,6 +1854,8 @@ mod tests {
             name: "name".to_string(),
             symbol: "symbol".to_string(),
             denom_units: vec![],
+            uri: String::new(),
+            uri_hash: String::new(),
         };
 
         // Attempt to set alloyed denom metadata by a non-admin user.

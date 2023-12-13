@@ -160,7 +160,6 @@ impl<'a> TransmuterContract<'a> {
                 wasm_byte_code: Self::get_wasm_byte_code(),
             },
             signer.address(),
-            false,
             signer,
         )?;
 

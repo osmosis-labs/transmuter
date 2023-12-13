@@ -376,11 +376,12 @@ impl Transmuter<'_> {
 
         let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
 
+        // TODO: normalize these stuffs
         let token_in = Coin::new(token_out.amount.u128(), token_in_denom);
         let mut pool = self.pool.load(deps.storage)?;
 
         // In case where token_in_denom or token_out_denom is alloyed_denom:
-
+        // TODO: use swap variant instead of checking the denom
         if token_in.denom == alloyed_denom {
             // token_in_denom == alloyed_denom: is the same as exit pool
             // so we ensure that exit pool has no problem
@@ -428,11 +429,13 @@ impl Transmuter<'_> {
 
         let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
 
+        // TODO: normalize these stuffs
         let token_out = Coin::new(token_in.amount.u128(), token_out_denom);
         let mut pool = self.pool.load(deps.storage)?;
 
         // In case where token_in_denom or token_out_denom is alloyed_denom:
 
+        // TODO: use swap variant instead of checking the denom
         if token_in.denom == alloyed_denom {
             // token_in_denom == alloyed_denom: is the same as exit pool
             // so we ensure that exit pool has no problem
