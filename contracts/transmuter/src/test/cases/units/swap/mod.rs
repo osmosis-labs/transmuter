@@ -13,6 +13,7 @@ use crate::contract::{
     ListAssetConfigsResponse, QueryMsg,
 };
 
+use crate::math::lcm_from_iter;
 use crate::test::modules::cosmwasm_pool::CosmwasmPool;
 use crate::test::test_env::{assert_contract_err, TestEnv, TestEnvBuilder};
 use crate::ContractError;
@@ -153,26 +154,8 @@ fn total_pool_asset_value(asset_configs: &[AssetConfig], pool_assets: &[Coin]) -
 }
 
 fn lcm_normalization_factor(configs: &[AssetConfig]) -> Uint128 {
-    let gcd_normalization_factor = configs
-        .iter()
-        .map(|config| config.normalization_factor)
-        .fold(Uint128::from(1u128), gcd);
-
-    configs
-        .iter()
-        .map(|config| config.normalization_factor / gcd_normalization_factor)
-        .fold(Uint128::from(1u128), |acc, x| acc * x)
-}
-
-fn gcd(mut n: Uint128, mut m: Uint128) -> Uint128 {
-    assert!(!n.is_zero() && !m.is_zero());
-    while !m.is_zero() {
-        if m < n {
-            std::mem::swap(&mut m, &mut n);
-        }
-        m %= n;
-    }
-    n
+    let norm_factors = configs.into_iter().map(|c| c.normalization_factor);
+    lcm_from_iter(norm_factors).unwrap()
 }
 
 fn test_swap_success_case(t: TestEnv, msg: SwapMsg, received: Coin) {
