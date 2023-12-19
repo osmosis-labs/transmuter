@@ -55,6 +55,18 @@ pub struct Asset {
 }
 
 impl Asset {
+    pub fn new(
+        amount: impl Into<Uint128>,
+        denom: &str,
+        normalization_factor: impl Into<Uint128>,
+    ) -> Self {
+        Self {
+            amount: amount.into(),
+            denom: denom.to_string(),
+            normalization_factor: normalization_factor.into(),
+        }
+    }
+
     pub fn update_amount<F>(&'_ mut self, f: F) -> Result<&'_ Self, ContractError>
     where
         F: FnOnce(Uint128) -> Result<Uint128, ContractError>,
