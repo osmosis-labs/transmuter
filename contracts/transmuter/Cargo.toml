@@ -54,3 +54,4 @@ thiserror = {version = "1.0.44"}
 [dev-dependencies]
 itertools = "0.11.0"
 osmosis-test-tube = "21.0.0-beta"
+rstest = "0.18.2"

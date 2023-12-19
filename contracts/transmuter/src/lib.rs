@@ -3,6 +3,7 @@ mod asset;
 pub mod contract;
 mod error;
 mod limiter;
+mod math;
 mod migrations;
 mod role;
 mod sudo;

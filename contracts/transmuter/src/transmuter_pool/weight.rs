@@ -10,6 +10,8 @@ impl TransmuterPool {
     /// it makes no sense to calculate ratios, but not an error.
     // TODO: take normalization factor into account to how much the resulted weight will be
     pub fn weights(&self) -> Result<Option<Vec<(String, Decimal)>>, ContractError> {
+        // TODO: Find LCM as target for normalization
+        // them sum each (asset amount * LCM / asset denom normalization factor) -> normalized value
         let total_pool_asset_amount = self.total_pool_assets()?;
 
         if total_pool_asset_amount.is_zero() {
@@ -21,6 +23,7 @@ impl TransmuterPool {
             .iter()
             .map(|pool_asset| {
                 let ratio =
+                    // TODO: convert to normalized value first before finding weight
                     Decimal::checked_from_ratio(pool_asset.amount(), total_pool_asset_amount)?;
                 Ok((pool_asset.denom().to_string(), ratio))
             })
