@@ -60,7 +60,7 @@ impl TransmuterPool {
                     asset.amount(),
                     asset.normalization_factor(),
                     std_norm_factor,
-                    &Rounding::Down, // TODO: think about this
+                    &Rounding::Down, // This shouldn't matter since the target is LCM
                 )?;
 
                 Ok((asset.denom().to_string(), value))
@@ -131,6 +131,30 @@ mod tests {
         vec![
             ("a".to_string(), Decimal::from_ratio(6000u128, 400_000_006_000u128)),
             ("b".to_string(), Decimal::from_ratio(400_000_000_000u128, 400_000_006_000u128))
+        ]
+    )]
+    #[case(
+        vec![
+            Asset::new(6000u128, "a", 100_000_000u128),  // 6000 * 300_000_000 / 100_000_000 = 18_000
+            Asset::new(4000u128, "b", 3u128), // 4000 * 300_000_000 / 3 = 400_000_000_000
+            // 18_000 + 400_000_000_000 = 400_000_018_000
+        ],
+        vec![
+            ("a".to_string(), Decimal::from_ratio(18_000u128, 400_000_018_000u128)),
+            ("b".to_string(), Decimal::from_ratio(400_000_000_000u128, 400_000_018_000u128))
+        ]
+    )]
+    #[case(
+        vec![
+            Asset::new(6000u128, "a", 100_000_000u128), // 6000 * 100_000_000 / 100_000_000 = 6000
+            Asset::new(4000u128, "b", 1u128), // 4000 * 100_000_000 / 1 = 400_000_000_000
+            Asset::new(3000u128, "c", 50_000_000u128), // 3000 * 100_000_000 / 50_000_000 = 6000
+            // 6000 + 400_000_000_000 + 6000 = 400_000_012_000
+        ],
+        vec![
+            ("a".to_string(), Decimal::from_ratio(6000u128, 400_000_012_000u128)),
+            ("b".to_string(), Decimal::from_ratio(400_000_000_000u128, 400_000_012_000u128)),
+            ("c".to_string(), Decimal::from_ratio(6000u128, 400_000_012_000u128))
         ]
     )]
     fn test_all_ratios(#[case] pool_assets: Vec<Asset>, #[case] expected: Vec<(String, Decimal)>) {
