@@ -172,65 +172,6 @@ impl Transmuter<'_> {
     }
 
     #[msg(exec)]
-    fn set_normalization_factor(
-        &self,
-        ctx: (DepsMut, Env, MessageInfo),
-        denom: String,
-        normalization_factor: Uint128,
-    ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
-
-        // only admin can set normalization factor
-        ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
-
-        let normalization_factor_string = normalization_factor.to_string();
-        let attrs = vec![
-            ("method", "set_normalization_factor"),
-            ("denom", &denom),
-            ("normalization_factor", &normalization_factor_string),
-        ];
-
-        let is_alloyed = self.alloyed_asset.get_alloyed_denom(deps.storage)? == denom;
-
-        // if denom is an alloyed asset
-        if is_alloyed {
-            // set normalization factor for alloyed asset
-            self.alloyed_asset
-                .set_normalization_factor(deps.storage, normalization_factor)?;
-        } else {
-            // set normalization factor for pool asset
-            self.pool
-                .update(deps.storage, |mut pool| -> Result<_, ContractError> {
-                    // find mutable ref to the asset with the specified denom
-                    let asset = pool
-                        .pool_assets
-                        .iter_mut()
-                        .find(|asset| asset.denom() == denom);
-
-                    match asset {
-                        // set normalization factor if asset exists
-                        Some(asset) => {
-                            asset.set_normalization_factor(normalization_factor)?;
-                            Ok(pool)
-                        }
-
-                        // return error if asset does not exist
-                        None => Err(ContractError::InvalidPoolAssetDenom {
-                            denom: denom.clone(),
-                        }),
-                    }
-                })?;
-
-            // staled divisions in change limiters has become invalid after
-            // normalization factor of pool asset has changed
-            // so reset change limiter states
-            self.limiters.reset_change_limiter_states(deps.storage)?;
-        }
-
-        Ok(Response::new().add_attributes(attrs))
-    }
-
-    #[msg(exec)]
     fn register_limiter(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
