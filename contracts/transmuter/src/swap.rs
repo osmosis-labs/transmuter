@@ -67,6 +67,7 @@ impl Transmuter<'_> {
                 let out_amount = swap_to_alloyed::out_amount_via_exact_in(
                     tokens_in_with_norm_factor,
                     token_out_min_amount,
+                    self.alloyed_asset.get_normalization_factor(deps.storage)?,
                 )?;
 
                 let response = set_data_if_sudo(
@@ -92,6 +93,7 @@ impl Transmuter<'_> {
                     token_in_norm_factor,
                     token_in_max_amount,
                     token_out_amount,
+                    self.alloyed_asset.get_normalization_factor(deps.storage)?,
                 )?;
                 let tokens_in = vec![Coin::new(in_amount.u128(), token_in_denom)];
 
@@ -170,6 +172,7 @@ impl Transmuter<'_> {
                     .normalization_factor();
                 let out_amount = swap_from_alloyed::out_amount_via_exact_in(
                     token_in_amount,
+                    self.alloyed_asset.get_normalization_factor(deps.storage)?,
                     token_out_norm_factor,
                     token_out_min_amount,
                 )?;
@@ -194,6 +197,7 @@ impl Transmuter<'_> {
                     pool.pair_coins_with_normalization_factor(tokens_out)?;
                 let in_amount = swap_from_alloyed::in_amount_via_exact_out(
                     token_in_max_amount,
+                    self.alloyed_asset.get_normalization_factor(deps.storage)?,
                     tokens_out_with_norm_factor,
                 )?;
 
@@ -387,6 +391,7 @@ impl Transmuter<'_> {
                     token_in_norm_factor,
                     Uint128::MAX,
                     token_out.amount,
+                    self.alloyed_asset.get_normalization_factor(deps.storage)?,
                 )?;
                 let token_in = Coin::new(token_in_amount.u128(), token_in_denom);
                 pool.join_pool(&[token_in.clone()])?;
@@ -399,6 +404,7 @@ impl Transmuter<'_> {
 
                 let token_in_amount = swap_from_alloyed::in_amount_via_exact_out(
                     Uint128::MAX,
+                    self.alloyed_asset.get_normalization_factor(deps.storage)?,
                     vec![(token_out.clone(), token_out_norm_factor)],
                 )?;
                 let token_in = Coin::new(token_in_amount.u128(), token_in_denom);
@@ -451,6 +457,7 @@ impl Transmuter<'_> {
                 let token_out_amount = swap_to_alloyed::out_amount_via_exact_in(
                     vec![(token_in.clone(), token_in_norm_factor)],
                     Uint128::zero(),
+                    self.alloyed_asset.get_normalization_factor(deps.storage)?,
                 )?;
                 let token_out = Coin::new(token_out_amount.u128(), token_out_denom);
                 pool.join_pool(&[token_in])?;
@@ -463,6 +470,7 @@ impl Transmuter<'_> {
 
                 let token_out_amount = swap_from_alloyed::out_amount_via_exact_in(
                     token_in.amount,
+                    self.alloyed_asset.get_normalization_factor(deps.storage)?,
                     token_out_norm_factor,
                     Uint128::zero(),
                 )?;

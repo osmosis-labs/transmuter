@@ -47,7 +47,7 @@ impl Transmuter<'_> {
         Self {
             active_status: Item::new("active_status"),
             pool: Item::new("pool"),
-            alloyed_asset: AlloyedAsset::new("alloyed_denom"),
+            alloyed_asset: AlloyedAsset::new("alloyed_denom", "alloyed_asset_normalization_factor"),
             role: Role::new("admin", "moderator"),
             limiters: Limiters::new("limiters"),
         }
@@ -102,6 +102,10 @@ impl Transmuter<'_> {
             },
             CREATE_ALLOYED_DENOM_REPLY_ID,
         );
+
+        // TODO: allow setting non-1 normalization factor
+        self.alloyed_asset
+            .set_alloyed_asset_normalization_factor(deps.storage, Uint128::one())?;
 
         Ok(Response::new()
             .add_attribute("method", "instantiate")

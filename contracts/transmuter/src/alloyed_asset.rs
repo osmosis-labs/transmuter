@@ -6,21 +6,23 @@ use crate::{
     ContractError,
 };
 
-// TODO: make this a state var
-const ALLOYED_DENOM_NORMALIZATION_FACTOR: Uint128 = Uint128::one();
-
 /// Alloyed asset represents the shares of the pool
 /// and since the pool is a 1:1 multi-asset pool, it act
 /// as a composite of the underlying assets and assume 1:1
 /// value to the underlying assets.
 pub struct AlloyedAsset<'a> {
     alloyed_denom: Item<'a, String>,
+    normalization_factor: Item<'a, Uint128>,
 }
 
 impl<'a> AlloyedAsset<'a> {
-    pub const fn new(alloyed_denom_namespace: &'a str) -> Self {
+    pub const fn new(
+        alloyed_denom_namespace: &'a str,
+        normalization_factor_namespace: &'a str,
+    ) -> Self {
         Self {
             alloyed_denom: Item::new(alloyed_denom_namespace),
+            normalization_factor: Item::new(normalization_factor_namespace),
         }
     }
 
@@ -57,10 +59,24 @@ impl<'a> AlloyedAsset<'a> {
             .map(|coin| coin.amount)
     }
 
+    /// get alloyed denom normalization factor
+    pub fn get_normalization_factor(&self, store: &dyn Storage) -> StdResult<Uint128> {
+        self.normalization_factor.load(store)
+    }
+
+    pub fn set_alloyed_asset_normalization_factor(
+        &self,
+        store: &mut dyn Storage,
+        factor: Uint128,
+    ) -> StdResult<()> {
+        self.normalization_factor.save(store, &factor)
+    }
+
     /// calculate the amount of alloyed asset to mint/burn
     /// `tokens` is a slice of (coin, normalization factor) pair
     pub fn amount_from(
         tokens: &[(Coin, Uint128)],
+        alloyed_denom_normalization_factor: Uint128,
         rounding: Rounding,
     ) -> Result<Uint128, ContractError> {
         let mut total = Uint128::zero();
@@ -68,7 +84,7 @@ impl<'a> AlloyedAsset<'a> {
             total = total.checked_add(convert_amount(
                 coin.amount,
                 *coin_normalization_factor,
-                ALLOYED_DENOM_NORMALIZATION_FACTOR,
+                alloyed_denom_normalization_factor,
                 &rounding,
             )?)?;
         }
@@ -82,10 +98,15 @@ pub mod swap_to_alloyed {
     pub fn out_amount_via_exact_in(
         tokens_in_with_norm_factor: Vec<(Coin, Uint128)>,
         token_out_min_amount: Uint128,
+        alloyed_denom_normalization_factor: Uint128,
     ) -> Result<Uint128, ContractError> {
         // swap token for alloyed asset output keeps alloyed asset value <= tokens_in value
         // if conversion has remainder to not over mint alloyed asset
-        let out_amount = AlloyedAsset::amount_from(&tokens_in_with_norm_factor, Rounding::Down)?;
+        let out_amount = AlloyedAsset::amount_from(
+            &tokens_in_with_norm_factor,
+            alloyed_denom_normalization_factor,
+            Rounding::Down,
+        )?;
 
         ensure!(
             out_amount >= token_out_min_amount,
@@ -105,10 +126,11 @@ pub mod swap_to_alloyed {
         token_in_norm_factor: Uint128,
         token_in_max_amount: Uint128,
         token_out_amount: Uint128,
+        alloyed_denom_normalization_factor: Uint128,
     ) -> Result<Uint128, ContractError> {
         let token_in_amount = convert_amount(
             token_out_amount,
-            ALLOYED_DENOM_NORMALIZATION_FACTOR,
+            alloyed_denom_normalization_factor,
             token_in_norm_factor,
             &Rounding::Up,
         )?;
@@ -130,6 +152,7 @@ pub mod swap_from_alloyed {
 
     pub fn out_amount_via_exact_in(
         amount_in: Uint128,
+        alloyed_denom_normalization_factor: Uint128,
         token_out_norm_factor: Uint128,
         token_out_min_amount: Uint128,
     ) -> Result<Uint128, ContractError> {
@@ -137,7 +160,7 @@ pub mod swap_from_alloyed {
         // makes sure it's not under burning alloyed asset
         let out_amount = convert_amount(
             amount_in,
-            ALLOYED_DENOM_NORMALIZATION_FACTOR,
+            alloyed_denom_normalization_factor,
             token_out_norm_factor,
             &Rounding::Down,
         )?;
@@ -158,10 +181,14 @@ pub mod swap_from_alloyed {
     /// returns token in amount
     pub fn in_amount_via_exact_out(
         token_in_max_amount: Uint128,
+        alloyed_denom_normalization_factor: Uint128,
         tokens_out_with_norm_factor: Vec<(Coin, Uint128)>,
     ) -> Result<Uint128, ContractError> {
-        let token_in_amount =
-            AlloyedAsset::amount_from(&tokens_out_with_norm_factor, Rounding::Up)?;
+        let token_in_amount = AlloyedAsset::amount_from(
+            &tokens_out_with_norm_factor,
+            alloyed_denom_normalization_factor,
+            Rounding::Up,
+        )?;
 
         ensure!(
             token_in_amount <= token_in_max_amount,
@@ -183,7 +210,8 @@ mod tests {
 
     #[test]
     fn test_alloyed_assets_balance_and_supply() {
-        let alloyed_assets = AlloyedAsset::new("alloyed_assets");
+        let alloyed_assets =
+            AlloyedAsset::new("alloyed_assets", "alloyed_assets_normalization_factor");
         let mut deps = mock_dependencies();
 
         let alloyed_denom = "alloyed_denom".to_string();
@@ -229,7 +257,8 @@ mod tests {
 
     #[test]
     fn test_amount_from() {
-        let alloyed_assets = AlloyedAsset::new("alloyed_assets");
+        let alloyed_assets =
+            AlloyedAsset::new("alloyed_denom", "alloyed_denom_normalization_factor");
         let mut deps = mock_dependencies();
 
         let alloyed_denom = "alloyed_denom".to_string();
@@ -239,7 +268,8 @@ mod tests {
 
         // same normalization factor
         let amount = AlloyedAsset::amount_from(
-            &[(Coin::new(100, "ua"), ALLOYED_DENOM_NORMALIZATION_FACTOR)],
+            &[(Coin::new(100, "ua"), Uint128::one())],
+            Uint128::one(),
             Rounding::Up,
         )
         .unwrap();
@@ -252,6 +282,7 @@ mod tests {
                 (Coin::new(100, "ua"), Uint128::from(2u128)),
                 (Coin::new(100, "ub"), Uint128::from(3u128)),
             ],
+            Uint128::one(),
             Rounding::Up,
         );
 
@@ -262,6 +293,7 @@ mod tests {
                 (Coin::new(100, "ua"), Uint128::from(2u128)),
                 (Coin::new(100, "ub"), Uint128::from(3u128)),
             ],
+            Uint128::one(),
             Rounding::Down,
         );
 
