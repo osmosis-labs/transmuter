@@ -64,7 +64,7 @@ impl<'a> AlloyedAsset<'a> {
         self.normalization_factor.load(store)
     }
 
-    pub fn set_alloyed_asset_normalization_factor(
+    pub fn set_normalization_factor(
         &self,
         store: &mut dyn Storage,
         factor: Uint128,

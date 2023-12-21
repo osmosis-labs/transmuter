@@ -105,7 +105,7 @@ impl Transmuter<'_> {
 
         // TODO: allow setting non-1 normalization factor
         self.alloyed_asset
-            .set_alloyed_asset_normalization_factor(deps.storage, Uint128::one())?;
+            .set_normalization_factor(deps.storage, Uint128::one())?;
 
         Ok(Response::new()
             .add_attribute("method", "instantiate")
@@ -164,6 +164,46 @@ impl Transmuter<'_> {
         self.pool.save(deps.storage, &pool)?;
 
         Ok(Response::new().add_attribute("method", "add_new_assets"))
+    }
+
+    #[msg(exec)]
+    fn set_normalization_factor(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        denom: String,
+        normalization_factor: Uint128,
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+
+        // only admin can set normalization factor
+        ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
+
+        let normalization_factor_string = normalization_factor.to_string();
+        let attrs = vec![
+            ("method", "set_normalization_factor"),
+            ("denom", &denom),
+            ("normalization_factor", &normalization_factor_string),
+        ];
+
+        // if denom is an alloyed asset
+        if self.alloyed_asset.get_alloyed_denom(deps.storage)? == denom {
+            // set normalization factor for alloyed asset
+            self.alloyed_asset
+                .set_normalization_factor(deps.storage, normalization_factor)?;
+        } else {
+            // set normalization factor for pool asset
+            self.pool
+                .update(deps.storage, |mut pool| -> Result<_, ContractError> {
+                    for asset in pool.pool_assets.iter_mut() {
+                        if asset.denom() == denom {
+                            asset.set_normalization_factor(normalization_factor)?;
+                        }
+                    }
+                    Ok(pool)
+                })?;
+        }
+
+        Ok(Response::new().add_attributes(attrs))
     }
 
     #[msg(exec)]
