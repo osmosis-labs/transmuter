@@ -508,6 +508,32 @@ impl<'a> Limiters<'a> {
 
         Ok(())
     }
+
+    /// If the normalization factor updated, or new asset being added, staled divisions will become invalid.
+    /// This function cleans up the staled divisions.
+    pub fn reset_change_limiter_states(
+        &self,
+        storage: &mut dyn Storage,
+    ) -> Result<(), ContractError> {
+        // there is no need to limit, since the number of limiters is expected to be small
+        let limiters = self.list_limiters(storage)?;
+
+        for ((denom, label), limiter) in limiters {
+            match limiter {
+                Limiter::ChangeLimiter(limiter) => self.limiters.save(
+                    storage,
+                    (denom.as_str(), label.as_str()),
+                    &Limiter::ChangeLimiter(ChangeLimiter::new(
+                        limiter.window_config,
+                        limiter.boundary_offset,
+                    )?),
+                )?,
+                Limiter::StaticLimiter(_) => {}
+            };
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

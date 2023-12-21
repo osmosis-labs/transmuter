@@ -163,6 +163,11 @@ impl Transmuter<'_> {
         pool.add_new_assets(assets)?;
         self.pool.save(deps.storage, &pool)?;
 
+        // staled divisions in change limiters has become invalid after
+        // new assets are added to the pool
+        // so reset change limiter states
+        self.limiters.reset_change_limiter_states(deps.storage)?;
+
         Ok(Response::new().add_attribute("method", "add_new_assets"))
     }
 
@@ -185,8 +190,10 @@ impl Transmuter<'_> {
             ("normalization_factor", &normalization_factor_string),
         ];
 
+        let is_alloyed = self.alloyed_asset.get_alloyed_denom(deps.storage)? == denom;
+
         // if denom is an alloyed asset
-        if self.alloyed_asset.get_alloyed_denom(deps.storage)? == denom {
+        if is_alloyed {
             // set normalization factor for alloyed asset
             self.alloyed_asset
                 .set_normalization_factor(deps.storage, normalization_factor)?;
@@ -194,13 +201,30 @@ impl Transmuter<'_> {
             // set normalization factor for pool asset
             self.pool
                 .update(deps.storage, |mut pool| -> Result<_, ContractError> {
-                    for asset in pool.pool_assets.iter_mut() {
-                        if asset.denom() == denom {
+                    // find mutable ref to the asset with the specified denom
+                    let asset = pool
+                        .pool_assets
+                        .iter_mut()
+                        .find(|asset| asset.denom() == denom);
+
+                    match asset {
+                        // set normalization factor if asset exists
+                        Some(asset) => {
                             asset.set_normalization_factor(normalization_factor)?;
+                            Ok(pool)
                         }
+
+                        // return error if asset does not exist
+                        None => Err(ContractError::InvalidPoolAssetDenom {
+                            denom: denom.clone(),
+                        }),
                     }
-                    Ok(pool)
                 })?;
+
+            // staled divisions in change limiters has become invalid after
+            // normalization factor of pool asset has changed
+            // so reset change limiter states
+            self.limiters.reset_change_limiter_states(deps.storage)?;
         }
 
         Ok(Response::new().add_attributes(attrs))
