@@ -1,10 +1,23 @@
-use cosmwasm_std::{ensure, CheckedMultiplyRatioError, Uint128};
+use cosmwasm_std::{ensure, CheckedMultiplyRatioError, DivideByZeroError, Uint128};
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq)]
 pub enum MathError {
     #[error("{0}")]
     CheckedMultiplyRatioError(#[from] CheckedMultiplyRatioError),
+
+    #[error("{0}")]
+    DivideByZeroError(#[from] DivideByZeroError),
+
+    #[error("Rescaling parameter is not divisible: rescale {n} by {numerator}/{denominator}")]
+    NonDivisibleRescaleError {
+        n: Uint128,
+        numerator: Uint128,
+        denominator: Uint128,
+    },
+
+    #[error("Can't rescale to zero")]
+    RescaleToZeroError {},
 
     #[error("Input can't be zero")]
     ZeroInput {},
@@ -37,6 +50,26 @@ fn gcd(mut n: Uint128, mut m: Uint128) -> MathResult<Uint128> {
         m %= n;
     }
     Ok(n)
+}
+
+pub fn rescale(n: Uint128, numerator: Uint128, denominator: Uint128) -> MathResult<Uint128> {
+    // ensure that numerator is not zero
+    ensure!(!numerator.is_zero(), MathError::RescaleToZeroError {});
+
+    // ensure that n * numerator is divisible by denominator
+    ensure!(
+        n.full_mul(numerator)
+            .checked_rem(denominator.into())?
+            .is_zero(),
+        MathError::NonDivisibleRescaleError {
+            n,
+            numerator,
+            denominator,
+        }
+    );
+
+    n.checked_multiply_ratio(numerator, denominator)
+        .map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -111,6 +144,41 @@ mod tests {
     fn test_lcm_from_iter(#[case] iter: Vec<u128>, #[case] expected: MathResult<u128>) {
         assert_eq!(
             lcm_from_iter(iter.into_iter().map(Uint128::from)),
+            expected.map(Uint128::from)
+        );
+    }
+
+    #[rstest]
+    #[case(1u128, 1u128, 1u128, Ok(1u128))]
+    #[case(5u128, 20u128, 1u128, Ok(100u128))]
+    #[case(5u128, 20u128, 2u128, Ok(50u128))]
+    #[case(1000u128, 1u128, 10u128, Ok(100u128))]
+    #[case(5u128, 20u128, 3u128, Err(MathError::NonDivisibleRescaleError { n: 5u128.into(), numerator: 20u128.into(), denominator: 3u128.into() }))]
+    #[case(
+        5u128,
+        20u128,
+        0u128,
+        Err(MathError::DivideByZeroError(DivideByZeroError { operand: String::from("100")}))
+    )]
+    #[case(
+        1000u128,
+        0u128,
+        10u128,
+        Err(MathError::RescaleToZeroError { })
+    )]
+
+    fn test_rescale(
+        #[case] n: u128,
+        #[case] numerator: u128,
+        #[case] denominator: u128,
+        #[case] expected: MathResult<u128>,
+    ) {
+        assert_eq!(
+            rescale(
+                Uint128::from(n),
+                Uint128::from(numerator),
+                Uint128::from(denominator)
+            ),
             expected.map(Uint128::from)
         );
     }

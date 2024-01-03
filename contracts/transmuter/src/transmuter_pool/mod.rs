@@ -96,6 +96,23 @@ impl TransmuterPool {
             })
             .collect::<Result<Vec<_>, ContractError>>()
     }
+
+    pub fn update_normalization_factor<F>(self, update_fn: F) -> Result<Self, ContractError>
+    where
+        F: Fn(Uint128) -> Result<Uint128, ContractError>,
+    {
+        let pool_assets = self
+            .pool_assets
+            .into_iter()
+            .map(|mut pool_asset| {
+                pool_asset
+                    .set_normalization_factor(update_fn(pool_asset.normalization_factor())?)?;
+                Ok(pool_asset)
+            })
+            .collect::<Result<Vec<_>, ContractError>>()?;
+
+        Ok(Self { pool_assets })
+    }
 }
 
 #[cfg(test)]

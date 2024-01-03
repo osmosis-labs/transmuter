@@ -6,6 +6,7 @@ use crate::{
     ensure_admin_authority, ensure_moderator_authority,
     error::ContractError,
     limiter::{Limiter, LimiterParams, Limiters},
+    math::rescale,
     role::Role,
     swap::{BurnTarget, Entrypoint, SwapFromAlloyedConstraint, SwapToAlloyedConstraint, SWAP_FEE},
     transmuter_pool::TransmuterPool,
@@ -134,6 +135,41 @@ impl Transmuter<'_> {
     }
 
     // === executes ===
+
+    #[msg(exec)]
+    fn rescale_normalization_factor(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        numerator: Uint128,
+        denominator: Uint128,
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+
+        // only admin can rescale normalization factor
+        ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
+
+        // rescale normalization factor for pool assets
+        self.pool.update(deps.storage, |pool| {
+            pool.update_normalization_factor(|factor| {
+                rescale(factor, numerator, denominator).map_err(Into::into)
+            })
+        })?;
+
+        // rescale normalization factor for alloyed asset
+        let alloyed_asset_normalization_factor =
+            self.alloyed_asset.get_normalization_factor(deps.storage)?;
+
+        let updated_alloyed_asset_normalization_factor =
+            rescale(alloyed_asset_normalization_factor, numerator, denominator)?;
+
+        self.alloyed_asset
+            .set_normalization_factor(deps.storage, updated_alloyed_asset_normalization_factor)?;
+
+        Ok(Response::new()
+            .add_attribute("method", "rescale_normalization_factor")
+            .add_attribute("numerator", numerator)
+            .add_attribute("denominator", denominator))
+    }
 
     #[msg(exec)]
     fn add_new_assets(
@@ -2871,5 +2907,160 @@ mod tests {
 
             assert_eq!(res, expected, "case: {}", name);
         }
+    }
+
+    #[test]
+    fn test_rescale_normalization_factor() {
+        let mut deps = mock_dependencies();
+
+        // make denom has non-zero total supply
+        deps.querier.update_balance(
+            "someone",
+            vec![Coin::new(1, "axlusdc"), Coin::new(1, "whusdc")],
+        );
+
+        let admin = "admin";
+        let init_msg = InstantiateMsg {
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("axlusdc"),
+                AssetConfig::from_denom_str("whusdc"),
+            ],
+            admin: Some(admin.to_string()),
+            alloyed_asset_subdenom: "alloyedusdc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::from(100u128),
+            moderator: None,
+        };
+        let env = mock_env();
+        let info = mock_info(admin, &[]);
+
+        // Instantiate the contract.
+        instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
+
+        // Manually reply
+        let alloyed_denom = "alloyedusdc";
+
+        reply(
+            deps.as_mut(),
+            env.clone(),
+            Reply {
+                id: 1,
+                result: SubMsgResult::Ok(SubMsgResponse {
+                    events: vec![],
+                    data: Some(
+                        MsgCreateDenomResponse {
+                            new_token_denom: alloyed_denom.to_string(),
+                        }
+                        .into(),
+                    ),
+                }),
+            },
+        )
+        .unwrap();
+
+        // list asset configs
+        let res: Result<ListAssetConfigsResponse, ContractError> = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::ListAssetConfigs {}),
+        )
+        .map(|value| from_binary(&value).unwrap());
+
+        assert_eq!(
+            res,
+            Ok(ListAssetConfigsResponse {
+                asset_configs: vec![
+                    AssetConfig::from_denom_str("axlusdc"),
+                    AssetConfig::from_denom_str("whusdc"),
+                    AssetConfig {
+                        denom: alloyed_denom.to_string(),
+                        normalization_factor: Uint128::from(100u128),
+                    }
+                ]
+            })
+        );
+
+        // scale up
+        let rescale_msg = ContractExecMsg::Transmuter(ExecMsg::RescaleNormalizationFactor {
+            numerator: Uint128::from(100u128),
+            denominator: Uint128::one(),
+        });
+
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(admin, &[]),
+            rescale_msg,
+        )
+        .unwrap();
+
+        // list asset configs
+        let res: Result<ListAssetConfigsResponse, ContractError> = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::ListAssetConfigs {}),
+        )
+        .map(|value| from_binary(&value).unwrap());
+
+        assert_eq!(
+            res,
+            Ok(ListAssetConfigsResponse {
+                asset_configs: vec![
+                    AssetConfig {
+                        denom: "axlusdc".to_string(),
+                        normalization_factor: Uint128::from(100u128),
+                    },
+                    AssetConfig {
+                        denom: "whusdc".to_string(),
+                        normalization_factor: Uint128::from(100u128),
+                    },
+                    AssetConfig {
+                        denom: alloyed_denom.to_string(),
+                        normalization_factor: Uint128::from(10000u128),
+                    }
+                ]
+            })
+        );
+
+        // scale down
+        let rescale_msg = ContractExecMsg::Transmuter(ExecMsg::RescaleNormalizationFactor {
+            numerator: Uint128::one(),
+            denominator: Uint128::from(100u128),
+        });
+
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(admin, &[]),
+            rescale_msg,
+        )
+        .unwrap();
+
+        // list asset configs
+        let res: Result<ListAssetConfigsResponse, ContractError> = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::ListAssetConfigs {}),
+        )
+        .map(|value| from_binary(&value).unwrap());
+
+        assert_eq!(
+            res,
+            Ok(ListAssetConfigsResponse {
+                asset_configs: vec![
+                    AssetConfig {
+                        denom: "axlusdc".to_string(),
+                        normalization_factor: Uint128::from(1u128),
+                    },
+                    AssetConfig {
+                        denom: "whusdc".to_string(),
+                        normalization_factor: Uint128::from(1u128),
+                    },
+                    AssetConfig {
+                        denom: alloyed_denom.to_string(),
+                        normalization_factor: Uint128::from(100u128),
+                    }
+                ]
+            })
+        );
     }
 }
