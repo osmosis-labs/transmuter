@@ -60,6 +60,7 @@ impl Transmuter<'_> {
         ctx: (DepsMut, Env, MessageInfo),
         pool_asset_configs: Vec<AssetConfig>,
         alloyed_asset_subdenom: String,
+        alloyed_asset_normalization_factor: Uint128,
         admin: Option<String>,
         moderator: Option<String>,
     ) -> Result<Response, ContractError> {
@@ -103,9 +104,9 @@ impl Transmuter<'_> {
             CREATE_ALLOYED_DENOM_REPLY_ID,
         );
 
-        // TODO: allow setting non-1 normalization factor
+        // set normalization factor for alloyed asset
         self.alloyed_asset
-            .set_normalization_factor(deps.storage, Uint128::one())?;
+            .set_normalization_factor(deps.storage, alloyed_asset_normalization_factor)?;
 
         Ok(Response::new()
             .add_attribute("method", "instantiate")
@@ -800,6 +801,7 @@ mod tests {
                 AssetConfig::from_denom_str("uion"),
             ],
             alloyed_asset_subdenom: "uosmouion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.to_string()),
             moderator: None,
         };
@@ -920,6 +922,7 @@ mod tests {
                 AssetConfig::from_denom_str("uion"),
             ],
             alloyed_asset_subdenom: "uosmouion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.to_string()),
             moderator: Some(moderator.to_string()),
         };
@@ -1112,6 +1115,7 @@ mod tests {
             ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         let env = mock_env();
@@ -1278,6 +1282,7 @@ mod tests {
             ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         instantiate(deps.as_mut(), mock_env(), mock_info(admin, &[]), init_msg).unwrap();
@@ -1306,6 +1311,7 @@ mod tests {
             ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: Some(moderator.to_string()),
         };
         instantiate(deps.as_mut(), mock_env(), mock_info(admin, &[]), init_msg).unwrap();
@@ -1406,6 +1412,7 @@ mod tests {
             admin: Some(admin.to_string()),
             moderator: None,
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
         };
 
         instantiate(deps.as_mut(), mock_env(), mock_info(admin, &[]), init_msg).unwrap();
@@ -1849,6 +1856,7 @@ mod tests {
             alloyed_asset_subdenom: "uosmouion".to_string(),
             admin: Some(admin.to_string()),
             moderator: None,
+            alloyed_asset_normalization_factor: Uint128::one(),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -1913,6 +1921,7 @@ mod tests {
             ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         let env = mock_env();
@@ -1989,6 +1998,7 @@ mod tests {
             ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         let env = mock_env();
@@ -2113,6 +2123,7 @@ mod tests {
             ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         let env = mock_env();
@@ -2249,6 +2260,7 @@ mod tests {
             ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         let env = mock_env();
@@ -2306,6 +2318,7 @@ mod tests {
             ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         let env = mock_env();
@@ -2448,6 +2461,7 @@ mod tests {
             ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "alloyedusdc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         let env = mock_env();
@@ -2663,6 +2677,7 @@ mod tests {
             ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "alloyedusdc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         let env = mock_env();

@@ -201,6 +201,7 @@ mod tests {
                 AssetConfig::from_denom_str("whusdc"),
             ],
             alloyed_asset_subdenom: "uusdc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.to_string()),
             moderator: None,
         };
@@ -418,6 +419,7 @@ mod tests {
                 AssetConfig::from_denom_str("whusdc"),
             ],
             alloyed_asset_subdenom: "uusdc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.to_string()),
             moderator: None,
         };

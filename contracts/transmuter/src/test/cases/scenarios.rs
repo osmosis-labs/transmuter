@@ -53,6 +53,7 @@ fn test_join_pool() {
                 AssetConfig::from_denom_str(COSMOS_USDC),
             ],
             alloyed_asset_subdenom: "usdc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: None,
             moderator: None,
         })
@@ -220,6 +221,7 @@ fn test_swap() {
                 AssetConfig::from_denom_str(COSMOS_USDC),
             ],
             alloyed_asset_subdenom: "usdc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: None,
             moderator: None,
         })
@@ -481,6 +483,7 @@ fn test_exit_pool() {
                 AssetConfig::from_denom_str(COSMOS_USDC),
             ],
             alloyed_asset_subdenom: "usdc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: None,
             moderator: None,
         })
@@ -690,6 +693,7 @@ fn test_3_pool_swap() {
                 AssetConfig::from_denom_str(COSMOS_USDC),
             ],
             alloyed_asset_subdenom: "usdc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: None,
             moderator: None,
         })
@@ -908,6 +912,7 @@ fn test_swap_alloyed_asset() {
                 AssetConfig::from_denom_str(WH_ETH),
             ],
             alloyed_asset_subdenom: alloyed_asset_subdenom.to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: None,
             moderator: None,
         })
@@ -964,6 +969,7 @@ fn test_limiters() {
                 AssetConfig::from_denom_str(COSMOS_USDC),
             ],
             alloyed_asset_subdenom: "usdc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.address()),
             moderator: None,
         })

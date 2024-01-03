@@ -1,4 +1,4 @@
-use cosmwasm_std::Coin;
+use cosmwasm_std::{Coin, Uint128};
 
 use osmosis_std::types::cosmos::bank::v1beta1::{
     DenomUnit, Metadata, QueryDenomMetadataRequest, QueryDenomMetadataResponse,
@@ -32,6 +32,7 @@ fn test_admin_set_denom_metadata() {
                 AssetConfig::from_denom_str(WH_ETH),
             ],
             alloyed_asset_subdenom: alloyed_asset_subdenom.to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: None,
             moderator: None,
         })

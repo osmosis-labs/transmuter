@@ -26,6 +26,7 @@ fn test_create_pool() {
             ],
             admin: None,
             alloyed_asset_subdenom: "denomx".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         })
         .build(&app);

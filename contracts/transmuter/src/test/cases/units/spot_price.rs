@@ -1,6 +1,6 @@
 use cosmwasm_std::{
     testing::{mock_dependencies, mock_env, mock_info},
-    Coin, Decimal,
+    Coin, Decimal, Uint128,
 };
 
 use crate::{asset::AssetConfig, contract::Transmuter, ContractError};
@@ -35,6 +35,7 @@ fn test_spot_price(liquidity: &[Coin]) {
                 AssetConfig::from_denom_str("denom1"),
             ],
             "transmuter/poolshare".to_string(),
+            Uint128::one(),
             None,
             None,
         )

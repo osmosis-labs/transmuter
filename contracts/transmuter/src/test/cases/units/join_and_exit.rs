@@ -94,6 +94,7 @@ fn test_join_pool_with_single_lp_should_update_shares_and_liquidity_properly() {
                     AssetConfig::from_denom_str("denomb"),
                 ],
                 alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
+                alloyed_asset_normalization_factor: Uint128::one(),
                 admin: None,
                 moderator: None,
             })
@@ -236,6 +237,7 @@ fn test_join_pool_should_update_shares_and_liquidity_properly() {
                     AssetConfig::from_denom_str("denomb"),
                 ],
                 alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
+                alloyed_asset_normalization_factor: Uint128::one(),
                 admin: None,
                 moderator: None,
             })
@@ -358,6 +360,7 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
                     AssetConfig::from_denom_str("denomb"),
                 ],
                 alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
+                alloyed_asset_normalization_factor: Uint128::one(),
                 admin: None,
                 moderator: None,
             })
@@ -557,6 +560,7 @@ fn test_exit_pool_greater_than_their_shares_should_fail() {
                     AssetConfig::from_denom_str("denomb"),
                 ],
                 alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
+                alloyed_asset_normalization_factor: Uint128::one(),
                 admin: None,
                 moderator: None,
             })
@@ -608,6 +612,7 @@ fn test_exit_pool_within_shares_but_over_joined_denom_amount() {
                 AssetConfig::from_denom_str("denomb"),
             ],
             alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: None,
             moderator: None,
         })

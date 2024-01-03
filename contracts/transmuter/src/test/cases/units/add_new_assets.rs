@@ -1,4 +1,4 @@
-use cosmwasm_std::Coin;
+use cosmwasm_std::{Coin, Uint128};
 use osmosis_test_tube::OsmosisTestApp;
 
 use crate::{
@@ -31,6 +31,7 @@ fn test_add_new_assets() {
             ],
             admin: None, // override by admin account set above
             alloyed_asset_subdenom: "denomx".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         })
         .build(&app);

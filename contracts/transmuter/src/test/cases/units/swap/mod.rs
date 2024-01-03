@@ -513,6 +513,7 @@ fn pool_with_single_lp(
                 })
                 .collect(),
             alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: None,
             moderator: None,
         })
