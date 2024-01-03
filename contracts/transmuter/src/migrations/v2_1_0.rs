@@ -12,7 +12,7 @@ const TO_VERSION: &str = "2.1.0";
 #[cw_serde]
 pub struct MigrateMsg {}
 
-// TODO: add normalization factor for each asset
+// TODO: add normalization factor for each asset (incl alloyed asset) (all 1 for now)
 // TODO: add `alloyed_denom_normalization_factor` to store
 
 pub fn execute_migration(deps: DepsMut, _msg: MigrateMsg) -> Result<Response, ContractError> {

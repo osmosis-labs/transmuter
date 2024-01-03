@@ -1,3 +1,5 @@
+use std::iter;
+
 use crate::{
     alloyed_asset::AlloyedAsset,
     asset::{Asset, AssetConfig},
@@ -404,12 +406,17 @@ impl Transmuter<'_> {
         let (deps, _env) = ctx;
 
         let pool = self.pool.load(deps.storage)?;
+        let alloyed_asset_config = AssetConfig {
+            denom: self.alloyed_asset.get_alloyed_denom(deps.storage)?,
+            normalization_factor: self.alloyed_asset.get_normalization_factor(deps.storage)?,
+        };
 
         Ok(ListAssetConfigsResponse {
             asset_configs: pool
                 .pool_assets
                 .iter()
                 .map(|asset| asset.config())
+                .chain(iter::once(alloyed_asset_config))
                 .collect(),
         })
     }
