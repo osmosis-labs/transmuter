@@ -368,15 +368,10 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin,
         .total_shares
         .u128();
 
-    // let sent_factor = asset_config_map
-    //     .get(&sent.denom)
-    //     .map(|c| c.normalization_factor)
-    //     .unwrap_or(Uint128::one()); // TODO: use share denom normalization factor
-
     let received_factor = asset_config_map
         .get(&received.denom)
         .map(|c| c.normalization_factor)
-        .unwrap_or(Uint128::one()); // TODO: use share denom normalization factor
+        .unwrap();
 
     // join pool equivalent
     if received.denom == share_denom {
@@ -393,7 +388,7 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin,
                     received.amount,
                     received_factor,
                     lcm_normalization_factor(&asset_configs),
-                    &Rounding::Up // TODO: must based on exact-in / exact-out
+                    &Rounding::Down // Rounding shouldn't matter since the target is LCM
                 )
                 .unwrap()
         );
@@ -408,7 +403,7 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin,
                     received.amount,
                     received_factor,
                     lcm_normalization_factor(&asset_configs),
-                    &Rounding::Down // TODO: must based on exact-in / exact-out
+                    &Rounding::Down // Rounding shouldn't matter since the target is LCM
                 )
                 .unwrap()
         );
