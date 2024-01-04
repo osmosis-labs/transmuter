@@ -283,7 +283,7 @@ impl Transmuter<'_> {
         env: Env,
     ) -> Result<Response, ContractError> {
         let (pool, actual_token_out) =
-            self.out_amt_given_in(deps.as_ref(), token_in, &token_out_denom)?;
+            self.out_amt_given_in(deps.as_ref(), token_in, token_out_denom)?;
 
         // ensure token_out amount is greater than or equal to token_out_min_amount
         ensure!(
@@ -446,7 +446,7 @@ impl Transmuter<'_> {
         );
 
         let mut pool = self.pool.load(deps.storage)?;
-        let swap_variant = self.swap_varaint(&token_in.denom, &token_out_denom, deps)?;
+        let swap_variant = self.swap_varaint(&token_in.denom, token_out_denom, deps)?;
 
         Ok(match swap_variant {
             SwapVariant::TokenToAlloyed => {
@@ -482,7 +482,7 @@ impl Transmuter<'_> {
                 let (_, token_out) = pool.transmute(
                     AmountConstraint::exact_in(token_in.amount),
                     &token_in.denom,
-                    &token_out_denom,
+                    token_out_denom,
                 )?;
 
                 (pool, token_out)

@@ -154,7 +154,7 @@ fn total_pool_asset_value(asset_configs: &[AssetConfig], pool_assets: &[Coin]) -
 }
 
 fn lcm_normalization_factor(configs: &[AssetConfig]) -> Uint128 {
-    let norm_factors = configs.into_iter().map(|c| c.normalization_factor);
+    let norm_factors = configs.iter().map(|c| c.normalization_factor);
     lcm_from_iter(norm_factors).unwrap()
 }
 
