@@ -143,6 +143,14 @@ pub struct TransmuterContract<'a> {
 }
 
 impl<'a> TransmuterContract<'a> {
+    pub fn new(app: &'a OsmosisTestApp, code_id: u64, pool_id: u64, contract_addr: String) -> Self {
+        Self {
+            app,
+            code_id,
+            pool_id,
+            contract_addr,
+        }
+    }
     pub fn deploy(
         app: &'a OsmosisTestApp,
         instantiate_msg: &InstantiateMsg,
@@ -205,7 +213,7 @@ impl<'a> TransmuterContract<'a> {
         wasm.query(&self.contract_addr, msg)
     }
 
-    fn get_wasm_byte_code() -> Vec<u8> {
+    pub fn get_wasm_byte_code() -> Vec<u8> {
         let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         std::fs::read(
             manifest_path

@@ -4,7 +4,7 @@ use cosmwasm_std::{
 };
 use thiserror::Error;
 
-use crate::math::MathError;
+use crate::{math::MathError, migrations::v2_1_0};
 
 #[derive(Error, Debug, PartialEq)]
 pub enum ContractError {
@@ -185,4 +185,7 @@ pub enum ContractError {
 
     #[error("{0}")]
     MathError(#[from] MathError),
+
+    #[error("Migration Error: {0}")]
+    MigrationError(#[from] v2_1_0::MigrationError),
 }
