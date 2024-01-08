@@ -7,7 +7,8 @@ use thiserror::Error;
 
 use crate::{
     asset::{Asset, AssetConfig},
-    contract::{CONTRACT_NAME, CONTRACT_VERSION},
+    contract::{key, CONTRACT_NAME, CONTRACT_VERSION},
+    limiter::Limiters,
     transmuter_pool::TransmuterPool,
     ContractError,
 };
@@ -53,6 +54,9 @@ pub fn execute_migration(deps: DepsMut, msg: MigrateMsg) -> Result<Response, Con
     add_normalization_factor_to_pool_assets(msg.asset_configs, deps.storage)?;
     set_alloyed_asset_normalization_factor(msg.alloyed_asset_normalization_factor, deps.storage)?;
 
+    // reset all staled change limiter states as normalization factor will affect weight calculation
+    Limiters::new(key::LIMITERS).reset_change_limiter_states(deps.storage)?;
+
     // Set the contract version to the target version after successful migration
     cw2::set_contract_version(deps.storage, CONTRACT_NAME, TO_VERSION)?;
 
@@ -64,8 +68,8 @@ fn add_normalization_factor_to_pool_assets(
     asset_configs: Vec<AssetConfig>,
     storage: &mut dyn Storage,
 ) -> Result<(), ContractError> {
-    let pool_v2: Item<'_, TransmuterPoolV2> = Item::new("pool");
-    let pool_v2_1: Item<'_, TransmuterPool> = Item::new("pool");
+    let pool_v2: Item<'_, TransmuterPoolV2> = Item::new(key::POOL);
+    let pool_v2_1: Item<'_, TransmuterPool> = Item::new(key::POOL);
 
     // transform pool assets from Coin -> Asset (adding normalization factor)
     let asset_norm_factors = asset_configs
@@ -110,7 +114,7 @@ fn set_alloyed_asset_normalization_factor(
     alloyed_asset_normalization_factor: Uint128,
     storage: &mut dyn Storage,
 ) -> Result<(), ContractError> {
-    Item::<'_, Uint128>::new("alloyed_asset_normalization_factor")
+    Item::<'_, Uint128>::new(key::ALLOYED_ASSET_NORMALIZATION_FACTOR)
         .save(storage, &alloyed_asset_normalization_factor)?;
 
     Ok(())
@@ -128,7 +132,7 @@ mod tests {
 
         cw2::set_contract_version(&mut deps.storage, CONTRACT_NAME, FROM_VERSION).unwrap();
 
-        Item::new("pool")
+        Item::new(key::POOL)
             .save(
                 &mut deps.storage,
                 &TransmuterPoolV2 {
@@ -169,11 +173,13 @@ mod tests {
         );
 
         let alloyed_asset_normalization_factor =
-            Item::<'_, Uint128>::new("alloyed_asset_normalization_factor")
+            Item::<'_, Uint128>::new(key::ALLOYED_ASSET_NORMALIZATION_FACTOR)
                 .load(&deps.storage)
                 .unwrap();
 
         assert_eq!(alloyed_asset_normalization_factor, Uint128::from(2u128));
+
+        // TODO: test reset_change_limiter_states
     }
 
     #[test]
@@ -182,7 +188,7 @@ mod tests {
 
         cw2::set_contract_version(&mut deps.storage, CONTRACT_NAME, FROM_VERSION).unwrap();
 
-        Item::new("pool")
+        Item::new(key::POOL)
             .save(
                 &mut deps.storage,
                 &TransmuterPoolV2 {
@@ -215,7 +221,7 @@ mod tests {
 
         cw2::set_contract_version(&mut deps.storage, CONTRACT_NAME, FROM_VERSION).unwrap();
 
-        Item::new("pool")
+        Item::new(key::POOL)
             .save(
                 &mut deps.storage,
                 &TransmuterPoolV2 {

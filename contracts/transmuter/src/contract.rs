@@ -42,17 +42,30 @@ pub struct Transmuter<'a> {
     pub(crate) limiters: Limiters<'a>,
 }
 
+pub mod key {
+    pub const ACTIVE_STATUS: &str = "active_status";
+    pub const POOL: &str = "pool";
+    pub const ALLOYED_ASSET_DENOM: &str = "alloyed_asset_denom";
+    pub const ALLOYED_ASSET_NORMALIZATION_FACTOR: &str = "alloyed_asset_normalization_factor";
+    pub const ADMIN: &str = "admin";
+    pub const MODERATOR: &str = "moderator";
+    pub const LIMITERS: &str = "limiters";
+}
+
 #[contract]
 #[error(ContractError)]
 impl Transmuter<'_> {
     /// Create a Transmuter instance.
     pub const fn new() -> Self {
         Self {
-            active_status: Item::new("active_status"),
-            pool: Item::new("pool"),
-            alloyed_asset: AlloyedAsset::new("alloyed_denom", "alloyed_asset_normalization_factor"),
-            role: Role::new("admin", "moderator"),
-            limiters: Limiters::new("limiters"),
+            active_status: Item::new(key::ACTIVE_STATUS),
+            pool: Item::new(key::POOL),
+            alloyed_asset: AlloyedAsset::new(
+                key::ALLOYED_ASSET_DENOM,
+                key::ALLOYED_ASSET_NORMALIZATION_FACTOR,
+            ),
+            role: Role::new(key::ADMIN, key::MODERATOR),
+            limiters: Limiters::new(key::LIMITERS),
         }
     }
 
