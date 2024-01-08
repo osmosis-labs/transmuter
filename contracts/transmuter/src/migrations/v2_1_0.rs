@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{ensure_eq, Coin, DepsMut, Response, Storage, Uint128};
+use cosmwasm_std::{ensure, ensure_eq, Coin, DepsMut, Response, Storage, Uint128};
 use cw_storage_plus::Item;
 use thiserror::Error;
 
@@ -19,6 +19,9 @@ const TO_VERSION: &str = "2.1.0";
 pub enum MigrationError {
     #[error("Missing normalization factor for {denom}")]
     MissingNormalizationFactor { denom: String },
+
+    #[error("Adding normalization factor for non-pool asset: {denom}")]
+    AddingNormalizationFactorForNonPoolAsset { denom: String },
 }
 
 #[cw_serde]
@@ -85,6 +88,20 @@ fn add_normalization_factor_to_pool_assets(
         })
         .collect::<Result<Vec<Asset>, ContractError>>()?;
 
+    // ensure that all normalization factors are part of the pool assets
+    asset_norm_factors
+        .keys()
+        .try_for_each(|denom| -> Result<(), ContractError> {
+            ensure!(
+                pool_assets.iter().any(|asset| asset.denom() == *denom),
+                MigrationError::AddingNormalizationFactorForNonPoolAsset {
+                    denom: denom.clone()
+                }
+            );
+
+            Ok(())
+        })?;
+
     pool_v2_1.save(storage, &TransmuterPool { pool_assets })?;
     Ok(())
 }
@@ -97,4 +114,164 @@ fn set_alloyed_asset_normalization_factor(
         .save(storage, &alloyed_asset_normalization_factor)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use cosmwasm_std::testing::mock_dependencies;
+
+    use super::*;
+
+    #[test]
+    fn test_successful_migration() {
+        let mut deps = mock_dependencies();
+
+        cw2::set_contract_version(&mut deps.storage, CONTRACT_NAME, FROM_VERSION).unwrap();
+
+        Item::new("pool")
+            .save(
+                &mut deps.storage,
+                &TransmuterPoolV2 {
+                    pool_assets: vec![Coin::new(10000, "denom1"), Coin::new(20000, "denom2")],
+                },
+            )
+            .unwrap();
+
+        let msg = MigrateMsg {
+            asset_configs: vec![
+                AssetConfig {
+                    denom: "denom1".to_string(),
+                    normalization_factor: Uint128::from(1000u128),
+                },
+                AssetConfig {
+                    denom: "denom2".to_string(),
+                    normalization_factor: Uint128::from(10000u128),
+                },
+            ],
+            alloyed_asset_normalization_factor: Uint128::from(2u128),
+        };
+
+        let res = execute_migration(deps.as_mut(), msg).unwrap();
+
+        assert_eq!(
+            res,
+            Response::new().add_attribute("method", "v2_1_0/execute_migraiton")
+        );
+
+        let TransmuterPool { pool_assets } = Item::new("pool").load(&deps.storage).unwrap();
+
+        assert_eq!(
+            pool_assets,
+            vec![
+                Asset::new(10000u128, "denom1", 1000u128),
+                Asset::new(20000u128, "denom2", 10000u128)
+            ]
+        );
+
+        let alloyed_asset_normalization_factor =
+            Item::<'_, Uint128>::new("alloyed_asset_normalization_factor")
+                .load(&deps.storage)
+                .unwrap();
+
+        assert_eq!(alloyed_asset_normalization_factor, Uint128::from(2u128));
+    }
+
+    #[test]
+    fn test_missing_normalization_factor() {
+        let mut deps = mock_dependencies();
+
+        cw2::set_contract_version(&mut deps.storage, CONTRACT_NAME, FROM_VERSION).unwrap();
+
+        Item::new("pool")
+            .save(
+                &mut deps.storage,
+                &TransmuterPoolV2 {
+                    pool_assets: vec![Coin::new(10000, "denom1"), Coin::new(20000, "denom2")],
+                },
+            )
+            .unwrap();
+
+        let msg = MigrateMsg {
+            asset_configs: vec![AssetConfig {
+                denom: "denom1".to_string(),
+                normalization_factor: Uint128::from(1000u128),
+            }],
+            alloyed_asset_normalization_factor: Uint128::from(2u128),
+        };
+
+        let err = execute_migration(deps.as_mut(), msg).unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::MigrationError(MigrationError::MissingNormalizationFactor {
+                denom: "denom2".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn test_adding_normalization_factor_for_non_pool_asset() {
+        let mut deps = mock_dependencies();
+
+        cw2::set_contract_version(&mut deps.storage, CONTRACT_NAME, FROM_VERSION).unwrap();
+
+        Item::new("pool")
+            .save(
+                &mut deps.storage,
+                &TransmuterPoolV2 {
+                    pool_assets: vec![Coin::new(10000, "denom1"), Coin::new(20000, "denom2")],
+                },
+            )
+            .unwrap();
+
+        let msg = MigrateMsg {
+            asset_configs: vec![
+                AssetConfig {
+                    denom: "denom1".to_string(),
+                    normalization_factor: Uint128::from(1000u128),
+                },
+                AssetConfig {
+                    denom: "denom2".to_string(),
+                    normalization_factor: Uint128::from(10000u128),
+                },
+                AssetConfig {
+                    denom: "denom3".to_string(),
+                    normalization_factor: Uint128::from(10000u128),
+                },
+            ],
+            alloyed_asset_normalization_factor: Uint128::from(2u128),
+        };
+
+        let err = execute_migration(deps.as_mut(), msg).unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::MigrationError(
+                MigrationError::AddingNormalizationFactorForNonPoolAsset {
+                    denom: "denom3".to_string()
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn test_invalid_version() {
+        let mut deps = mock_dependencies();
+
+        cw2::set_contract_version(&mut deps.storage, CONTRACT_NAME, "1.0.0").unwrap();
+
+        let msg = MigrateMsg {
+            asset_configs: vec![],
+            alloyed_asset_normalization_factor: Uint128::zero(),
+        };
+
+        let err = execute_migration(deps.as_mut(), msg).unwrap_err();
+        assert_eq!(
+            err,
+            ContractError::VersionError(cw2::VersionError::WrongVersion {
+                expected: FROM_VERSION.to_string(),
+                found: "1.0.0".to_string()
+            })
+        );
+    }
 }
