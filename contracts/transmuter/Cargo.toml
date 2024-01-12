@@ -27,6 +27,8 @@ panic = 'abort'
 rpath = false
 
 [features]
+# skip integration test for cases like running `cargo mutants`
+skip-integration-test = []
 # for more explicit tests, cargo test --features=backtraces
 backtraces = ["cosmwasm-std/backtraces"]
 # use library feature to disable all instantiate/execute/query exports

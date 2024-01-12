@@ -19,3 +19,6 @@ artifacts/
 tarpaulin-report.html
 
 .idea
+
+mutants.out
+mutants.out.old

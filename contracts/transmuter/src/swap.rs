@@ -586,3 +586,5 @@ pub enum BurnTarget {
     /// since alloyed asset needs to be sent to the contract before swapping.
     SentFunds,
 }
+
+// TODO: test these functions
