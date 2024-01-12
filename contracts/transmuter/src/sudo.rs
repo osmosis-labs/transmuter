@@ -70,7 +70,7 @@ impl SudoMsg {
                 let sender = deps.api.addr_validate(&sender)?;
 
                 let swap_variant =
-                    transmuter.swap_varaint(&token_in.denom, &token_out_denom, deps.as_ref())?;
+                    transmuter.swap_variant(&token_in.denom, &token_out_denom, deps.as_ref())?;
 
                 match swap_variant {
                     SwapVariant::TokenToAlloyed => transmuter.swap_tokens_to_alloyed_asset(
@@ -126,7 +126,7 @@ impl SudoMsg {
                 let sender = deps.api.addr_validate(&sender)?;
 
                 let swap_variant =
-                    transmuter.swap_varaint(&token_in_denom, &token_out.denom, deps.as_ref())?;
+                    transmuter.swap_variant(&token_in_denom, &token_out.denom, deps.as_ref())?;
 
                 match swap_variant {
                     SwapVariant::TokenToAlloyed => transmuter.swap_tokens_to_alloyed_asset(
