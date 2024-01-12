@@ -122,7 +122,9 @@ fn set_alloyed_asset_normalization_factor(
 
 #[cfg(test)]
 mod tests {
-    use cosmwasm_std::testing::mock_dependencies;
+    use cosmwasm_std::{testing::mock_dependencies, Decimal, Timestamp, Uint64};
+
+    use crate::limiter::{LimiterParams, WindowConfig};
 
     use super::*;
 
@@ -140,6 +142,49 @@ mod tests {
                 },
             )
             .unwrap();
+
+        let limiters = Limiters::new(key::LIMITERS);
+
+        // set change limiter
+        limiters
+            .register(
+                &mut deps.storage,
+                "denom1",
+                "1h",
+                LimiterParams::ChangeLimiter {
+                    window_config: WindowConfig {
+                        window_size: Uint64::from(3_600_000_000_000u64),
+                        division_count: Uint64::from(3u64),
+                    },
+                    boundary_offset: Decimal::percent(1),
+                },
+            )
+            .unwrap();
+
+        limiters
+            .check_limits_and_update(
+                &mut deps.storage,
+                vec![("denom1".to_string(), Decimal::percent(5))],
+                Timestamp::from_nanos(100000000000000u64),
+            )
+            .unwrap();
+
+        let err = limiters
+            .check_limits_and_update(
+                &mut deps.storage,
+                vec![("denom1".to_string(), Decimal::percent(10))],
+                Timestamp::from_nanos(100000000010000u64),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::UpperLimitExceeded {
+                denom: "denom1".to_string(),
+                upper_limit: Decimal::percent(6),
+                value: Decimal::percent(10)
+            }
+        );
 
         let msg = MigrateMsg {
             asset_configs: vec![
@@ -179,7 +224,14 @@ mod tests {
 
         assert_eq!(alloyed_asset_normalization_factor, Uint128::from(2u128));
 
-        // TODO: test reset_change_limiter_states
+        // running check_limits_and_update again with the same params should not fail
+        limiters
+            .check_limits_and_update(
+                &mut deps.storage,
+                vec![("denom1".to_string(), Decimal::percent(10))],
+                Timestamp::from_nanos(100000000010000u64),
+            )
+            .unwrap();
     }
 
     #[test]
