@@ -728,4 +728,137 @@ mod tests {
 
         assert_eq!(res, expected_res);
     }
+
+    #[rstest]
+    #[case(
+        Entrypoint::Exec,
+        SwapFromAlloyedConstraint::ExactIn {
+            token_out_denom: "denom1",
+            token_out_min_amount: Uint128::from(1u128),
+            token_in_amount: Uint128::from(100u128),
+        },
+        BurnTarget::SenderAccount,
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(MsgBurn {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(Coin::new(100u128, "alloyed").into()),
+                burn_from_address: "addr1".to_string()
+            })
+            .add_message(BankMsg::Send {
+                to_address: "addr1".to_string(),
+                amount: vec![Coin::new(1u128, "denom1")]
+            }))
+    )]
+    #[case(
+        Entrypoint::Sudo,
+        SwapFromAlloyedConstraint::ExactIn {
+            token_out_denom: "denom1",
+            token_out_min_amount: Uint128::from(1u128),
+            token_in_amount: Uint128::from(100u128),
+        },
+        BurnTarget::SentFunds,
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(MsgBurn {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(Coin::new(100u128, "alloyed").into()),
+                burn_from_address: MOCK_CONTRACT_ADDR.to_string()
+            })
+            .add_message(BankMsg::Send {
+                to_address: "addr1".to_string(),
+                amount: vec![Coin::new(1u128, "denom1")]
+            })
+            .set_data(to_binary(&SwapExactAmountInResponseData {
+                token_out_amount: Uint128::from(1u128)
+            }).unwrap()))
+    )]
+    #[case(
+        Entrypoint::Exec,
+        SwapFromAlloyedConstraint::ExactOut {
+            tokens_out: &[Coin::new(1u128, "denom1")],
+            token_in_max_amount: Uint128::from(100u128),
+        },
+        BurnTarget::SenderAccount,
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(MsgBurn {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(Coin::new(100u128, "alloyed").into()),
+                burn_from_address: "addr1".to_string()
+            })
+            .add_message(BankMsg::Send {
+                to_address: "addr1".to_string(),
+                amount: vec![Coin::new(1u128, "denom1")]
+            }))
+    )]
+    #[case(
+        Entrypoint::Sudo,
+        SwapFromAlloyedConstraint::ExactOut {
+            tokens_out: &[Coin::new(1u128, "denom1")],
+            token_in_max_amount: Uint128::from(100u128),
+        },
+        BurnTarget::SentFunds,
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(MsgBurn {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(Coin::new(100u128, "alloyed").into()),
+                burn_from_address: MOCK_CONTRACT_ADDR.to_string()
+            })
+            .add_message(BankMsg::Send {
+                to_address: "addr1".to_string(),
+                amount: vec![Coin::new(1u128, "denom1")]
+            })
+            .set_data(to_binary(&SwapExactAmountOutResponseData {
+                token_in_amount: Uint128::from(100u128)
+            }).unwrap()))
+    )]
+    fn test_swap_alloyed_asset_to_tokens(
+        #[case] entrypoint: Entrypoint,
+        #[case] constraint: SwapFromAlloyedConstraint,
+        #[case] burn_target: BurnTarget,
+        #[case] sender: Addr,
+        #[case] expected_res: Result<Response, ContractError>,
+    ) {
+        let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
+            sender.to_string().as_str(),
+            &[Coin::new(2000000000000u128, "alloyed")],
+        )]);
+
+        let transmuter = Transmuter::new();
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_normalization_factor(&mut deps.storage, 100u128.into())
+            .unwrap();
+
+        transmuter
+            .pool
+            .save(
+                &mut deps.storage,
+                &TransmuterPool {
+                    pool_assets: vec![
+                        Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128),
+                        Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128),
+                    ],
+                },
+            )
+            .unwrap();
+
+        let res = transmuter.swap_alloyed_asset_to_tokens(
+            entrypoint,
+            constraint,
+            burn_target,
+            sender,
+            deps.as_mut(),
+            mock_env(),
+        );
+
+        assert_eq!(res, expected_res);
+    }
 }
