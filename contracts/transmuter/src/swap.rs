@@ -45,6 +45,7 @@ impl Transmuter<'_> {
 
         Ok(SwapVariant::TokenToToken)
     }
+
     pub fn swap_tokens_to_alloyed_asset(
         &self,
         entrypoint: Entrypoint,
@@ -589,7 +590,10 @@ pub enum BurnTarget {
 
 #[cfg(test)]
 mod tests {
+    use crate::asset::Asset;
+
     use super::*;
+    use cosmwasm_std::testing::{mock_dependencies, mock_env, MOCK_CONTRACT_ADDR};
     use rstest::rstest;
 
     #[rstest]
@@ -616,5 +620,112 @@ mod tests {
             .unwrap();
 
         assert_eq!(transmuter.swap_variant(denom1, denom2, deps.as_ref()), res);
+    }
+
+    #[rstest]
+    #[case(
+        Entrypoint::Exec,
+        SwapToAlloyedConstraint::ExactIn {
+            tokens_in: &[Coin::new(100, "denom1")],
+            token_out_min_amount: Uint128::one(),
+        },
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(MsgMint {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(Coin::new(10000u128, "alloyed").into()),
+                mint_to_address: "addr1".to_string()
+            })),
+    )]
+    #[case(
+        Entrypoint::Sudo,
+        SwapToAlloyedConstraint::ExactIn {
+            tokens_in: &[Coin::new(100, "denom1")],
+            token_out_min_amount: Uint128::one(),
+        },
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .set_data(to_binary(&SwapExactAmountInResponseData {
+                token_out_amount: Uint128::new(10000u128)
+            }).unwrap())
+            .add_message(MsgMint {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(Coin::new(10000u128, "alloyed").into()),
+                mint_to_address: "addr1".to_string()
+            })),
+    )]
+    #[case(
+        Entrypoint::Exec,
+        SwapToAlloyedConstraint::ExactOut {
+            token_in_denom: "denom1",
+            token_in_max_amount: Uint128::new(100),
+            token_out_amount: Uint128::new(10000u128)
+        },
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(MsgMint {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(Coin::new(10000u128, "alloyed").into()),
+                mint_to_address: "addr1".to_string()
+            })),
+    )]
+    #[case(
+        Entrypoint::Sudo,
+        SwapToAlloyedConstraint::ExactOut {
+            token_in_denom: "denom1",
+            token_in_max_amount: Uint128::new(100),
+            token_out_amount: Uint128::new(10000u128)
+        },
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .set_data(to_binary(&SwapExactAmountOutResponseData {
+                token_in_amount: Uint128::new(100u128)
+            }).unwrap())
+            .add_message(MsgMint {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(Coin::new(10000u128, "alloyed").into()),
+                mint_to_address: "addr1".to_string()
+            })),
+    )]
+    fn test_swap_tokens_to_alloyed_asset(
+        #[case] entrypoint: Entrypoint,
+        #[case] constraint: SwapToAlloyedConstraint,
+        #[case] mint_to_address: Addr,
+        #[case] expected_res: Result<Response, ContractError>,
+    ) {
+        let mut deps = mock_dependencies();
+        let transmuter = Transmuter::new();
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_normalization_factor(&mut deps.storage, 100u128.into())
+            .unwrap();
+
+        transmuter
+            .pool
+            .save(
+                &mut deps.storage,
+                &TransmuterPool {
+                    pool_assets: vec![
+                        Asset::new(Uint128::from(1000u128), "denom1", 1u128),
+                        Asset::new(Uint128::from(1000u128), "denom2", 10u128),
+                    ],
+                },
+            )
+            .unwrap();
+
+        let res = transmuter.swap_tokens_to_alloyed_asset(
+            entrypoint,
+            constraint,
+            mint_to_address,
+            deps.as_mut(),
+            mock_env(),
+        );
+
+        assert_eq!(res, expected_res);
     }
 }
