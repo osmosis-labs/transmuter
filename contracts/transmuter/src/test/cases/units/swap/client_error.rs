@@ -23,8 +23,8 @@ test_swap! {
             token_out_min_amount: 1_000_001u128.into(),
         },
         err = ContractError::InsufficientTokenOut {
-            required: 1_000_001u128.into(),
-            available: 1_000_000u128.into()
+            min_required: 1_000_001u128.into(),
+            amount_out: 1_000_000u128.into()
         }
     }
 }

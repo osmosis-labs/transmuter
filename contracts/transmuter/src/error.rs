@@ -73,10 +73,12 @@ pub enum ContractError {
     #[error("Spot price query failed: reason {reason}")]
     SpotPriceQueryFailed { reason: String },
 
-    #[error("Insufficient token out: required: {required}, available: {available}")]
+    #[error(
+        "Insufficient token out: min required: {min_required}, but got calculated amount out: {amount_out}"
+    )]
     InsufficientTokenOut {
-        required: Uint128,
-        available: Uint128,
+        min_required: Uint128,
+        amount_out: Uint128,
     },
 
     #[error("Excessive token in required: max acceptable token in: {limit}, required: {required}")]

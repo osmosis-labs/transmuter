@@ -111,8 +111,8 @@ pub mod swap_to_alloyed {
         ensure!(
             out_amount >= token_out_min_amount,
             ContractError::InsufficientTokenOut {
-                required: token_out_min_amount,
-                available: out_amount
+                min_required: token_out_min_amount,
+                amount_out: out_amount
             }
         );
 
@@ -168,8 +168,8 @@ pub mod swap_from_alloyed {
         ensure!(
             out_amount >= token_out_min_amount,
             ContractError::InsufficientTokenOut {
-                required: token_out_min_amount,
-                available: out_amount
+                min_required: token_out_min_amount,
+                amount_out: out_amount
             }
         );
 

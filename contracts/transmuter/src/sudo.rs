@@ -357,8 +357,8 @@ mod tests {
         assert_eq!(
             res,
             Err(ContractError::InsufficientTokenOut {
-                required: Uint128::from(1000u128),
-                available: Uint128::from(500u128)
+                min_required: Uint128::from(1000u128),
+                amount_out: Uint128::from(500u128)
             })
         );
 
@@ -376,8 +376,8 @@ mod tests {
         assert_eq!(
             res,
             Err(ContractError::InsufficientTokenOut {
-                required: Uint128::from(1000u128),
-                available: Uint128::from(500u128)
+                min_required: Uint128::from(1000u128),
+                amount_out: Uint128::from(500u128)
             })
         );
 
@@ -395,8 +395,8 @@ mod tests {
         assert_eq!(
             res,
             Err(ContractError::InsufficientTokenOut {
-                required: Uint128::from(1000u128),
-                available: Uint128::from(500u128)
+                min_required: Uint128::from(1000u128),
+                amount_out: Uint128::from(500u128)
             })
         );
     }
