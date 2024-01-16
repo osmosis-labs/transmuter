@@ -958,4 +958,101 @@ mod tests {
 
         assert_eq!(res, expected_res);
     }
+
+    #[rstest]
+    #[case(
+        "denom1",
+        100u128,
+        Coin::new(1000u128, "denom2"),
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(BankMsg::Send {
+                to_address: "addr1".to_string(),
+                amount: vec![Coin::new(1000u128, "denom2")]
+            })
+            .set_data(to_binary(&SwapExactAmountOutResponseData {
+                token_in_amount: 100u128.into()
+            }).unwrap()))
+    )]
+    #[case(
+        "denom2",
+        100u128,
+        Coin::new(10u128, "denom1"),
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(BankMsg::Send {
+                to_address: "addr1".to_string(),
+                amount: vec![Coin::new(10u128, "denom1")]
+            })
+            .set_data(to_binary(&SwapExactAmountOutResponseData {
+                token_in_amount: 100u128.into()
+            }).unwrap()))
+    )]
+    #[case(
+        "denom2",
+        100u128,
+        Coin::new(100u128, "denom1"),
+        Addr::unchecked("addr1"),
+        Err(ContractError::ExcessiveRequiredTokenIn {
+            limit: 100u128.into(),
+            required: 1000u128.into()
+        })
+    )]
+    #[case(
+        "denom1",
+        100000000001u128,
+        Coin::new(1000000000010u128, "denom2"),
+        Addr::unchecked("addr1"),
+        Err(ContractError::InsufficientPoolAsset {
+            required: Coin::new(1000000000010u128, "denom2"),
+            available: Coin::new(1000000000000u128, "denom2"),
+        })
+    )]
+    fn test_swap_non_alloyed_exact_amount_out(
+        #[case] token_in_denom: &str,
+        #[case] token_in_max_amount: u128,
+        #[case] token_out: Coin,
+        #[case] sender: Addr,
+        #[case] expected_res: Result<Response, ContractError>,
+    ) {
+        let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
+            sender.to_string().as_str(),
+            &[Coin::new(2000000000000u128, "alloyed")],
+        )]);
+
+        let transmuter = Transmuter::new();
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_normalization_factor(&mut deps.storage, 100u128.into())
+            .unwrap();
+
+        transmuter
+            .pool
+            .save(
+                &mut deps.storage,
+                &TransmuterPool {
+                    pool_assets: vec![
+                        Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128),
+                        Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128),
+                    ],
+                },
+            )
+            .unwrap();
+
+        let res = transmuter.swap_non_alloyed_exact_amount_out(
+            token_in_denom,
+            token_in_max_amount.into(),
+            token_out,
+            sender,
+            deps.as_mut(),
+            mock_env(),
+        );
+
+        assert_eq!(res, expected_res);
+    }
 }
