@@ -45,7 +45,7 @@ pub struct Transmuter<'a> {
 pub mod key {
     pub const ACTIVE_STATUS: &str = "active_status";
     pub const POOL: &str = "pool";
-    pub const ALLOYED_ASSET_DENOM: &str = "alloyed_asset_denom";
+    pub const ALLOYED_ASSET_DENOM: &str = "alloyed_denom";
     pub const ALLOYED_ASSET_NORMALIZATION_FACTOR: &str = "alloyed_asset_normalization_factor";
     pub const ADMIN: &str = "admin";
     pub const MODERATOR: &str = "moderator";
