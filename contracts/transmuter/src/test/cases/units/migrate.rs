@@ -7,14 +7,11 @@ use crate::{
 };
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{to_binary, Coin, Uint128};
-use osmosis_std::types::{
-    cosmwasm::wasm::v1::{QueryAllContractStateRequest, QueryAllContractStateResponse},
-    osmosis::cosmwasmpool::v1beta1::{
-        ContractInfoByPoolIdRequest, ContractInfoByPoolIdResponse, MigratePoolContractsProposal,
-        MsgCreateCosmWasmPool, UploadCosmWasmPoolCodeAndWhiteListProposal,
-    },
+use osmosis_std::types::osmosis::cosmwasmpool::v1beta1::{
+    ContractInfoByPoolIdRequest, ContractInfoByPoolIdResponse, MigratePoolContractsProposal,
+    MsgCreateCosmWasmPool, UploadCosmWasmPoolCodeAndWhiteListProposal,
 };
-use osmosis_test_tube::{Account, GovWithAppAccess, Module, OsmosisTestApp, Runner};
+use osmosis_test_tube::{Account, GovWithAppAccess, Module, OsmosisTestApp};
 
 #[cw_serde]
 struct InstantiateMsgV2 {
