@@ -1,33 +1,33 @@
+use std::iter;
+
 use crate::{
     alloyed_asset::AlloyedAsset,
-    denom::Denom,
+    asset::{Asset, AssetConfig},
     ensure_admin_authority, ensure_moderator_authority,
     error::ContractError,
     limiter::{Limiter, LimiterParams, Limiters},
+    math::rescale,
     role::Role,
+    swap::{BurnTarget, Entrypoint, SwapFromAlloyedConstraint, SwapToAlloyedConstraint, SWAP_FEE},
     transmuter_pool::TransmuterPool,
 };
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_eq, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Reply,
-    Response, StdError, SubMsg, Uint128,
+    ensure, Addr, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Reply, Response, StdError,
+    SubMsg, Uint128,
 };
 
 use cw_storage_plus::Item;
 use osmosis_std::types::{
     cosmos::bank::v1beta1::Metadata,
-    osmosis::tokenfactory::v1beta1::{
-        MsgBurn, MsgCreateDenom, MsgCreateDenomResponse, MsgMint, MsgSetDenomMetadata,
-    },
+    osmosis::tokenfactory::v1beta1::{MsgCreateDenom, MsgCreateDenomResponse, MsgSetDenomMetadata},
 };
+
 use sylvia::contract;
 
 /// version info for migration
 pub const CONTRACT_NAME: &str = "crates.io:transmuter";
 pub const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// Swap fee is hardcoded to zero intentionally.
-const SWAP_FEE: Decimal = Decimal::zero();
 
 const CREATE_ALLOYED_DENOM_REPLY_ID: u64 = 1;
 
@@ -42,17 +42,30 @@ pub struct Transmuter<'a> {
     pub(crate) limiters: Limiters<'a>,
 }
 
+pub mod key {
+    pub const ACTIVE_STATUS: &str = "active_status";
+    pub const POOL: &str = "pool";
+    pub const ALLOYED_ASSET_DENOM: &str = "alloyed_denom";
+    pub const ALLOYED_ASSET_NORMALIZATION_FACTOR: &str = "alloyed_asset_normalization_factor";
+    pub const ADMIN: &str = "admin";
+    pub const MODERATOR: &str = "moderator";
+    pub const LIMITERS: &str = "limiters";
+}
+
 #[contract]
 #[error(ContractError)]
 impl Transmuter<'_> {
     /// Create a Transmuter instance.
     pub const fn new() -> Self {
         Self {
-            active_status: Item::new("active_status"),
-            pool: Item::new("pool"),
-            alloyed_asset: AlloyedAsset::new("alloyed_denom"),
-            role: Role::new("admin", "moderator"),
-            limiters: Limiters::new("limiters"),
+            active_status: Item::new(key::ACTIVE_STATUS),
+            pool: Item::new(key::POOL),
+            alloyed_asset: AlloyedAsset::new(
+                key::ALLOYED_ASSET_DENOM,
+                key::ALLOYED_ASSET_NORMALIZATION_FACTOR,
+            ),
+            role: Role::new(key::ADMIN, key::MODERATOR),
+            limiters: Limiters::new(key::LIMITERS),
         }
     }
 
@@ -61,8 +74,9 @@ impl Transmuter<'_> {
     pub fn instantiate(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
-        pool_asset_denoms: Vec<String>,
+        pool_asset_configs: Vec<AssetConfig>,
         alloyed_asset_subdenom: String,
+        alloyed_asset_normalization_factor: Uint128,
         admin: Option<String>,
         moderator: Option<String>,
     ) -> Result<Response, ContractError> {
@@ -85,14 +99,14 @@ impl Transmuter<'_> {
                 .init(deps.storage, deps.api.addr_validate(&moderator)?)?;
         }
 
-        let pool_asset_denoms = pool_asset_denoms
+        let pool_assets = pool_asset_configs
             .into_iter()
-            .map(|denom| Denom::validate(deps.as_ref(), denom))
+            .map(|config| AssetConfig::checked_init_asset(config, deps.as_ref()))
             .collect::<Result<Vec<_>, ContractError>>()?;
 
         // store pool
         self.pool
-            .save(deps.storage, &TransmuterPool::new(&pool_asset_denoms)?)?;
+            .save(deps.storage, &TransmuterPool::new(pool_assets)?)?;
 
         // set active status to true
         self.active_status.save(deps.storage, &true)?;
@@ -105,6 +119,10 @@ impl Transmuter<'_> {
             },
             CREATE_ALLOYED_DENOM_REPLY_ID,
         );
+
+        // set normalization factor for alloyed asset
+        self.alloyed_asset
+            .set_normalization_factor(deps.storage, alloyed_asset_normalization_factor)?;
 
         Ok(Response::new()
             .add_attribute("method", "instantiate")
@@ -132,10 +150,45 @@ impl Transmuter<'_> {
     // === executes ===
 
     #[msg(exec)]
+    fn rescale_normalization_factor(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        numerator: Uint128,
+        denominator: Uint128,
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+
+        // only admin can rescale normalization factor
+        ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
+
+        // rescale normalization factor for pool assets
+        self.pool.update(deps.storage, |pool| {
+            pool.update_normalization_factor(|factor| {
+                rescale(factor, numerator, denominator).map_err(Into::into)
+            })
+        })?;
+
+        // rescale normalization factor for alloyed asset
+        let alloyed_asset_normalization_factor =
+            self.alloyed_asset.get_normalization_factor(deps.storage)?;
+
+        let updated_alloyed_asset_normalization_factor =
+            rescale(alloyed_asset_normalization_factor, numerator, denominator)?;
+
+        self.alloyed_asset
+            .set_normalization_factor(deps.storage, updated_alloyed_asset_normalization_factor)?;
+
+        Ok(Response::new()
+            .add_attribute("method", "rescale_normalization_factor")
+            .add_attribute("numerator", numerator)
+            .add_attribute("denominator", denominator))
+    }
+
+    #[msg(exec)]
     fn add_new_assets(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
-        denoms: Vec<String>,
+        asset_configs: Vec<AssetConfig>,
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
@@ -144,23 +197,28 @@ impl Transmuter<'_> {
 
         // ensure that new denoms are not alloyed denom
         let share_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
-        for denom in &denoms {
+        for cfg in &asset_configs {
             ensure!(
-                denom != &share_denom,
+                cfg.denom != share_denom,
                 ContractError::ShareDenomNotAllowedAsPoolAsset {}
             );
         }
 
         // convert denoms to Denom type
-        let denoms = denoms
+        let assets = asset_configs
             .into_iter()
-            .map(|denom| Denom::validate(deps.as_ref(), denom))
+            .map(|cfg| cfg.checked_init_asset(deps.as_ref()))
             .collect::<Result<Vec<_>, ContractError>>()?;
 
         // add new assets to the pool
         let mut pool = self.pool.load(deps.storage)?;
-        pool.add_new_assets(&denoms)?;
+        pool.add_new_assets(assets)?;
         self.pool.save(deps.storage, &pool)?;
+
+        // staled divisions in change limiters has become invalid after
+        // new assets are added to the pool
+        // so reset change limiter states
+        self.limiters.reset_change_limiter_states(deps.storage)?;
 
         Ok(Response::new().add_attribute("method", "add_new_assets"))
     }
@@ -349,67 +407,18 @@ impl Transmuter<'_> {
     /// Token used to join pool is sent to the contract via `funds` in `MsgExecuteContract`.
     #[msg(exec)]
     pub fn join_pool(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
-        self.swap_tokens_for_alloyed_asset("join_pool", ctx)
-    }
-
-    pub fn swap_tokens_for_alloyed_asset(
-        &self,
-        method: &str,
-        ctx: (DepsMut, Env, MessageInfo),
-    ) -> Result<Response, ContractError> {
         let (deps, env, info) = ctx;
-
-        // ensure funds not empty
-        ensure!(
-            !info.funds.is_empty(),
-            ContractError::AtLeastSingleTokenExpected {}
-        );
-
-        // ensure funds does not have zero coin
-        ensure!(
-            info.funds.iter().all(|coin| coin.amount > Uint128::zero()),
-            ContractError::ZeroValueOperation {}
-        );
-
-        let (pool, alloyed_asset_out) =
-            self.calc_swap_tokens_for_alloyed_asset(deps.as_ref(), &info.funds)?;
-
-        // check and update limiters only if pool assets are not zero
-        if let Some(denom_weight_pairs) = pool.weights()? {
-            self.limiters.check_limits_and_update(
-                deps.storage,
-                denom_weight_pairs,
-                env.block.time,
-            )?;
-        }
-
-        self.pool.save(deps.storage, &pool)?;
-
-        let mint_msg = MsgMint {
-            sender: env.contract.address.to_string(),
-            amount: Some(alloyed_asset_out.into()),
-            mint_to_address: info.sender.to_string(),
-        };
-
-        Ok(Response::new()
-            .add_attribute("method", method)
-            .add_message(mint_msg))
-    }
-
-    fn calc_swap_tokens_for_alloyed_asset(
-        &self,
-        deps: Deps,
-        tokens_in: &[Coin],
-    ) -> Result<(TransmuterPool, Coin), ContractError> {
-        // join pool
-        let mut pool = self.pool.load(deps.storage)?;
-        pool.join_pool(tokens_in)?;
-
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
-        let out_amount = AlloyedAsset::amount_from(tokens_in)?;
-        let alloyed_asset_out = Coin::new(out_amount.u128(), alloyed_denom);
-
-        Ok((pool, alloyed_asset_out))
+        self.swap_tokens_to_alloyed_asset(
+            Entrypoint::Exec,
+            SwapToAlloyedConstraint::ExactIn {
+                tokens_in: &info.funds,
+                token_out_min_amount: Uint128::zero(),
+            },
+            info.sender,
+            deps,
+            env,
+        )
+        .map(|res| res.add_attribute("method", "join_pool"))
     }
 
     /// Exit pool with `tokens_out` amount of tokens.
@@ -421,124 +430,45 @@ impl Transmuter<'_> {
         ctx: (DepsMut, Env, MessageInfo),
         tokens_out: Vec<Coin>,
     ) -> Result<Response, ContractError> {
-        self.swap_alloyed_asset_for_tokens(
-            "exit_pool",
-            BurnAlloyedAssetFrom::SenderAccount,
-            ctx,
-            tokens_out,
-        )
-    }
-
-    pub fn swap_alloyed_asset_for_tokens(
-        &self,
-        method: &str,
-        burn_alloyed_asset_from: BurnAlloyedAssetFrom,
-        ctx: (DepsMut, Env, MessageInfo),
-        tokens_out: Vec<Coin>,
-    ) -> Result<Response, ContractError> {
         let (deps, env, info) = ctx;
-
-        // ensure tokens out has no zero value
-        ensure!(
-            tokens_out.iter().all(|coin| coin.amount > Uint128::zero()),
-            ContractError::ZeroValueOperation {}
-        );
-
-        let (pool, alloyed_asset_to_burn, burn_from_address) = self
-            .calc_swap_alloyed_asset_for_tokens(
-                deps.as_ref(),
-                &env,
-                &info,
-                burn_alloyed_asset_from,
-                &tokens_out,
-            )?;
-
-        // check and update limiters only if pool assets are not zero
-        if let Some(denom_weight_pairs) = pool.weights()? {
-            self.limiters.check_limits_and_update(
-                deps.storage,
-                denom_weight_pairs,
-                env.block.time,
-            )?;
-        }
-
-        self.pool.save(deps.storage, &pool)?;
-
-        let bank_send_msg = BankMsg::Send {
-            to_address: info.sender.to_string(),
-            amount: tokens_out,
-        };
-
-        // burn alloyed assets
-        let burn_msg = MsgBurn {
-            sender: env.contract.address.to_string(),
-            amount: Some(alloyed_asset_to_burn.into()),
-            burn_from_address,
-        };
-
-        Ok(Response::new()
-            .add_attribute("method", method)
-            .add_message(burn_msg)
-            .add_message(bank_send_msg))
-    }
-
-    fn calc_swap_alloyed_asset_for_tokens(
-        &self,
-        deps: Deps,
-        env: &Env,
-        info: &MessageInfo,
-        burn_alloyed_asset_from: BurnAlloyedAssetFrom,
-        tokens_out: &[Coin],
-    ) -> Result<(TransmuterPool, Coin, String), ContractError> {
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
-
-        let (alloyed_asset_available, burn_from_address) = match burn_alloyed_asset_from {
-            BurnAlloyedAssetFrom::SenderAccount => {
-                ensure!(info.funds.is_empty(), ContractError::EmptyFundsExpected {});
-
-                let alloyed_asset_available = self.alloyed_asset.get_balance(deps, &info.sender)?;
-                let burn_from_address = info.sender.to_string();
-                (alloyed_asset_available, burn_from_address)
-            }
-            BurnAlloyedAssetFrom::SentFunds => {
-                ensure!(info.funds.len() == 1, ContractError::SingleTokenExpected {});
-                ensure!(
-                    info.funds[0].denom == alloyed_denom,
-                    ContractError::UnexpectedDenom {
-                        expected: info.funds[0].clone().denom,
-                        actual: alloyed_denom
-                    }
-                );
-
-                let alloyed_asset_available = info.funds[0].amount;
-                let burn_from_address = env.contract.address.to_string();
-                (alloyed_asset_available, burn_from_address)
-            }
-        };
-
-        // check if sender's allooed asset balance is enough
-        let alloyed_asset_to_burn = AlloyedAsset::amount_from(tokens_out)?;
-
-        ensure!(
-            alloyed_asset_available >= alloyed_asset_to_burn,
-            ContractError::InsufficientShares {
-                required: alloyed_asset_to_burn,
-                available: alloyed_asset_available
-            }
-        );
-
-        // exit pool
-        let mut pool = self.pool.load(deps.storage)?;
-        pool.exit_pool(tokens_out)?;
-
-        Ok((
-            pool,
-            Coin::new(alloyed_asset_to_burn.u128(), alloyed_denom),
-            burn_from_address,
-        ))
+        self.swap_alloyed_asset_to_tokens(
+            Entrypoint::Exec,
+            SwapFromAlloyedConstraint::ExactOut {
+                tokens_out: &tokens_out,
+                token_in_max_amount: Uint128::MAX,
+            },
+            BurnTarget::SenderAccount,
+            info.sender,
+            deps,
+            env,
+        )
+        .map(|res| res.add_attribute("method", "exit_pool"))
     }
 
     // === queries ===
+
+    #[msg(query)]
+    fn list_asset_configs(
+        &self,
+        ctx: (Deps, Env),
+    ) -> Result<ListAssetConfigsResponse, ContractError> {
+        let (deps, _env) = ctx;
+
+        let pool = self.pool.load(deps.storage)?;
+        let alloyed_asset_config = AssetConfig {
+            denom: self.alloyed_asset.get_alloyed_denom(deps.storage)?,
+            normalization_factor: self.alloyed_asset.get_normalization_factor(deps.storage)?,
+        };
+
+        Ok(ListAssetConfigsResponse {
+            asset_configs: pool
+                .pool_assets
+                .iter()
+                .map(|asset| asset.config())
+                .chain(iter::once(alloyed_asset_config))
+                .collect(),
+        })
+    }
 
     #[msg(query)]
     fn list_limiters(&self, ctx: (Deps, Env)) -> Result<ListLimitersResponse, ContractError> {
@@ -609,7 +539,7 @@ impl Transmuter<'_> {
         let pool = self.pool.load(deps.storage)?;
 
         Ok(GetTotalPoolLiquidityResponse {
-            total_pool_liquidity: pool.pool_assets,
+            total_pool_liquidity: pool.pool_assets.iter().map(Asset::to_coin).collect(),
         })
     }
 
@@ -636,7 +566,7 @@ impl Transmuter<'_> {
         let swappable_assets = pool
             .pool_assets
             .iter()
-            .map(|c| c.denom.clone())
+            .map(|c| c.denom().to_string())
             .chain(vec![alloyed_denom])
             .collect::<Vec<_>>();
 
@@ -679,65 +609,10 @@ impl Transmuter<'_> {
         token_out_denom: String,
         swap_fee: Decimal,
     ) -> Result<CalcOutAmtGivenInResponse, ContractError> {
-        let (_pool, token_out) =
-            self.do_calc_out_amt_given_in(ctx, token_in, &token_out_denom, swap_fee)?;
+        self.ensure_valid_swap_fee(swap_fee)?;
+        let (_pool, token_out) = self.out_amt_given_in(ctx.0, token_in, &token_out_denom)?;
 
         Ok(CalcOutAmtGivenInResponse { token_out })
-    }
-
-    pub(crate) fn do_calc_out_amt_given_in(
-        &self,
-        ctx: (Deps, Env),
-        token_in: Coin,
-        token_out_denom: &str,
-        swap_fee: Decimal,
-    ) -> Result<(TransmuterPool, Coin), ContractError> {
-        let (deps, env) = ctx;
-
-        // ensure swap fee is the same as one from get_swap_fee which essentially is always 0
-        // in case where the swap fee mismatch, it can cause the pool to be imbalanced
-        let contract_swap_fee = self.get_swap_fee((deps, env))?.swap_fee;
-        ensure_eq!(
-            swap_fee,
-            contract_swap_fee,
-            ContractError::InvalidSwapFee {
-                expected: contract_swap_fee,
-                actual: swap_fee
-            }
-        );
-
-        // ensure token in denom and token out denom are not the same
-        ensure!(
-            token_out_denom != token_in.denom,
-            StdError::generic_err("token_in_denom and token_out_denom cannot be the same")
-        );
-
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(ctx.0.storage)?;
-
-        let token_out = Coin::new(token_in.amount.u128(), token_out_denom);
-        let mut pool = self.pool.load(ctx.0.storage)?;
-
-        // In case where token_in_denom or token_out_denom is alloyed_denom:
-
-        if token_in.denom == alloyed_denom {
-            // token_in_denom == alloyed_denom: is the same as exit pool
-            // so we ensure that exit pool has no problem
-            pool.exit_pool(&[token_out.clone()])?;
-            return Ok((pool, token_out));
-        }
-
-        if token_out.denom == alloyed_denom {
-            // token_out_denom == alloyed_denom: is the same as join pool
-            // so we ensure that join pool has no problem
-            pool.join_pool(&[token_in])?;
-            return Ok((pool, token_out));
-        }
-
-        let mut pool = self.pool.load(deps.storage)?;
-
-        let token_out = pool.transmute(&token_in, &token_out.denom)?;
-
-        Ok((pool, token_out))
     }
 
     #[msg(query)]
@@ -748,74 +623,10 @@ impl Transmuter<'_> {
         token_in_denom: String,
         swap_fee: Decimal,
     ) -> Result<CalcInAmtGivenOutResponse, ContractError> {
-        // else we call do_calc_in_amt_given_out to ensure constraint on the pool
-        let (_pool, token_in) =
-            self.do_calc_in_amt_given_out(ctx, token_out, token_in_denom, swap_fee)?;
+        self.ensure_valid_swap_fee(swap_fee)?;
+        let (_pool, token_in) = self.in_amt_given_out(ctx.0, token_out, token_in_denom)?;
 
         Ok(CalcInAmtGivenOutResponse { token_in })
-    }
-
-    pub(crate) fn do_calc_in_amt_given_out(
-        &self,
-        ctx: (Deps, Env),
-        token_out: Coin,
-        token_in_denom: String,
-        swap_fee: Decimal,
-    ) -> Result<(TransmuterPool, Coin), ContractError> {
-        let (deps, env) = ctx;
-
-        // ensure swap fee is the same as one from get_swap_fee which essentially is always 0
-        // in case where the swap fee mismatch, it can cause the pool to be imbalanced
-        let contract_swap_fee = self.get_swap_fee((deps, env))?.swap_fee;
-        ensure_eq!(
-            swap_fee,
-            contract_swap_fee,
-            ContractError::InvalidSwapFee {
-                expected: contract_swap_fee,
-                actual: swap_fee
-            }
-        );
-
-        // ensure token in denom and token out denom are not the same
-        ensure!(
-            token_out.denom != token_in_denom,
-            StdError::generic_err("token_in_denom and token_out_denom cannot be the same")
-        );
-
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(ctx.0.storage)?;
-
-        let token_in = Coin::new(token_out.amount.u128(), token_in_denom);
-        let mut pool = self.pool.load(deps.storage)?;
-
-        // In case where token_in_denom or token_out_denom is alloyed_denom:
-
-        if token_in.denom == alloyed_denom {
-            // token_in_denom == alloyed_denom: is the same as exit pool
-            // so we ensure that exit pool has no problem
-            pool.exit_pool(&[token_out])?;
-            return Ok((pool, token_in));
-        }
-
-        if token_out.denom == alloyed_denom {
-            // token_out_denom == alloyed_denom: is the same as join pool
-            // so we ensure that join pool has no problem
-            pool.join_pool(&[token_in.clone()])?;
-            return Ok((pool, token_in));
-        }
-
-        let actual_token_out = pool.transmute(&token_in, &token_out.denom)?;
-
-        // ensure that actual_token_out is equal to token_out
-        ensure_eq!(
-            token_out,
-            actual_token_out,
-            ContractError::InvalidTokenOutAmount {
-                expected: token_out.amount,
-                actual: actual_token_out.amount
-            }
-        );
-
-        Ok((pool, token_in))
     }
 
     // --- admin ---
@@ -943,16 +754,9 @@ impl Transmuter<'_> {
     }
 }
 
-/// Determines where to burn alloyed assets from.
-pub enum BurnAlloyedAssetFrom {
-    /// Burn alloyed asset from the sender's account.
-    /// This is used when the sender wants to exit pool
-    /// forcing no funds attached in the process.
-    SenderAccount,
-    /// Burn alloyed assets from the sent funds.
-    /// This is used when the sender wants to swap tokens for alloyed assets,
-    /// since alloyed asset needs to be sent to the contract before swapping.
-    SentFunds,
+#[cw_serde]
+pub struct ListAssetConfigsResponse {
+    pub asset_configs: Vec<AssetConfig>,
 }
 
 #[cw_serde]
@@ -1022,14 +826,14 @@ pub struct GetModeratorResponse {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use crate::limiter::{ChangeLimiter, StaticLimiter, WindowConfig};
     use crate::sudo::SudoMsg;
-
     use crate::*;
+
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{attr, from_binary, SubMsgResponse, SubMsgResult, Uint64};
+    use cosmwasm_std::{attr, from_binary, BankMsg, SubMsgResponse, SubMsgResult, Uint64};
+    use osmosis_std::types::osmosis::tokenfactory::v1beta1::MsgBurn;
 
     #[test]
     fn test_add_new_assets() {
@@ -1048,8 +852,12 @@ mod tests {
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             alloyed_asset_subdenom: "uosmouion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.to_string()),
             moderator: None,
         };
@@ -1085,7 +893,10 @@ mod tests {
         // Attempt to add assets with invalid denom
         let invalid_denoms = vec!["invalid_asset1".to_string(), "invalid_asset2".to_string()];
         let add_invalid_assets_msg = ContractExecMsg::Transmuter(ExecMsg::AddNewAssets {
-            denoms: invalid_denoms,
+            asset_configs: invalid_denoms
+                .into_iter()
+                .map(|denom| AssetConfig::from_denom_str(denom.as_str()))
+                .collect(),
         });
 
         let res = execute(
@@ -1104,8 +915,12 @@ mod tests {
         );
 
         let new_assets = vec!["new_asset1".to_string(), "new_asset2".to_string()];
-        let add_assets_msg =
-            ContractExecMsg::Transmuter(ExecMsg::AddNewAssets { denoms: new_assets });
+        let add_assets_msg = ContractExecMsg::Transmuter(ExecMsg::AddNewAssets {
+            asset_configs: new_assets
+                .into_iter()
+                .map(|denom| AssetConfig::from_denom_str(denom.as_str()))
+                .collect(),
+        });
 
         // Attempt to add assets by non-admin
         let non_admin_info = mock_info("non_admin", &[]);
@@ -1128,7 +943,7 @@ mod tests {
         // Check if the new assets were added
         let res = query(
             deps.as_ref(),
-            env.clone(),
+            env,
             ContractQueryMsg::Transmuter(QueryMsg::GetTotalPoolLiquidity {}),
         )
         .unwrap();
@@ -1158,8 +973,12 @@ mod tests {
         let admin = "admin";
         let moderator = "moderator";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             alloyed_asset_subdenom: "uosmouion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.to_string()),
             moderator: Some(moderator.to_string()),
         };
@@ -1346,9 +1165,13 @@ mod tests {
         let rejecting_candidate = "rejecting_candidate";
         let candidate = "candidate";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         let env = mock_env();
@@ -1509,9 +1332,13 @@ mod tests {
 
         // Instantiate the contract.
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         instantiate(deps.as_mut(), mock_env(), mock_info(admin, &[]), init_msg).unwrap();
@@ -1534,9 +1361,13 @@ mod tests {
 
         // Instantiate the contract.
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: Some(moderator.to_string()),
         };
         instantiate(deps.as_mut(), mock_env(), mock_info(admin, &[]), init_msg).unwrap();
@@ -1630,10 +1461,14 @@ mod tests {
         let admin = "admin";
         let user = "user";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             moderator: None,
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
         };
 
         instantiate(deps.as_mut(), mock_env(), mock_info(admin, &[]), init_msg).unwrap();
@@ -2070,10 +1905,14 @@ mod tests {
         let admin = "admin";
         let non_admin = "non_admin";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             alloyed_asset_subdenom: "uosmouion".to_string(),
             admin: Some(admin.to_string()),
             moderator: None,
+            alloyed_asset_normalization_factor: Uint128::one(),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -2088,6 +1927,8 @@ mod tests {
             name: "name".to_string(),
             symbol: "symbol".to_string(),
             denom_units: vec![],
+            uri: String::new(),
+            uri_hash: String::new(),
         };
 
         // Attempt to set alloyed denom metadata by a non-admin user.
@@ -2130,9 +1971,13 @@ mod tests {
         let admin = "admin";
         let user = "user";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         let env = mock_env();
@@ -2203,9 +2048,13 @@ mod tests {
         let admin = "admin";
         let user = "user";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         let env = mock_env();
@@ -2234,6 +2083,11 @@ mod tests {
             },
         )
         .unwrap();
+
+        // join pool by others for sufficient amount
+        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+        let info = mock_info(admin, &[Coin::new(1000, "uion"), Coin::new(1000, "uosmo")]);
+        execute(deps.as_mut(), env.clone(), info, join_pool_msg).unwrap();
 
         // User tries to exit pool
         let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
@@ -2319,9 +2173,13 @@ mod tests {
         let user_1 = "user_1";
         let user_2 = "user_2";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         let env = mock_env();
@@ -2452,9 +2310,13 @@ mod tests {
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         let env = mock_env();
@@ -2506,9 +2368,13 @@ mod tests {
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["uosmo".to_string(), "uion".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         let env = mock_env();
@@ -2645,9 +2511,13 @@ mod tests {
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["axlusdc".to_string(), "whusdc".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("axlusdc"),
+                AssetConfig::from_denom_str("whusdc"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "alloyedusdc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         let env = mock_env();
@@ -2857,9 +2727,13 @@ mod tests {
 
         let admin = "admin";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["axlusdc".to_string(), "whusdc".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("axlusdc"),
+                AssetConfig::from_denom_str("whusdc"),
+            ],
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "alloyedusdc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         };
         let env = mock_env();
@@ -3046,5 +2920,160 @@ mod tests {
 
             assert_eq!(res, expected, "case: {}", name);
         }
+    }
+
+    #[test]
+    fn test_rescale_normalization_factor() {
+        let mut deps = mock_dependencies();
+
+        // make denom has non-zero total supply
+        deps.querier.update_balance(
+            "someone",
+            vec![Coin::new(1, "axlusdc"), Coin::new(1, "whusdc")],
+        );
+
+        let admin = "admin";
+        let init_msg = InstantiateMsg {
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("axlusdc"),
+                AssetConfig::from_denom_str("whusdc"),
+            ],
+            admin: Some(admin.to_string()),
+            alloyed_asset_subdenom: "alloyedusdc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::from(100u128),
+            moderator: None,
+        };
+        let env = mock_env();
+        let info = mock_info(admin, &[]);
+
+        // Instantiate the contract.
+        instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
+
+        // Manually reply
+        let alloyed_denom = "alloyedusdc";
+
+        reply(
+            deps.as_mut(),
+            env.clone(),
+            Reply {
+                id: 1,
+                result: SubMsgResult::Ok(SubMsgResponse {
+                    events: vec![],
+                    data: Some(
+                        MsgCreateDenomResponse {
+                            new_token_denom: alloyed_denom.to_string(),
+                        }
+                        .into(),
+                    ),
+                }),
+            },
+        )
+        .unwrap();
+
+        // list asset configs
+        let res: Result<ListAssetConfigsResponse, ContractError> = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::ListAssetConfigs {}),
+        )
+        .map(|value| from_binary(&value).unwrap());
+
+        assert_eq!(
+            res,
+            Ok(ListAssetConfigsResponse {
+                asset_configs: vec![
+                    AssetConfig::from_denom_str("axlusdc"),
+                    AssetConfig::from_denom_str("whusdc"),
+                    AssetConfig {
+                        denom: alloyed_denom.to_string(),
+                        normalization_factor: Uint128::from(100u128),
+                    }
+                ]
+            })
+        );
+
+        // scale up
+        let rescale_msg = ContractExecMsg::Transmuter(ExecMsg::RescaleNormalizationFactor {
+            numerator: Uint128::from(100u128),
+            denominator: Uint128::one(),
+        });
+
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(admin, &[]),
+            rescale_msg,
+        )
+        .unwrap();
+
+        // list asset configs
+        let res: Result<ListAssetConfigsResponse, ContractError> = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::ListAssetConfigs {}),
+        )
+        .map(|value| from_binary(&value).unwrap());
+
+        assert_eq!(
+            res,
+            Ok(ListAssetConfigsResponse {
+                asset_configs: vec![
+                    AssetConfig {
+                        denom: "axlusdc".to_string(),
+                        normalization_factor: Uint128::from(100u128),
+                    },
+                    AssetConfig {
+                        denom: "whusdc".to_string(),
+                        normalization_factor: Uint128::from(100u128),
+                    },
+                    AssetConfig {
+                        denom: alloyed_denom.to_string(),
+                        normalization_factor: Uint128::from(10000u128),
+                    }
+                ]
+            })
+        );
+
+        // scale down
+        let rescale_msg = ContractExecMsg::Transmuter(ExecMsg::RescaleNormalizationFactor {
+            numerator: Uint128::one(),
+            denominator: Uint128::from(100u128),
+        });
+
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(admin, &[]),
+            rescale_msg,
+        )
+        .unwrap();
+
+        // list asset configs
+        let res: Result<ListAssetConfigsResponse, ContractError> = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::ListAssetConfigs {}),
+        )
+        .map(|value| from_binary(&value).unwrap());
+
+        assert_eq!(
+            res,
+            Ok(ListAssetConfigsResponse {
+                asset_configs: vec![
+                    AssetConfig {
+                        denom: "axlusdc".to_string(),
+                        normalization_factor: Uint128::from(1u128),
+                    },
+                    AssetConfig {
+                        denom: "whusdc".to_string(),
+                        normalization_factor: Uint128::from(1u128),
+                    },
+                    AssetConfig {
+                        denom: alloyed_denom.to_string(),
+                        normalization_factor: Uint128::from(100u128),
+                    }
+                ]
+            })
+        );
     }
 }

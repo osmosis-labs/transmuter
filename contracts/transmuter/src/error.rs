@@ -1,8 +1,10 @@
 use cosmwasm_std::{
-    CheckedFromRatioError, Coin, Decimal, DivideByZeroError, OverflowError, StdError, Timestamp,
-    Uint128, Uint64,
+    CheckedFromRatioError, CheckedMultiplyRatioError, Coin, ConversionOverflowError, Decimal,
+    DivideByZeroError, OverflowError, StdError, Timestamp, Uint128, Uint64,
 };
 use thiserror::Error;
+
+use crate::{math::MathError, migrations::v2_1_0};
 
 #[derive(Error, Debug, PartialEq)]
 pub enum ContractError {
@@ -71,10 +73,12 @@ pub enum ContractError {
     #[error("Spot price query failed: reason {reason}")]
     SpotPriceQueryFailed { reason: String },
 
-    #[error("Insufficient token out: required: {required}, available: {available}")]
+    #[error(
+        "Insufficient token out: min required: {min_required}, but got calculated amount out: {amount_out}"
+    )]
     InsufficientTokenOut {
-        required: Uint128,
-        available: Uint128,
+        min_required: Uint128,
+        amount_out: Uint128,
     },
 
     #[error("Excessive token in required: max acceptable token in: {limit}, required: {required}")]
@@ -91,6 +95,9 @@ pub enum ContractError {
 
     #[error("Pool asset not be share denom")]
     ShareDenomNotAllowedAsPoolAsset {},
+
+    #[error("Token in must not have the same denom as token out: {denom}")]
+    SameDenomNotAllowed { denom: String },
 
     #[error("Unauthorized")]
     Unauthorized {},
@@ -160,6 +167,9 @@ pub enum ContractError {
     #[error("Modifying wrong limiter type: expected: {expected}, actual: {actual}")]
     WrongLimiterType { expected: String, actual: String },
 
+    #[error("Normalization factor must be positive")]
+    NormalizationFactorMustBePositive {},
+
     #[error("{0}")]
     OverflowError(#[from] OverflowError),
 
@@ -168,4 +178,16 @@ pub enum ContractError {
 
     #[error("{0}")]
     CheckedFromRatioError(#[from] CheckedFromRatioError),
+
+    #[error("{0}")]
+    CheckedMultiplyRatioError(#[from] CheckedMultiplyRatioError),
+
+    #[error("{0}")]
+    ConversionOverflowError(#[from] ConversionOverflowError),
+
+    #[error("{0}")]
+    MathError(#[from] MathError),
+
+    #[error("Migration Error: {0}")]
+    MigrationError(#[from] v2_1_0::MigrationError),
 }

@@ -508,6 +508,32 @@ impl<'a> Limiters<'a> {
 
         Ok(())
     }
+
+    /// If the normalization factor updated, or new asset being added, staled divisions will become invalid.
+    /// This function cleans up the staled divisions.
+    pub fn reset_change_limiter_states(
+        &self,
+        storage: &mut dyn Storage,
+    ) -> Result<(), ContractError> {
+        // there is no need to limit, since the number of limiters is expected to be small
+        let limiters = self.list_limiters(storage)?;
+
+        for ((denom, label), limiter) in limiters {
+            match limiter {
+                Limiter::ChangeLimiter(limiter) => self.limiters.save(
+                    storage,
+                    (denom.as_str(), label.as_str()),
+                    &Limiter::ChangeLimiter(ChangeLimiter::new(
+                        limiter.window_config,
+                        limiter.boundary_offset,
+                    )?),
+                )?,
+                Limiter::StaticLimiter(_) => {}
+            };
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -2603,6 +2629,88 @@ mod tests {
                         actual: "change_limiter".to_string()
                     }
                 );
+            }
+        }
+    }
+
+    mod reset_change_limiter_states {
+        use cosmwasm_std::Order;
+
+        use super::*;
+
+        #[test]
+        fn test_reset_change_limiter_states() {
+            let mut deps = mock_dependencies();
+            let limiters = Limiters::new("limiters");
+
+            // register 2 change limiters
+            let config_1h = WindowConfig {
+                window_size: Uint64::from(3_600_000_000_000u64), // 1 hrs
+                division_count: Uint64::from(2u64),              // 30 mins each
+            };
+
+            let config_1w = WindowConfig {
+                window_size: Uint64::from(25_920_000_000_000u64), // 7 days
+                division_count: Uint64::from(2u64),               // 3.5 days each
+            };
+
+            limiters
+                .register(
+                    &mut deps.storage,
+                    "denoma",
+                    "1h",
+                    LimiterParams::ChangeLimiter {
+                        window_config: config_1h.clone(),
+                        boundary_offset: Decimal::percent(10),
+                    },
+                )
+                .unwrap();
+
+            limiters
+                .register(
+                    &mut deps.storage,
+                    "denoma",
+                    "1w",
+                    LimiterParams::ChangeLimiter {
+                        window_config: config_1w.clone(),
+                        boundary_offset: Decimal::percent(5),
+                    },
+                )
+                .unwrap();
+
+            // update limiters
+
+            let block_time = Timestamp::from_nanos(1661231280000000000);
+            let value_a = Decimal::one();
+            limiters
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![("denoma".to_string(), value_a)],
+                    block_time,
+                )
+                .unwrap();
+
+            let keys = limiters
+                .limiters
+                .keys(deps.as_ref().storage, None, None, Order::Ascending)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            for (denom, window) in keys.iter() {
+                let divisions =
+                    list_divisions(&limiters, denom.as_str(), window.as_str(), &deps.storage);
+                assert_eq!(divisions.len(), 1);
+            }
+
+            // reset limiters
+            limiters
+                .reset_change_limiter_states(&mut deps.storage)
+                .unwrap();
+
+            for (denom, window) in keys.iter() {
+                let divisions =
+                    list_divisions(&limiters, denom.as_str(), window.as_str(), &deps.storage);
+                assert_eq!(divisions.len(), 0);
             }
         }
     }

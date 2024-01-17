@@ -10,19 +10,21 @@ impl TransmuterPool {
             let token_is_in_pool_assets = self
                 .pool_assets
                 .iter()
-                .any(|pool_asset| pool_asset.denom == token.denom);
+                .any(|pool_asset| pool_asset.denom() == token.denom);
 
             if token_is_in_pool_assets {
                 for pool_asset in &mut self.pool_assets {
                     // deduct token from pool assets
-                    if token.denom == pool_asset.denom {
-                        pool_asset.amount =
-                            pool_asset.amount.checked_sub(token.amount).map_err(|_| {
+                    if token.denom == pool_asset.denom() {
+                        let available: Coin = pool_asset.to_coin();
+                        pool_asset.update_amount(|amount| {
+                            amount.checked_sub(token.amount).map_err(|_| {
                                 ContractError::InsufficientPoolAsset {
                                     required: token.clone(),
-                                    available: pool_asset.clone(),
+                                    available,
                                 }
-                            })?;
+                            })
+                        })?;
                     }
                 }
             } else {
@@ -38,6 +40,8 @@ impl TransmuterPool {
 
 #[cfg(test)]
 mod tests {
+    use crate::asset::Asset;
+
     use super::*;
     const ETH_USDC: &str = "ibc/AXLETHUSDC";
     const COSMOS_USDC: &str = "ibc/COSMOSUSDC";
@@ -45,10 +49,10 @@ mod tests {
     #[test]
     fn test_exit_pool_succeed_when_has_enough_coins_in_pool() {
         let mut pool = TransmuterPool {
-            pool_assets: vec![
+            pool_assets: Asset::unchecked_equal_assets_from_coins(&[
                 Coin::new(100_000, ETH_USDC),
                 Coin::new(100_000, COSMOS_USDC),
-            ],
+            ]),
         };
 
         // exit pool with first token
@@ -56,7 +60,10 @@ mod tests {
         assert_eq!(
             pool,
             TransmuterPool {
-                pool_assets: vec![Coin::new(90_000, ETH_USDC), Coin::new(100_000, COSMOS_USDC),],
+                pool_assets: Asset::unchecked_equal_assets_from_coins(&[
+                    Coin::new(90_000, ETH_USDC),
+                    Coin::new(100_000, COSMOS_USDC),
+                ])
             }
         );
 
@@ -65,7 +72,10 @@ mod tests {
         assert_eq!(
             pool,
             TransmuterPool {
-                pool_assets: vec![Coin::new(90_000, ETH_USDC), Coin::new(90_000, COSMOS_USDC),],
+                pool_assets: Asset::unchecked_equal_assets_from_coins(&[
+                    Coin::new(90_000, ETH_USDC),
+                    Coin::new(90_000, COSMOS_USDC),
+                ])
             }
         );
 
@@ -75,7 +85,10 @@ mod tests {
         assert_eq!(
             pool,
             TransmuterPool {
-                pool_assets: vec![Coin::new(0, ETH_USDC), Coin::new(0, COSMOS_USDC),],
+                pool_assets: Asset::unchecked_equal_assets_from_coins(&[
+                    Coin::new(0, ETH_USDC),
+                    Coin::new(0, COSMOS_USDC),
+                ])
             }
         );
     }
@@ -83,10 +96,10 @@ mod tests {
     #[test]
     fn test_exit_pool_fail_when_token_denom_is_invalid() {
         let mut pool = TransmuterPool {
-            pool_assets: vec![
+            pool_assets: Asset::unchecked_equal_assets_from_coins(&[
                 Coin::new(100_000, ETH_USDC),
                 Coin::new(100_000, COSMOS_USDC),
-            ],
+            ]),
         };
 
         // exit pool with invalid token
@@ -113,10 +126,10 @@ mod tests {
     #[test]
     fn test_exit_pool_fail_when_not_enough_token() {
         let mut pool = TransmuterPool {
-            pool_assets: vec![
+            pool_assets: Asset::unchecked_equal_assets_from_coins(&[
                 Coin::new(100_000, ETH_USDC),
                 Coin::new(100_000, COSMOS_USDC),
-            ],
+            ]),
         };
 
         let err = pool.exit_pool(&[Coin::new(100_001, ETH_USDC)]).unwrap_err();

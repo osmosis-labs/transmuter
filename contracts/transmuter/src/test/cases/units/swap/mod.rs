@@ -7,10 +7,13 @@ use osmosis_std::types::osmosis::poolmanager::v1beta1::{
 
 use osmosis_test_tube::{Account, Bank, Module, OsmosisTestApp};
 
+use crate::asset::{convert_amount, AssetConfig, Rounding};
 use crate::contract::{
-    ExecMsg, GetShareDenomResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse, QueryMsg,
+    ExecMsg, GetShareDenomResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse,
+    ListAssetConfigsResponse, QueryMsg,
 };
 
+use crate::math::lcm_from_iter;
 use crate::test::modules::cosmwasm_pool::CosmwasmPool;
 use crate::test::test_env::{assert_contract_err, TestEnv, TestEnvBuilder};
 use crate::ContractError;
@@ -67,7 +70,7 @@ pub enum SwapMsg {
     },
 }
 
-fn assert_invariants(t: TestEnv, act: impl FnOnce(&TestEnv)) {
+fn assert_invariants(t: TestEnv, act: impl FnOnce(&TestEnv) -> String) {
     // store previous shares and pool assets
     let prev_shares = t
         .contract
@@ -80,13 +83,16 @@ fn assert_invariants(t: TestEnv, act: impl FnOnce(&TestEnv)) {
         .unwrap()
         .total_pool_liquidity;
 
-    let sum_prev_pool_asset_amount = prev_pool_assets
-        .iter()
-        .map(|c| c.amount)
-        .fold(Uint128::zero(), |acc, x| acc + x);
+    let asset_configs = t
+        .contract
+        .query::<ListAssetConfigsResponse>(&QueryMsg::ListAssetConfigs {})
+        .unwrap()
+        .asset_configs;
+
+    let sum_prev_pool_asset_value = total_pool_asset_value(&asset_configs, &prev_pool_assets);
 
     // run the action
-    act(&t);
+    let rounding_denom = act(&t);
 
     // assert that shares stays the same
     let update_shares = t
@@ -96,18 +102,60 @@ fn assert_invariants(t: TestEnv, act: impl FnOnce(&TestEnv)) {
         .total_shares;
     assert_eq!(prev_shares, update_shares);
 
-    // assert that sum of pool assets stays the same
+    // assert that sum of pool assets value stays the same or increase due to rounding
     let updated_pool_assets = t
         .contract
         .query::<GetTotalPoolLiquidityResponse>(&QueryMsg::GetTotalPoolLiquidity {})
         .unwrap()
         .total_pool_liquidity;
-    let sum_updated_pool_asset_amount = updated_pool_assets
-        .iter()
-        .map(|c| c.amount)
-        .fold(Uint128::zero(), |acc, x| acc + x);
+    let sum_updated_pool_asset_value = total_pool_asset_value(&asset_configs, &updated_pool_assets);
 
-    assert_eq!(sum_prev_pool_asset_amount, sum_updated_pool_asset_amount);
+    // in case of rounding up token_in or rounding down token out
+
+    if sum_updated_pool_asset_value > sum_prev_pool_asset_value {
+        let normalization_factor = asset_configs
+            .iter()
+            .find(|ac| ac.denom == rounding_denom)
+            .unwrap()
+            .normalization_factor;
+
+        let prev_pool_value_with_rounding_bound = sum_prev_pool_asset_value
+            + convert_amount(
+                Uint128::one(),
+                normalization_factor,
+                lcm_normalization_factor(&asset_configs),
+                &Rounding::Down,
+            )
+            .unwrap();
+        assert!(sum_updated_pool_asset_value < prev_pool_value_with_rounding_bound);
+    } else {
+        assert_eq!(sum_prev_pool_asset_value, sum_updated_pool_asset_value);
+    }
+}
+
+fn total_pool_asset_value(asset_configs: &[AssetConfig], pool_assets: &[Coin]) -> Uint128 {
+    pool_assets
+        .iter()
+        .map(|c| {
+            let normalization_factor = asset_configs
+                .iter()
+                .find(|ac| ac.denom == c.denom)
+                .unwrap()
+                .normalization_factor;
+            convert_amount(
+                c.amount,
+                normalization_factor,
+                lcm_normalization_factor(asset_configs),
+                &Rounding::Down,
+            )
+            .unwrap()
+        })
+        .fold(Uint128::zero(), |acc, x| acc + x)
+}
+
+fn lcm_normalization_factor(configs: &[AssetConfig]) -> Uint128 {
+    let norm_factors = configs.iter().map(|c| c.normalization_factor);
+    lcm_from_iter(norm_factors).unwrap()
 }
 
 fn test_swap_success_case(t: TestEnv, msg: SwapMsg, received: Coin) {
@@ -125,7 +173,7 @@ fn test_swap_success_case(t: TestEnv, msg: SwapMsg, received: Coin) {
             .unwrap();
 
         // swap
-        match msg {
+        let rounding_denom = match msg {
             SwapMsg::SwapExactAmountIn {
                 token_in,
                 token_out_denom,
@@ -136,7 +184,7 @@ fn test_swap_success_case(t: TestEnv, msg: SwapMsg, received: Coin) {
                         sender: t.accounts[SWAPPER].address(),
                         routes: vec![SwapAmountInRoute {
                             pool_id: 1,
-                            token_out_denom,
+                            token_out_denom: token_out_denom.clone(),
                         }],
                         token_in: Some(token_in.into()),
                         token_out_min_amount: token_out_min_amount.to_string(),
@@ -144,6 +192,8 @@ fn test_swap_success_case(t: TestEnv, msg: SwapMsg, received: Coin) {
                     &t.accounts[SWAPPER],
                 )
                 .unwrap();
+
+                token_out_denom
             }
             SwapMsg::SwapExactAmountOut {
                 token_in_denom,
@@ -155,7 +205,7 @@ fn test_swap_success_case(t: TestEnv, msg: SwapMsg, received: Coin) {
                         sender: t.accounts[SWAPPER].address(),
                         routes: vec![SwapAmountOutRoute {
                             pool_id: 1,
-                            token_in_denom,
+                            token_in_denom: token_in_denom.clone(),
                         }],
                         token_out: Some(token_out.into()),
                         token_in_max_amount: token_in_max_amount.to_string(),
@@ -163,6 +213,8 @@ fn test_swap_success_case(t: TestEnv, msg: SwapMsg, received: Coin) {
                     &t.accounts[SWAPPER],
                 )
                 .unwrap();
+
+                token_in_denom
             }
         };
 
@@ -181,12 +233,25 @@ fn test_swap_success_case(t: TestEnv, msg: SwapMsg, received: Coin) {
             updated_out_denom_balance.amount.parse::<u128>().unwrap()
                 - prev_out_denom_balance.amount.parse::<u128>().unwrap()
         );
+
+        rounding_denom
     });
 }
 
 pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin, received: Coin) {
     let cp = CosmwasmPool::new(t.app);
     let bank = Bank::new(t.app);
+
+    let asset_configs = t
+        .contract
+        .query::<ListAssetConfigsResponse>(&QueryMsg::ListAssetConfigs {})
+        .unwrap()
+        .asset_configs;
+
+    let asset_config_map = asset_configs
+        .iter()
+        .map(|ac| (ac.denom.clone(), ac.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
 
     let share_denom = t
         .contract
@@ -225,10 +290,7 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin,
         .unwrap()
         .total_pool_liquidity;
 
-    let sum_prev_pool_asset_amount = prev_pool_assets
-        .iter()
-        .map(|c| c.amount)
-        .fold(Uint128::zero(), |acc, x| acc + x);
+    let sum_prev_pool_asset_value = total_pool_asset_value(&asset_configs, &prev_pool_assets);
 
     // swap
     match msg {
@@ -277,10 +339,7 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin,
         .query::<GetTotalPoolLiquidityResponse>(&QueryMsg::GetTotalPoolLiquidity {})
         .unwrap()
         .total_pool_liquidity;
-    let sum_updated_pool_asset_amount = updated_pool_assets
-        .iter()
-        .map(|c| c.amount)
-        .fold(Uint128::zero(), |acc, x| acc + x);
+    let sum_updated_pool_asset_value = total_pool_asset_value(&asset_configs, &updated_pool_assets);
 
     // updated out denom balance
     let updated_out_denom_balance = bank
@@ -309,6 +368,11 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin,
         .total_shares
         .u128();
 
+    let received_factor = asset_config_map
+        .get(&received.denom)
+        .map(|c| c.normalization_factor)
+        .unwrap();
+
     // join pool equivalent
     if received.denom == share_denom {
         // -> minted new share tokens to swapper
@@ -318,21 +382,30 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin,
         );
 
         assert_eq!(
-            sum_updated_pool_asset_amount,
-            sum_prev_pool_asset_amount + received.amount
+            sum_updated_pool_asset_value,
+            sum_prev_pool_asset_value
+                + convert_amount(
+                    received.amount,
+                    received_factor,
+                    lcm_normalization_factor(&asset_configs),
+                    &Rounding::Down // Rounding shouldn't matter since the target is LCM
+                )
+                .unwrap()
         );
     } else {
-        // assume share denom is part of token in
-        // exit pool equivalent
-        // -> burned share tokens from swapper
-        assert_eq!(
-            updated_total_shares,
-            prev_total_shares - received.amount.u128()
-        );
+        // sent is alloyed denom, so we subtract the amount from total shares
+        assert_eq!(updated_total_shares, prev_total_shares - sent.amount.u128());
 
         assert_eq!(
-            sum_updated_pool_asset_amount,
-            sum_prev_pool_asset_amount - received.amount
+            sum_updated_pool_asset_value,
+            sum_prev_pool_asset_value
+                - convert_amount(
+                    received.amount,
+                    received_factor,
+                    lcm_normalization_factor(&asset_configs),
+                    &Rounding::Down // Rounding shouldn't matter since the target is LCM
+                )
+                .unwrap()
         );
     }
 
@@ -392,10 +465,21 @@ fn test_swap_failed_case(t: TestEnv, msg: SwapMsg, err: ContractError) {
         };
 
         assert_contract_err(err, actual_err);
+
+        match msg {
+            SwapMsg::SwapExactAmountIn {
+                token_out_denom, ..
+            } => token_out_denom,
+            SwapMsg::SwapExactAmountOut { token_in_denom, .. } => token_in_denom,
+        }
     });
 }
 
-fn pool_with_single_lp(app: &'_ OsmosisTestApp, pool_assets: Vec<Coin>) -> TestEnv<'_> {
+fn pool_with_single_lp(
+    app: &'_ OsmosisTestApp,
+    pool_assets: Vec<Coin>,
+    asset_configs: Vec<AssetConfig>,
+) -> TestEnv<'_> {
     let non_zero_pool_assets = pool_assets
         .clone()
         .into_iter()
@@ -409,12 +493,22 @@ fn pool_with_single_lp(app: &'_ OsmosisTestApp, pool_assets: Vec<Coin>) -> TestE
             non_zero_pool_assets
                 .iter()
                 .filter(|coin| !coin.amount.is_zero())
-                .map(|coin| Coin::new(100000000000000000000, coin.denom.clone()))
+                .map(|coin| Coin::new(10000000000000000000000000, coin.denom.clone()))
                 .collect(),
         )
         .with_instantiate_msg(crate::contract::InstantiateMsg {
-            pool_asset_denoms: pool_assets.iter().map(|c| c.denom.clone()).collect(),
+            pool_asset_configs: pool_assets
+                .iter()
+                .map(|c| {
+                    asset_configs
+                        .iter()
+                        .find(|ac| ac.denom == c.denom)
+                        .cloned()
+                        .unwrap_or_else(|| AssetConfig::from_denom_str(c.denom.as_str()))
+                })
+                .collect(),
             alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: None,
             moderator: None,
         })

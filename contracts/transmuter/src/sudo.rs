@@ -1,11 +1,11 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{
-    ensure, ensure_eq, to_binary, BankMsg, Coin, Decimal, DepsMut, Env, MessageInfo, Response,
-    Uint128,
-};
+use cosmwasm_std::{ensure, Coin, Decimal, DepsMut, Env, Response, Uint128};
 
 use crate::{
-    contract::{BurnAlloyedAssetFrom, Transmuter},
+    contract::Transmuter,
+    swap::{
+        BurnTarget, Entrypoint, SwapFromAlloyedConstraint, SwapToAlloyedConstraint, SwapVariant,
+    },
     ContractError,
 };
 
@@ -64,110 +64,47 @@ impl SudoMsg {
                     ContractError::ZeroValueOperation {}
                 );
 
-                let method = "swap_exact_amount_in";
+                transmuter.ensure_valid_swap_fee(swap_fee)?;
 
                 let (deps, env) = ctx;
                 let sender = deps.api.addr_validate(&sender)?;
 
-                let alloyed_denom = transmuter.alloyed_asset.get_alloyed_denom(deps.storage)?;
-                let token_out = Coin::new(token_in.amount.u128(), token_out_denom);
+                let swap_variant =
+                    transmuter.swap_variant(&token_in.denom, &token_out_denom, deps.as_ref())?;
 
-                // ensure token_out amount is greater than or equal to token_out_min_amount
-                ensure!(
-                    token_out.amount >= token_out_min_amount,
-                    ContractError::InsufficientTokenOut {
-                        required: token_out_min_amount,
-                        available: token_out.amount
-                    }
-                );
-
-                // if token in is share denom, swap alloyed asset for tokens
-                if token_in.denom == alloyed_denom {
-                    let swap_result = to_binary(&SwapExactAmountInResponseData {
-                        token_out_amount: token_out.amount,
-                    })?;
-
-                    return transmuter
-                        .swap_alloyed_asset_for_tokens(
-                            method,
-                            BurnAlloyedAssetFrom::SentFunds,
-                            (
-                                deps,
-                                env,
-                                MessageInfo {
-                                    sender,
-                                    funds: vec![token_in],
-                                },
-                            ),
-                            vec![token_out],
-                        )
-                        .map(|res| res.set_data(swap_result));
+                match swap_variant {
+                    SwapVariant::TokenToAlloyed => transmuter.swap_tokens_to_alloyed_asset(
+                        Entrypoint::Sudo,
+                        SwapToAlloyedConstraint::ExactIn {
+                            tokens_in: &[token_in],
+                            token_out_min_amount,
+                        },
+                        sender,
+                        deps,
+                        env,
+                    ),
+                    SwapVariant::AlloyedToToken => transmuter.swap_alloyed_asset_to_tokens(
+                        Entrypoint::Sudo,
+                        SwapFromAlloyedConstraint::ExactIn {
+                            token_in_amount: token_in.amount,
+                            token_out_denom: &token_out_denom,
+                            token_out_min_amount,
+                        },
+                        BurnTarget::SentFunds,
+                        sender,
+                        deps,
+                        env,
+                    ),
+                    SwapVariant::TokenToToken => transmuter.swap_non_alloyed_exact_amount_in(
+                        token_in,
+                        token_out_denom.as_str(),
+                        token_out_min_amount,
+                        sender,
+                        deps,
+                        env,
+                    ),
                 }
-
-                // if token out is share denom, swap token for shares
-                if token_out.denom == alloyed_denom {
-                    let swap_result = to_binary(&SwapExactAmountInResponseData {
-                        token_out_amount: token_out.amount,
-                    })?;
-
-                    return transmuter
-                        .swap_tokens_for_alloyed_asset(
-                            method,
-                            (
-                                deps,
-                                env,
-                                MessageInfo {
-                                    sender,
-                                    funds: vec![token_in],
-                                },
-                            ),
-                        )
-                        .map(|res| res.set_data(swap_result));
-                }
-
-                let (pool, actual_token_out) = transmuter.do_calc_out_amt_given_in(
-                    (deps.as_ref(), env.clone()),
-                    token_in,
-                    &token_out.denom,
-                    swap_fee,
-                )?;
-
-                // ensure that actual_token_out is equal to token_out
-                // this should never fail
-                ensure_eq!(
-                    token_out,
-                    actual_token_out,
-                    ContractError::InvalidTokenOutAmount {
-                        expected: token_out.amount,
-                        actual: actual_token_out.amount
-                    }
-                );
-
-                // check and update limiters only if pool assets are not zero
-                if let Some(denom_weight_pairs) = pool.weights()? {
-                    transmuter.limiters.check_limits_and_update(
-                        deps.storage,
-                        denom_weight_pairs,
-                        env.block.time,
-                    )?;
-                }
-
-                // save pool
-                transmuter.pool.save(deps.storage, &pool)?;
-
-                let send_token_out_to_sender_msg = BankMsg::Send {
-                    to_address: sender.to_string(),
-                    amount: vec![token_out.clone()],
-                };
-
-                let swap_result = SwapExactAmountInResponseData {
-                    token_out_amount: token_out.amount,
-                };
-
-                Ok(Response::new()
-                    .add_attribute("method", method)
-                    .add_message(send_token_out_to_sender_msg)
-                    .set_data(to_binary(&swap_result)?))
+                .map(|res| res.add_attribute("method", "swap_exact_amount_in"))
             }
             SudoMsg::SwapExactAmountOut {
                 sender,
@@ -182,137 +119,65 @@ impl SudoMsg {
                     ContractError::ZeroValueOperation {}
                 );
 
-                let method = "swap_exact_amount_out";
+                transmuter.ensure_valid_swap_fee(swap_fee)?;
+
                 let (deps, env) = ctx;
 
                 let sender = deps.api.addr_validate(&sender)?;
 
-                let alloyed_denom = transmuter.alloyed_asset.get_alloyed_denom(deps.storage)?;
+                let swap_variant =
+                    transmuter.swap_variant(&token_in_denom, &token_out.denom, deps.as_ref())?;
 
-                let token_in = Coin::new(token_out.amount.u128(), token_in_denom);
-
-                ensure!(
-                    token_in.amount <= token_in_max_amount,
-                    ContractError::ExcessiveRequiredTokenIn {
-                        limit: token_in_max_amount,
-                        required: token_in.amount,
-                    }
-                );
-
-                // if token in is share denom, swap shares for tokens
-                if token_in.denom == alloyed_denom {
-                    let swap_result = to_binary(&SwapExactAmountOutResponseData {
-                        token_in_amount: token_in.amount,
-                    })?;
-
-                    return transmuter
-                        .swap_alloyed_asset_for_tokens(
-                            method,
-                            BurnAlloyedAssetFrom::SentFunds,
-                            (
-                                deps,
-                                env,
-                                MessageInfo {
-                                    sender,
-                                    funds: vec![token_in],
-                                },
-                            ),
-                            vec![token_out],
-                        )
-                        .map(|res| res.set_data(swap_result));
+                match swap_variant {
+                    SwapVariant::TokenToAlloyed => transmuter.swap_tokens_to_alloyed_asset(
+                        Entrypoint::Sudo,
+                        SwapToAlloyedConstraint::ExactOut {
+                            token_in_denom: &token_in_denom,
+                            token_in_max_amount,
+                            token_out_amount: token_out.amount,
+                        },
+                        sender,
+                        deps,
+                        env,
+                    ),
+                    SwapVariant::AlloyedToToken => transmuter.swap_alloyed_asset_to_tokens(
+                        Entrypoint::Sudo,
+                        SwapFromAlloyedConstraint::ExactOut {
+                            tokens_out: &[token_out],
+                            token_in_max_amount,
+                        },
+                        BurnTarget::SentFunds,
+                        sender,
+                        deps,
+                        env,
+                    ),
+                    SwapVariant::TokenToToken => transmuter.swap_non_alloyed_exact_amount_out(
+                        token_in_denom.as_str(),
+                        token_in_max_amount,
+                        token_out,
+                        sender,
+                        deps,
+                        env,
+                    ),
                 }
-
-                // if token out is share denom, swap token for shares
-                if token_out.denom == alloyed_denom {
-                    let swap_result = to_binary(&SwapExactAmountOutResponseData {
-                        token_in_amount: token_in.amount,
-                    })?;
-
-                    return transmuter
-                        .swap_tokens_for_alloyed_asset(
-                            method,
-                            (
-                                deps,
-                                env,
-                                MessageInfo {
-                                    sender,
-                                    funds: vec![token_in],
-                                },
-                            ),
-                        )
-                        .map(|res| res.set_data(swap_result));
-                }
-
-                let (pool, actual_token_in) = transmuter.do_calc_in_amt_given_out(
-                    (deps.as_ref(), env.clone()),
-                    token_out.clone(),
-                    token_in.denom.clone(),
-                    swap_fee,
-                )?;
-
-                // ensure that actual_token_in is equal to token_in
-                // this should never fail
-                ensure_eq!(
-                    token_in,
-                    actual_token_in,
-                    ContractError::InvalidTokenInAmount {
-                        expected: token_in.amount,
-                        actual: actual_token_in.amount
-                    }
-                );
-
-                // check and update limiters only if pool assets are not zero
-                if let Some(denom_weight_pairs) = pool.weights()? {
-                    transmuter.limiters.check_limits_and_update(
-                        deps.storage,
-                        denom_weight_pairs,
-                        env.block.time,
-                    )?;
-                }
-
-                // save pool
-                transmuter.pool.save(deps.storage, &pool)?;
-
-                let send_token_out_to_sender_msg = BankMsg::Send {
-                    to_address: sender.to_string(),
-                    amount: vec![token_out],
-                };
-
-                let swap_result = SwapExactAmountOutResponseData {
-                    token_in_amount: actual_token_in.amount,
-                };
-
-                Ok(Response::new()
-                    .add_attribute("method", "swap_exact_amount_out")
-                    .add_message(send_token_out_to_sender_msg)
-                    .set_data(to_binary(&swap_result)?))
+                .map(|res| res.add_attribute("method", "swap_exact_amount_out"))
             }
         }
     }
-}
-
-#[cw_serde]
-/// Fixing token in amount makes token amount out varies
-pub struct SwapExactAmountInResponseData {
-    pub token_out_amount: Uint128,
-}
-
-#[cw_serde]
-/// Fixing token out amount makes token amount in varies
-pub struct SwapExactAmountOutResponseData {
-    pub token_in_amount: Uint128,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
+        asset::AssetConfig,
         contract::{ContractExecMsg, ExecMsg, InstantiateMsg},
         execute, instantiate, reply, sudo,
+        swap::{SwapExactAmountInResponseData, SwapExactAmountOutResponseData},
     };
     use cosmwasm_std::{
         testing::{mock_dependencies, mock_env, mock_info},
-        to_binary, Reply, SubMsgResponse, SubMsgResult,
+        to_binary, BankMsg, Reply, SubMsgResponse, SubMsgResult,
     };
     use osmosis_std::types::osmosis::tokenfactory::v1beta1::{
         MsgBurn, MsgCreateDenomResponse, MsgMint,
@@ -331,8 +196,12 @@ mod tests {
         let admin = "admin";
         let user = "user";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["axlusdc".to_string(), "whusdc".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("axlusdc"),
+                AssetConfig::from_denom_str("whusdc"),
+            ],
             alloyed_asset_subdenom: "uusdc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.to_string()),
             moderator: None,
         };
@@ -488,8 +357,8 @@ mod tests {
         assert_eq!(
             res,
             Err(ContractError::InsufficientTokenOut {
-                required: Uint128::from(1000u128),
-                available: Uint128::from(500u128)
+                min_required: Uint128::from(1000u128),
+                amount_out: Uint128::from(500u128)
             })
         );
 
@@ -507,8 +376,8 @@ mod tests {
         assert_eq!(
             res,
             Err(ContractError::InsufficientTokenOut {
-                required: Uint128::from(1000u128),
-                available: Uint128::from(500u128)
+                min_required: Uint128::from(1000u128),
+                amount_out: Uint128::from(500u128)
             })
         );
 
@@ -526,8 +395,8 @@ mod tests {
         assert_eq!(
             res,
             Err(ContractError::InsufficientTokenOut {
-                required: Uint128::from(1000u128),
-                available: Uint128::from(500u128)
+                min_required: Uint128::from(1000u128),
+                amount_out: Uint128::from(500u128)
             })
         );
     }
@@ -545,8 +414,12 @@ mod tests {
         let admin = "admin";
         let user = "user";
         let init_msg = InstantiateMsg {
-            pool_asset_denoms: vec!["axlusdc".to_string(), "whusdc".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("axlusdc"),
+                AssetConfig::from_denom_str("whusdc"),
+            ],
             alloyed_asset_subdenom: "uusdc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.to_string()),
             moderator: None,
         };

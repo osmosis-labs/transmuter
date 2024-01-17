@@ -1,11 +1,13 @@
 mod alloyed_asset;
+mod asset;
 pub mod contract;
-mod denom;
 mod error;
 mod limiter;
+mod math;
 mod migrations;
 mod role;
 mod sudo;
+mod swap;
 mod transmuter_pool;
 pub use crate::error::ContractError;
 

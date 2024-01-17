@@ -11,13 +11,16 @@ impl TransmuterPool {
             if let Some(pool_asset) = self
                 .pool_assets
                 .iter_mut()
-                .find(|pool_asset| pool_asset.denom == token_in.denom)
+                .find(|pool_asset| pool_asset.denom() == token_in.denom)
             {
                 // add token_in amount to pool_asset
-                pool_asset.amount = pool_asset
-                    .amount
-                    .checked_add(token_in.amount)
-                    .map_err(StdError::overflow)?;
+                pool_asset.update_amount(|amount| {
+                    amount
+                        .checked_add(token_in.amount)
+                        .map_err(StdError::overflow)
+                        .map_err(ContractError::Std)
+                })?;
+
                 Ok(())
             } else {
                 // else return InvalidJoinPoolDenom
@@ -26,7 +29,7 @@ impl TransmuterPool {
                     expected_denom: self
                         .pool_assets
                         .iter()
-                        .map(|pool_asset| pool_asset.denom.clone())
+                        .map(|pool_asset| pool_asset.denom().to_string())
                         .collect(),
                 })
             }
@@ -38,7 +41,7 @@ impl TransmuterPool {
 mod tests {
     use cosmwasm_std::{OverflowError, OverflowOperation};
 
-    use crate::denom::Denom;
+    use crate::asset::Asset;
 
     use super::*;
     const ETH_USDC: &str = "ibc/AXLETHUSDC";
@@ -47,21 +50,26 @@ mod tests {
     #[test]
     fn test_join_pool_increasingly() {
         let mut pool =
-            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)])
-                .unwrap();
+            TransmuterPool::new(Asset::unchecked_equal_assets(&[ETH_USDC, COSMOS_USDC])).unwrap();
 
         // join pool
         pool.join_pool(&[Coin::new(1000, COSMOS_USDC)]).unwrap();
         assert_eq!(
             pool.pool_assets,
-            vec![Coin::new(0, ETH_USDC), Coin::new(1000, COSMOS_USDC)]
+            Asset::unchecked_equal_assets_from_coins(&[
+                Coin::new(0, ETH_USDC),
+                Coin::new(1000, COSMOS_USDC)
+            ])
         );
 
         // join pool when not empty
         pool.join_pool(&[Coin::new(20000, COSMOS_USDC)]).unwrap();
         assert_eq!(
             pool.pool_assets,
-            vec![Coin::new(0, ETH_USDC), Coin::new(21000, COSMOS_USDC)]
+            Asset::unchecked_equal_assets_from_coins(&[
+                Coin::new(0, ETH_USDC),
+                Coin::new(21000, COSMOS_USDC)
+            ])
         );
 
         // join pool multiple tokens at once
@@ -69,15 +77,17 @@ mod tests {
             .unwrap();
         assert_eq!(
             pool.pool_assets,
-            vec![Coin::new(1000, ETH_USDC), Coin::new(22000, COSMOS_USDC)]
+            Asset::unchecked_equal_assets_from_coins(&[
+                Coin::new(1000, ETH_USDC),
+                Coin::new(22000, COSMOS_USDC)
+            ])
         );
     }
 
     #[test]
     fn test_join_pool_error_with_wrong_denom() {
         let mut pool =
-            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)])
-                .unwrap();
+            TransmuterPool::new(Asset::unchecked_equal_assets(&[ETH_USDC, COSMOS_USDC])).unwrap();
 
         assert_eq!(
             pool.join_pool(&[Coin::new(1000, "urandom")]).unwrap_err(),
@@ -102,8 +112,7 @@ mod tests {
     #[test]
     fn test_join_pool_error_with_overflow() {
         let mut pool =
-            TransmuterPool::new(&[Denom::unchecked(ETH_USDC), Denom::unchecked(COSMOS_USDC)])
-                .unwrap();
+            TransmuterPool::new(Asset::unchecked_equal_assets(&[ETH_USDC, COSMOS_USDC])).unwrap();
 
         assert_eq!(
             {

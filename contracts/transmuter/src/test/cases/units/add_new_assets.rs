@@ -1,7 +1,8 @@
-use cosmwasm_std::Coin;
+use cosmwasm_std::{Coin, Uint128};
 use osmosis_test_tube::OsmosisTestApp;
 
 use crate::{
+    asset::AssetConfig,
     contract::{GetShareDenomResponse, GetTotalPoolLiquidityResponse, InstantiateMsg},
     test::test_env::{assert_contract_err, TestEnvBuilder},
     ContractError,
@@ -24,9 +25,13 @@ fn test_add_new_assets() {
         .with_account("admin", vec![])
         .with_account("non_admin", vec![])
         .with_instantiate_msg(InstantiateMsg {
-            pool_asset_denoms: vec!["denom1".to_string(), "denom2".to_string()],
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("denom1"),
+                AssetConfig::from_denom_str("denom2"),
+            ],
             admin: None, // override by admin account set above
             alloyed_asset_subdenom: "denomx".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
             moderator: None,
         })
         .build(&app);
@@ -38,7 +43,10 @@ fn test_add_new_assets() {
         .contract
         .execute(
             &crate::contract::ExecMsg::AddNewAssets {
-                denoms: denoms.clone(),
+                asset_configs: denoms
+                    .iter()
+                    .map(|denom| AssetConfig::from_denom_str(denom.as_str()))
+                    .collect(),
             },
             &[],
             &t.accounts["non_admin"],
@@ -49,7 +57,12 @@ fn test_add_new_assets() {
 
     t.contract
         .execute(
-            &crate::contract::ExecMsg::AddNewAssets { denoms },
+            &crate::contract::ExecMsg::AddNewAssets {
+                asset_configs: denoms
+                    .iter()
+                    .map(|denom| AssetConfig::from_denom_str(denom.as_str()))
+                    .collect(),
+            },
             &[],
             &t.accounts["admin"],
         )
@@ -86,7 +99,7 @@ fn test_add_new_assets() {
         .contract
         .execute(
             &crate::contract::ExecMsg::AddNewAssets {
-                denoms: vec![alloyed_denom.clone()],
+                asset_configs: vec![AssetConfig::from_denom_str(alloyed_denom.as_str())],
             },
             &[],
             &t.accounts["admin"],

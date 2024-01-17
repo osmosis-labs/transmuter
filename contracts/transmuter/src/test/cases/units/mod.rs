@@ -6,3 +6,5 @@ mod swap;
 mod create_pool;
 
 mod add_new_assets;
+
+mod migrate;

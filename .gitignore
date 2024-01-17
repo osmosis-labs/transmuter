@@ -17,3 +17,8 @@ artifacts/
 **/state.local.json
 
 tarpaulin-report.html
+
+.idea
+
+mutants.out
+mutants.out.old
