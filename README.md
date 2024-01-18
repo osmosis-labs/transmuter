@@ -2,7 +2,7 @@
 
 ![CI](https://github.com/osmosis-labs/transmuter/actions/workflows/rust.yml/badge.svg)
 
-A CosmWasm contract for 1:1 swapping between multiple tokens with no fees.
+A CosmWasm contract for X:Y swapping between multiple tokens with no fees.
 
 ## Stored Codes
 
@@ -17,7 +17,7 @@ A CosmWasm contract for 1:1 swapping between multiple tokens with no fees.
 
 `transmuter` is designed to be used as a [`cosmwasmpool`](https://github.com/osmosis-labs/osmosis/tree/main/x/cosmwasmpool) module. This module enables users to create pools of CosmWasm contracts for token swapping.
 
-In `v2` of `transmuter`, since it involves a 1:1 swap between multiple tokens, all tokens have the same value, including the share token. Therefore, joining or exiting the pool can also be seen as swapping between the pool token and the share token. Hence, in `v2`, the share token is treated as a swappable asset and can be exchanged with other tokens using [`poolmanager`'s msgs](https://github.com/osmosis-labs/osmosis/tree/main/x/poolmanager#swaps). In `v2`, the share token is also referred to as the [Alloyed Asset](#alloyed-assets).
+In `v2` of `transmuter`, since it involves a X:Y swap between multiple tokens, all tokens have the same value, including the share token. Therefore, joining or exiting the pool can also be seen as swapping between the pool token and the share token. Hence, in `v2`, the share token is treated as a swappable asset and can be exchanged with other tokens using [`poolmanager`'s msgs](https://github.com/osmosis-labs/osmosis/tree/main/x/poolmanager#swaps). In `v2`, the share token is also referred to as the [Alloyed Asset](#alloyed-assets).
 
 Since the contract is designed to be used as a `cosmwasmpool`, the code needs to be upload through [`UploadCosmWasmPoolCodeAndWhiteListProposal`](https://github.com/osmosis-labs/osmosis/blob/b94dbe643ff37d93a639f49ee9b81208dbc3ba8c/proto/osmosis/cosmwasmpool/v1beta1/gov.proto#L8-L21) or [`MigratePoolContractsProposal`](https://github.com/osmosis-labs/osmosis/blob/b94dbe643ff37d93a639f49ee9b81208dbc3ba8c/proto/osmosis/cosmwasmpool/v1beta1/gov.proto#L23-L74) in case of migration instead of the usual `StoreCodeProposal`.
 
@@ -64,11 +64,22 @@ To crate a pool, it requires sending [`MsgCreateCosmWasmPool`](https://github.co
 
 ```rs
 {
-    "pool_asset_denoms": ["ibc/...", "ibc/..."],
+    "pool_asset_configs": [
+      { "denom": "ibc/a..", "normalization_factor": "1000000" },
+      { "denom": "ibc/b..", "normalization_factor": "1" }
+    ],
     "alloyed_asset_subdenom": "alloyed",
-    "admin": "osmo1...",
+    "alloyed_asset_normalization_factor": "1",
+    "admin": "osmo1a..",
+    "moderator": "osmo1b.."
 }
 ```
+
+pool_asset_configs: Vec<AssetConfig>,
+alloyed_asset_subdenom: String,
+alloyed_asset_normalization_factor: Uint128,
+admin: Option<String>,
+moderator: Option<String>,
 
 - `pool_asset_denoms` - list of denoms that will be used as pool assets
 - `alloyed_asset_subdenom` - subdenom of the alloyed asset, the resulted denom will be `factory/{contract_address}/{alloyed_asset_subdenom}`
