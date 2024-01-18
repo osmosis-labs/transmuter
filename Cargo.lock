@@ -2319,7 +2319,7 @@ dependencies = [
 
 [[package]]
 name = "transmuter"
-version = "2.1.0"
+version = "3.0.0"
 dependencies = [
  "cosmwasm-schema",
  "cosmwasm-std",

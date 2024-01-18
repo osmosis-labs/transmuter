@@ -96,9 +96,9 @@ mod entry_points {
     pub fn migrate(
         deps: DepsMut,
         _env: Env,
-        msg: migrations::v2_1_0::MigrateMsg,
+        msg: migrations::v3_0_0::MigrateMsg,
     ) -> Result<Response, ContractError> {
-        migrations::v2_1_0::execute_migration(deps, msg)
+        migrations::v3_0_0::execute_migration(deps, msg)
     }
 }
 

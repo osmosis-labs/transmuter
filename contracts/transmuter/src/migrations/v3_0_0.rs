@@ -14,7 +14,7 @@ use crate::{
 };
 
 const FROM_VERSION: &str = "2.0.0";
-const TO_VERSION: &str = "2.1.0";
+const TO_VERSION: &str = "3.0.0";
 
 #[derive(Error, Debug, PartialEq)]
 pub enum MigrationError {
@@ -61,7 +61,7 @@ pub fn execute_migration(deps: DepsMut, msg: MigrateMsg) -> Result<Response, Con
     cw2::set_contract_version(deps.storage, CONTRACT_NAME, TO_VERSION)?;
 
     // Return a response with an attribute indicating the method that was executed
-    Ok(Response::new().add_attribute("method", "v2_1_0/execute_migraiton"))
+    Ok(Response::new().add_attribute("method", "v3_0_0/execute_migraiton"))
 }
 
 fn add_normalization_factor_to_pool_assets(
@@ -204,7 +204,7 @@ mod tests {
 
         assert_eq!(
             res,
-            Response::new().add_attribute("method", "v2_1_0/execute_migraiton")
+            Response::new().add_attribute("method", "v3_0_0/execute_migraiton")
         );
 
         let TransmuterPool { pool_assets } = Item::new("pool").load(&deps.storage).unwrap();

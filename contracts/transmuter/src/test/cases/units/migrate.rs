@@ -80,7 +80,7 @@ fn test_migrate_v2_to_v2_1() {
     let t = TransmuterContract::new(&app, code_id, pool_id, contract_address.clone());
 
     // --- migrate pool ---
-    let migrate_msg = crate::migrations::v2_1_0::MigrateMsg {
+    let migrate_msg = crate::migrations::v3_0_0::MigrateMsg {
         asset_configs: vec![
             AssetConfig {
                 denom: "denom1".to_string(),
