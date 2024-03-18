@@ -69,7 +69,7 @@ fn add_normalization_factor_to_pool_assets(
     storage: &mut dyn Storage,
 ) -> Result<(), ContractError> {
     let pool_v2: Item<'_, TransmuterPoolV2> = Item::new(key::POOL);
-    let pool_v2_1: Item<'_, TransmuterPool> = Item::new(key::POOL);
+    let pool_v3: Item<'_, TransmuterPool> = Item::new(key::POOL);
 
     // transform pool assets from Coin -> Asset (adding normalization factor)
     let asset_norm_factors = asset_configs
@@ -106,7 +106,13 @@ fn add_normalization_factor_to_pool_assets(
             Ok(())
         })?;
 
-    pool_v2_1.save(storage, &TransmuterPool { pool_assets })?;
+    pool_v3.save(
+        storage,
+        &TransmuterPool {
+            pool_assets,
+            removed_assets: vec![],
+        },
+    )?;
     Ok(())
 }
 
@@ -207,7 +213,10 @@ mod tests {
             Response::new().add_attribute("method", "v3_0_0/execute_migraiton")
         );
 
-        let TransmuterPool { pool_assets } = Item::new("pool").load(&deps.storage).unwrap();
+        let TransmuterPool {
+            pool_assets,
+            removed_assets,
+        } = Item::new("pool").load(&deps.storage).unwrap();
 
         assert_eq!(
             pool_assets,
@@ -216,6 +225,8 @@ mod tests {
                 Asset::new(20000u128, "denom2", 10000u128)
             ]
         );
+
+        assert_eq!(removed_assets, vec![]);
 
         let alloyed_asset_normalization_factor =
             Item::<'_, Uint128>::new(key::ALLOYED_ASSET_NORMALIZATION_FACTOR)

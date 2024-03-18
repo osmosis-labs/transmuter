@@ -53,6 +53,7 @@ mod tests {
                 Coin::new(100_000, ETH_USDC),
                 Coin::new(100_000, COSMOS_USDC),
             ]),
+            removed_assets: vec![],
         };
 
         // exit pool with first token
@@ -63,7 +64,8 @@ mod tests {
                 pool_assets: Asset::unchecked_equal_assets_from_coins(&[
                     Coin::new(90_000, ETH_USDC),
                     Coin::new(100_000, COSMOS_USDC),
-                ])
+                ]),
+                removed_assets: vec![]
             }
         );
 
@@ -75,7 +77,8 @@ mod tests {
                 pool_assets: Asset::unchecked_equal_assets_from_coins(&[
                     Coin::new(90_000, ETH_USDC),
                     Coin::new(90_000, COSMOS_USDC),
-                ])
+                ]),
+                removed_assets: vec![]
             }
         );
 
@@ -88,7 +91,8 @@ mod tests {
                 pool_assets: Asset::unchecked_equal_assets_from_coins(&[
                     Coin::new(0, ETH_USDC),
                     Coin::new(0, COSMOS_USDC),
-                ])
+                ]),
+                removed_assets: vec![]
             }
         );
     }
@@ -100,6 +104,7 @@ mod tests {
                 Coin::new(100_000, ETH_USDC),
                 Coin::new(100_000, COSMOS_USDC),
             ]),
+            removed_assets: vec![],
         };
 
         // exit pool with invalid token
@@ -130,6 +135,7 @@ mod tests {
                 Coin::new(100_000, ETH_USDC),
                 Coin::new(100_000, COSMOS_USDC),
             ]),
+            removed_assets: vec![],
         };
 
         let err = pool.exit_pool(&[Coin::new(100_001, ETH_USDC)]).unwrap_err();

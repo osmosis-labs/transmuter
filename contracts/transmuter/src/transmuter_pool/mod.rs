@@ -25,12 +25,19 @@ const MAX_POOL_ASSET_DENOMS: Uint64 = Uint64::new(20u64);
 
 #[cw_serde]
 pub struct TransmuterPool {
+    /// Functioning assets in the pool. These assets can be used for all aviailable operations.
     pub pool_assets: Vec<Asset>,
+
+    /// Assets that are marked as removed. These assets can only be withdrawn.
+    pub removed_assets: Vec<Asset>,
 }
 
 impl TransmuterPool {
     pub fn new(pool_assets: Vec<Asset>) -> Result<Self, ContractError> {
-        let pool = Self { pool_assets };
+        let pool = Self {
+            pool_assets,
+            removed_assets: vec![],
+        };
 
         pool.ensure_no_duplicated_denom()?;
         pool.ensure_pool_asset_count_within_range()?;
@@ -111,7 +118,10 @@ impl TransmuterPool {
             })
             .collect::<Result<Vec<_>, ContractError>>()?;
 
-        Ok(Self { pool_assets })
+        Ok(Self {
+            pool_assets,
+            ..self
+        })
     }
 }
 
@@ -138,6 +148,7 @@ mod tests {
             TransmuterPool::new(Asset::unchecked_equal_assets(&["a", "b"])).unwrap(),
             TransmuterPool {
                 pool_assets: Asset::unchecked_equal_assets(&["a", "b"]),
+                removed_assets: vec![]
             }
         );
 
@@ -148,7 +159,8 @@ mod tests {
         assert_eq!(
             TransmuterPool::new(assets.clone()).unwrap(),
             TransmuterPool {
-                pool_assets: assets
+                pool_assets: assets,
+                removed_assets: vec![]
             }
         );
 
