@@ -217,7 +217,7 @@ impl Transmuter<'_> {
 
         // staled divisions in change limiters has become invalid after
         // new assets are added to the pool
-        // so reset change limiter states
+        // so we reset change limiter states
         self.limiters.reset_change_limiter_states(deps.storage)?;
 
         Ok(Response::new().add_attribute("method", "add_new_assets"))
@@ -239,6 +239,16 @@ impl Transmuter<'_> {
                 pool.remove_assets(&denoms)?;
                 Ok(pool)
             })?;
+
+        // remove all limiters for the removing assets
+        for denom in denoms {
+            self.limiters
+                .uncheck_deregister_all_for_denom(deps.storage, &denom)?;
+        }
+
+        // staled divisions in change limiters has become invalid after
+        // assets get removed, so we reset change limiter states
+        self.limiters.reset_change_limiter_states(deps.storage)?;
 
         Ok(Response::new().add_attribute("method", "remove_assets"))
     }
@@ -1037,6 +1047,19 @@ mod tests {
         )
         .unwrap();
 
+        // set limiters
+        let change_limiter_params = LimiterParams::ChangeLimiter {
+            window_config: WindowConfig {
+                window_size: Uint64::from(3600u64),
+                division_count: Uint64::from(10u64),
+            },
+            boundary_offset: Decimal::percent(10),
+        };
+
+        let static_limiter_params = LimiterParams::StaticLimiter {
+            upper_limit: Decimal::percent(10),
+        };
+
         // remove assets
 
         // Remove by non admin
@@ -1085,9 +1108,41 @@ mod tests {
 
         execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
 
+        // set limiters
+        for denom in vec!["wbtc", "tbtc", "nbtc", "stbtc"] {
+            let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+                denom: denom.to_string(),
+                label: "change_limiter".to_string(),
+                limiter_params: change_limiter_params.clone(),
+            });
+
+            let info = mock_info(admin, &[]);
+            execute(
+                deps.as_mut(),
+                env.clone(),
+                info.clone(),
+                register_limiter_msg,
+            )
+            .unwrap();
+
+            let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+                denom: denom.to_string(),
+                label: "static_limiter".to_string(),
+                limiter_params: static_limiter_params.clone(),
+            });
+            execute(
+                deps.as_mut(),
+                env.clone(),
+                info.clone(),
+                register_limiter_msg,
+            )
+            .unwrap();
+        }
+
         // Remove assets with admin
+        let removing_denoms = vec!["wbtc".to_string(), "tbtc".to_string()];
         let remove_assets_msg = ContractExecMsg::Transmuter(ExecMsg::RemoveAssets {
-            denoms: vec!["wbtc".to_string(), "tbtc".to_string()],
+            denoms: removing_denoms.clone(),
         });
 
         let info = mock_info(admin, &liquidity);
@@ -1113,6 +1168,18 @@ mod tests {
                 Coin::new(1_000_000_000_000, "stbtc"),
             ]
         );
+
+        // check if removed denoms limiters are removed
+        let list_limiters_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
+        let res = query(deps.as_ref(), env.clone(), list_limiters_msg).unwrap();
+        let ListLimitersResponse { limiters } = from_binary(&res).unwrap();
+
+        let removed_denom_limiters = limiters
+            .into_iter()
+            .filter(|((denom, _), _)| removing_denoms.contains(denom))
+            .collect::<Vec<_>>();
+
+        assert_eq!(removed_denom_limiters, vec![]);
     }
 
     #[test]

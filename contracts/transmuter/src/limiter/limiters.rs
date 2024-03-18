@@ -360,6 +360,22 @@ impl<'a> Limiters<'a> {
             .map_err(Into::into)
     }
 
+    /// Deregsiter all limiters for the denom without checking if it will be empty.
+    /// This is useful when the asset is being removed, so that limiters for the asset are no longer needed.
+    pub fn uncheck_deregister_all_for_denom(
+        &self,
+        storage: &mut dyn Storage,
+        denom: &str,
+    ) -> Result<(), ContractError> {
+        let limiters = self.list_limiters_by_denom(storage, denom)?;
+
+        for (label, _) in limiters {
+            self.limiters.remove(storage, (denom, &label));
+        }
+
+        Ok(())
+    }
+
     pub fn deregister(
         &self,
         storage: &mut dyn Storage,
