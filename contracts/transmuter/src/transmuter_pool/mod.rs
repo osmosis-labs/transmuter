@@ -2,6 +2,7 @@ mod add_new_assets;
 mod exit_pool;
 mod has_denom;
 mod join_pool;
+mod remove_assets;
 mod transmute;
 mod weight;
 

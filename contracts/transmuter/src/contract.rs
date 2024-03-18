@@ -224,6 +224,26 @@ impl Transmuter<'_> {
     }
 
     #[msg(exec)]
+    fn remove_assets(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        denoms: Vec<String>,
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+
+        // only admin can remove assets
+        ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
+
+        self.pool
+            .update(deps.storage, |mut pool| -> Result<_, ContractError> {
+                pool.remove_assets(&denoms)?;
+                Ok(pool)
+            })?;
+
+        Ok(Response::new().add_attribute("method", "remove_assets"))
+    }
+
+    #[msg(exec)]
     fn register_limiter(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
@@ -958,6 +978,137 @@ mod tests {
                 Coin::new(0, "uion"),
                 Coin::new(0, "new_asset1"),
                 Coin::new(0, "new_asset2"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_remove_assets() {
+        let mut deps = mock_dependencies();
+
+        // make denom has non-zero total supply
+        deps.querier.update_balance(
+            "someone",
+            vec![
+                Coin::new(1, "wbtc"),
+                Coin::new(1, "tbtc"),
+                Coin::new(1, "nbtc"),
+                Coin::new(1, "stbtc"),
+            ],
+        );
+
+        let admin = "admin";
+        let alloyed_denom = "btc";
+        let init_msg = InstantiateMsg {
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("wbtc"),
+                AssetConfig::from_denom_str("tbtc"),
+                AssetConfig::from_denom_str("nbtc"),
+                AssetConfig::from_denom_str("stbtc"),
+            ],
+            alloyed_asset_subdenom: alloyed_denom.to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
+            admin: Some(admin.to_string()),
+            moderator: None,
+        };
+        let env = mock_env();
+
+        // Instantiate the contract.
+        let info = mock_info(admin, &[]);
+        instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap();
+
+        // Manually reply
+
+        reply(
+            deps.as_mut(),
+            env.clone(),
+            Reply {
+                id: 1,
+                result: SubMsgResult::Ok(SubMsgResponse {
+                    events: vec![],
+                    data: Some(
+                        MsgCreateDenomResponse {
+                            new_token_denom: alloyed_denom.to_string(),
+                        }
+                        .into(),
+                    ),
+                }),
+            },
+        )
+        .unwrap();
+
+        // remove assets
+
+        // Remove by non admin
+        let info = mock_info("someone", &[]);
+        let remove_assets_msg = ContractExecMsg::Transmuter(ExecMsg::RemoveAssets {
+            denoms: vec!["wbtc".to_string(), "tbtc".to_string()],
+        });
+
+        let res = execute(deps.as_mut(), env.clone(), info.clone(), remove_assets_msg);
+
+        // Check if the attempt resulted in DenomHasNoSupply error
+        assert_eq!(res.unwrap_err(), ContractError::Unauthorized {});
+
+        // The asset must not yet be removed
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetTotalPoolLiquidity {}),
+        )
+        .unwrap();
+        let GetTotalPoolLiquidityResponse {
+            total_pool_liquidity,
+        } = from_binary(&res).unwrap();
+
+        assert_eq!(
+            total_pool_liquidity,
+            vec![
+                Coin::new(0, "wbtc"),
+                Coin::new(0, "tbtc"),
+                Coin::new(0, "nbtc"),
+                Coin::new(0, "stbtc"),
+            ]
+        );
+
+        // provide some liquidity
+        let liquidity = vec![
+            Coin::new(1_000_000_000_000, "wbtc"),
+            Coin::new(1_000_000_000_000, "tbtc"),
+            Coin::new(1_000_000_000_000, "nbtc"),
+            Coin::new(1_000_000_000_000, "stbtc"),
+        ];
+        deps.querier.update_balance("someone", liquidity.clone());
+
+        let info = mock_info("someone", &liquidity);
+        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+
+        execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
+
+        // Remove assets with admin
+        let remove_assets_msg = ContractExecMsg::Transmuter(ExecMsg::RemoveAssets {
+            denoms: vec!["wbtc".to_string(), "tbtc".to_string()],
+        });
+
+        let info = mock_info(admin, &liquidity);
+        execute(deps.as_mut(), env.clone(), info.clone(), remove_assets_msg).unwrap();
+
+        // Check if the assets were removed
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetTotalPoolLiquidity {}),
+        )
+        .unwrap();
+        let GetTotalPoolLiquidityResponse {
+            total_pool_liquidity,
+        } = from_binary(&res).unwrap();
+
+        assert_eq!(
+            total_pool_liquidity,
+            vec![
+                Coin::new(1_000_000_000_000, "nbtc"),
+                Coin::new(1_000_000_000_000, "stbtc"),
             ]
         );
     }
