@@ -1091,7 +1091,9 @@ mod tests {
         });
 
         let info = mock_info(admin, &liquidity);
-        execute(deps.as_mut(), env.clone(), info.clone(), remove_assets_msg).unwrap();
+        let res = execute(deps.as_mut(), env.clone(), info.clone(), remove_assets_msg).unwrap();
+        // no bank message should be sent, the removed asset waits for withdrawal
+        assert_eq!(res.messages, vec![]);
 
         // Check if the assets were removed
         let res = query(
