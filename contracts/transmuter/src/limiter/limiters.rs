@@ -79,6 +79,15 @@ impl ChangeLimiter {
         .ensure_window_config_constraint()
     }
 
+    pub fn reset(self) -> Self {
+        Self {
+            divisions: vec![],
+            latest_value: Decimal::zero(),
+            window_config: self.window_config,
+            boundary_offset: self.boundary_offset,
+        }
+    }
+
     fn ensure_boundary_offset_constrain(self) -> Result<Self, ContractError> {
         ensure!(
             self.boundary_offset > Decimal::zero(),
@@ -539,10 +548,7 @@ impl<'a> Limiters<'a> {
                 Limiter::ChangeLimiter(limiter) => self.limiters.save(
                     storage,
                     (denom.as_str(), label.as_str()),
-                    &Limiter::ChangeLimiter(ChangeLimiter::new(
-                        limiter.window_config,
-                        limiter.boundary_offset,
-                    )?),
+                    &Limiter::ChangeLimiter(limiter.reset()),
                 )?,
                 Limiter::StaticLimiter(_) => {}
             };
@@ -555,24 +561,20 @@ impl<'a> Limiters<'a> {
 /// This is used for testing if all change limiters has been newly created or reset.
 #[cfg(test)]
 #[macro_export]
-macro_rules! assert_clean_change_limiters {
-    ($lim:expr, $storage:expr) => {
+macro_rules! assert_clean_change_limiters_by_denom {
+    ($denom:expr, $lim:expr, $storage:expr) => {
         let limiters = $lim
-            .list_limiters($storage)
+            .list_limiters_by_denom($storage, $denom)
             .expect("failed to list limiters");
 
-        for ((denom, label), limiter) in limiters {
+        for (label, limiter) in limiters {
             match limiter {
                 Limiter::ChangeLimiter(limiter) => {
                     assert_eq!(
                         limiter,
-                        ChangeLimiter::new(
-                            limiter.window_config.clone(),
-                            limiter.boundary_offset.clone()
-                        )
-                        .unwrap(),
-                        "Change Limiter `{}/{}` is dirty",
-                        denom,
+                        limiter.clone().reset(),
+                        "Change Limiter `{}/{}` is dirty but expect clean",
+                        $denom,
                         label
                     );
                 }
@@ -585,7 +587,7 @@ macro_rules! assert_clean_change_limiters {
 /// This is used for testing if a change limiters for denom has been updated
 #[cfg(test)]
 #[macro_export]
-macro_rules! assert_dirty_change_limiters_for_denom {
+macro_rules! assert_dirty_change_limiters_by_denom {
     ($denom:expr, $lim:expr, $storage:expr) => {
         let limiters = $lim
             .list_limiters_by_denom($storage, $denom)
@@ -596,12 +598,8 @@ macro_rules! assert_dirty_change_limiters_for_denom {
                 Limiter::ChangeLimiter(limiter) => {
                     assert_ne!(
                         limiter,
-                        ChangeLimiter::new(
-                            limiter.window_config.clone(),
-                            limiter.boundary_offset.clone()
-                        )
-                        .unwrap(),
-                        "Change Limiter `{}/{}` is clean",
+                        limiter.clone().reset(),
+                        "Change Limiter `{}/{}` is clean but expect dirty",
                         $denom,
                         label
                     );
@@ -2778,7 +2776,7 @@ mod tests {
                 assert_eq!(divisions.len(), 1);
             }
 
-            assert_dirty_change_limiters_for_denom!("denoma", &limiters, &deps.storage);
+            assert_dirty_change_limiters_by_denom!("denoma", &limiters, &deps.storage);
 
             // reset limiters
             limiters
@@ -2791,7 +2789,7 @@ mod tests {
                 assert_eq!(divisions.len(), 0);
             }
 
-            assert_clean_change_limiters!(&limiters, &deps.storage);
+            assert_clean_change_limiters_by_denom!("denoma", &limiters, &deps.storage);
         }
     }
 

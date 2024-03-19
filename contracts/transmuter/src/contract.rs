@@ -918,9 +918,81 @@ mod tests {
         )
         .unwrap();
 
+        // join pool
+        let info = mock_info(
+            "someone",
+            &[
+                Coin::new(1000000000, "uosmo"),
+                Coin::new(1000000000, "uion"),
+            ],
+        );
+        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+        execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
+
+        // set limiters
+        let change_limiter_params = LimiterParams::ChangeLimiter {
+            window_config: WindowConfig {
+                window_size: Uint64::from(3600u64),
+                division_count: Uint64::from(10u64),
+            },
+            boundary_offset: Decimal::percent(20),
+        };
+
+        let static_limiter_params = LimiterParams::StaticLimiter {
+            upper_limit: Decimal::percent(60),
+        };
+
+        let info = mock_info(admin, &[]);
+        for denom in vec!["uosmo", "uion"] {
+            let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+                denom: denom.to_string(),
+                label: "change_limiter".to_string(),
+                limiter_params: change_limiter_params.clone(),
+            });
+
+            execute(
+                deps.as_mut(),
+                env.clone(),
+                info.clone(),
+                register_limiter_msg,
+            )
+            .unwrap();
+
+            let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+                denom: denom.to_string(),
+                label: "static_limiter".to_string(),
+                limiter_params: static_limiter_params.clone(),
+            });
+
+            execute(
+                deps.as_mut(),
+                env.clone(),
+                info.clone(),
+                register_limiter_msg,
+            )
+            .unwrap();
+        }
+
+        // join pool a bit more to make limiters dirty
+        let info = mock_info(
+            "someone",
+            &[Coin::new(1000, "uosmo"), Coin::new(1000, "uion")],
+        );
+        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+        execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
+
+        for denom in vec!["uosmo", "uion"] {
+            assert_dirty_change_limiters_by_denom!(
+                denom,
+                Transmuter::new().limiters,
+                deps.as_ref().storage
+            );
+        }
+
         // Add new assets
 
         // Attempt to add assets with invalid denom
+        let info = mock_info(admin, &[]);
         let invalid_denoms = vec!["invalid_asset1".to_string(), "invalid_asset2".to_string()];
         let add_invalid_assets_msg = ContractExecMsg::Transmuter(ExecMsg::AddNewAssets {
             asset_configs: invalid_denoms
@@ -970,6 +1042,15 @@ mod tests {
 
         execute(deps.as_mut(), env.clone(), info, add_assets_msg).unwrap();
 
+        // Reset change limiter states if new assets are added
+        for denom in vec!["uosmo", "uion"] {
+            assert_clean_change_limiters_by_denom!(
+                denom,
+                Transmuter::new().limiters,
+                deps.as_ref().storage
+            );
+        }
+
         // Check if the new assets were added
         let res = query(
             deps.as_ref(),
@@ -984,8 +1065,8 @@ mod tests {
         assert_eq!(
             total_pool_liquidity,
             vec![
-                Coin::new(0, "uosmo"),
-                Coin::new(0, "uion"),
+                Coin::new(1000001000, "uosmo"),
+                Coin::new(1000001000, "uion"),
                 Coin::new(0, "new_asset1"),
                 Coin::new(0, "new_asset2"),
             ]
@@ -1008,7 +1089,7 @@ mod tests {
         );
 
         let admin = "admin";
-        let alloyed_denom = "btc";
+        let alloyed_subdenom = "btc";
         let init_msg = InstantiateMsg {
             pool_asset_configs: vec![
                 AssetConfig::from_denom_str("wbtc"),
@@ -1016,7 +1097,7 @@ mod tests {
                 AssetConfig::from_denom_str("nbtc"),
                 AssetConfig::from_denom_str("stbtc"),
             ],
-            alloyed_asset_subdenom: alloyed_denom.to_string(),
+            alloyed_asset_subdenom: alloyed_subdenom.to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.to_string()),
             moderator: None,
@@ -1029,7 +1110,7 @@ mod tests {
 
         // Manually reply
 
-        reply(
+        let res = reply(
             deps.as_mut(),
             env.clone(),
             Reply {
@@ -1038,7 +1119,7 @@ mod tests {
                     events: vec![],
                     data: Some(
                         MsgCreateDenomResponse {
-                            new_token_denom: alloyed_denom.to_string(),
+                            new_token_denom: alloyed_subdenom.to_string(),
                         }
                         .into(),
                     ),
@@ -1047,17 +1128,21 @@ mod tests {
         )
         .unwrap();
 
+        let alloyed_token_denom_kv = res.attributes[0].clone();
+        assert_eq!(alloyed_token_denom_kv.key, "alloyed_denom");
+        let alloyed_denom = alloyed_token_denom_kv.value;
+
         // set limiters
         let change_limiter_params = LimiterParams::ChangeLimiter {
             window_config: WindowConfig {
                 window_size: Uint64::from(3600u64),
                 division_count: Uint64::from(10u64),
             },
-            boundary_offset: Decimal::percent(10),
+            boundary_offset: Decimal::percent(20),
         };
 
         let static_limiter_params = LimiterParams::StaticLimiter {
-            upper_limit: Decimal::percent(10),
+            upper_limit: Decimal::percent(30),
         };
 
         // remove assets
@@ -1139,6 +1224,28 @@ mod tests {
             .unwrap();
         }
 
+        assert_clean_change_limiters_by_denom!(
+            "nbtc",
+            Transmuter::new().limiters,
+            deps.as_ref().storage
+        );
+
+        // exit pool a bit to make sure the limiters are dirty
+        deps.querier
+            .update_balance("someone", vec![Coin::new(1_000, alloyed_denom)]);
+        let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
+            tokens_out: vec![Coin::new(1_000, "nbtc")],
+        });
+
+        let info = mock_info("someone", &[]);
+        execute(deps.as_mut(), env.clone(), info.clone(), exit_pool_msg).unwrap();
+
+        assert_dirty_change_limiters_by_denom!(
+            "nbtc",
+            Transmuter::new().limiters,
+            deps.as_ref().storage
+        );
+
         // Remove assets with admin
         let removing_denoms = vec!["wbtc".to_string(), "tbtc".to_string()];
         let remove_assets_msg = ContractExecMsg::Transmuter(ExecMsg::RemoveAssets {
@@ -1149,6 +1256,18 @@ mod tests {
         let res = execute(deps.as_mut(), env.clone(), info.clone(), remove_assets_msg).unwrap();
         // no bank message should be sent, the removed asset waits for withdrawal
         assert_eq!(res.messages, vec![]);
+
+        // change limiters must be reset
+        assert_clean_change_limiters_by_denom!(
+            "nbtc",
+            Transmuter::new().limiters,
+            deps.as_ref().storage
+        );
+        assert_clean_change_limiters_by_denom!(
+            "stbtc",
+            Transmuter::new().limiters,
+            deps.as_ref().storage
+        );
 
         // Check if the assets were removed
         let res = query(
@@ -1164,7 +1283,7 @@ mod tests {
         assert_eq!(
             total_pool_liquidity,
             vec![
-                Coin::new(1_000_000_000_000, "nbtc"),
+                Coin::new(999_999_999_000, "nbtc"),
                 Coin::new(1_000_000_000_000, "stbtc"),
             ]
         );
