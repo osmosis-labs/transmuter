@@ -552,6 +552,66 @@ impl<'a> Limiters<'a> {
     }
 }
 
+/// This is used for testing if all change limiters has been newly created or reset.
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_clean_change_limiters {
+    ($lim:expr, $storage:expr) => {
+        let limiters = $lim
+            .list_limiters($storage)
+            .expect("failed to list limiters");
+
+        for ((denom, label), limiter) in limiters {
+            match limiter {
+                Limiter::ChangeLimiter(limiter) => {
+                    assert_eq!(
+                        limiter,
+                        ChangeLimiter::new(
+                            limiter.window_config.clone(),
+                            limiter.boundary_offset.clone()
+                        )
+                        .unwrap(),
+                        "Change Limiter `{}/{}` is dirty",
+                        denom,
+                        label
+                    );
+                }
+                Limiter::StaticLimiter(_) => {}
+            };
+        }
+    };
+}
+
+/// This is used for testing if a change limiters for denom has been updated
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_dirty_change_limiters_for_denom {
+    ($denom:expr, $lim:expr, $storage:expr) => {
+        let limiters = $lim
+            .list_limiters_by_denom($storage, $denom)
+            .expect("failed to list limiters");
+
+        for (label, limiter) in limiters {
+            match limiter {
+                Limiter::ChangeLimiter(limiter) => {
+                    assert_ne!(
+                        limiter,
+                        ChangeLimiter::new(
+                            limiter.window_config.clone(),
+                            limiter.boundary_offset.clone()
+                        )
+                        .unwrap(),
+                        "Change Limiter `{}/{}` is clean",
+                        $denom,
+                        label
+                    );
+                }
+                Limiter::StaticLimiter(_) => {}
+            };
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use cosmwasm_std::testing::mock_dependencies;
@@ -2718,6 +2778,8 @@ mod tests {
                 assert_eq!(divisions.len(), 1);
             }
 
+            assert_dirty_change_limiters_for_denom!("denoma", &limiters, &deps.storage);
+
             // reset limiters
             limiters
                 .reset_change_limiter_states(&mut deps.storage)
@@ -2728,6 +2790,8 @@ mod tests {
                     list_divisions(&limiters, denom.as_str(), window.as_str(), &deps.storage);
                 assert_eq!(divisions.len(), 0);
             }
+
+            assert_clean_change_limiters!(&limiters, &deps.storage);
         }
     }
 
