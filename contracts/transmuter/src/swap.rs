@@ -195,7 +195,7 @@ impl Transmuter<'_> {
                 token_in_max_amount,
             } => {
                 let tokens_out_with_norm_factor =
-                    pool.pair_coins_with_normalization_factor(tokens_out)?;
+                    pool.pair_coins_with_normalization_factor_removed_included(tokens_out)?; // TODO: add test for this
                 let in_amount = swap_from_alloyed::in_amount_via_exact_out(
                     token_in_max_amount,
                     self.alloyed_asset.get_normalization_factor(deps.storage)?,

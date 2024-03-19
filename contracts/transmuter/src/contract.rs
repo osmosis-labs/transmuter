@@ -1232,7 +1232,7 @@ mod tests {
 
         // exit pool a bit to make sure the limiters are dirty
         deps.querier
-            .update_balance("someone", vec![Coin::new(1_000, alloyed_denom)]);
+            .update_balance("someone", vec![Coin::new(1_000, alloyed_denom.clone())]);
         let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
             tokens_out: vec![Coin::new(1_000, "nbtc")],
         });
@@ -1299,6 +1299,120 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(removed_denom_limiters, vec![]);
+
+        // register new static limiter for stbtc and nbtc and remove old ones
+        let static_limiter_params = LimiterParams::StaticLimiter {
+            upper_limit: Decimal::percent(60),
+        };
+        for denom in vec!["nbtc", "stbtc"] {
+            let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+                denom: denom.to_string(),
+                label: "static_limiter_60".to_string(),
+                limiter_params: static_limiter_params.clone(),
+            });
+
+            let info = mock_info(admin, &[]);
+            execute(
+                deps.as_mut(),
+                env.clone(),
+                info.clone(),
+                register_limiter_msg,
+            )
+            .unwrap();
+
+            let deregister_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::DeregisterLimiter {
+                denom: denom.to_string(),
+                label: "static_limiter".to_string(),
+            });
+
+            execute(
+                deps.as_mut(),
+                env.clone(),
+                info.clone(),
+                deregister_limiter_msg,
+            )
+            .unwrap();
+        }
+
+        // TODO: make sure these tests passed
+        // for denom in removing_denoms {
+        //     let expected_err = ContractError::InvalidTransmuteDenom {
+        //         denom: denom.clone(),
+        //         expected_denom: vec!["nbtc".to_string(), "stbtc".to_string()],
+        //     };
+
+        //     // join with removing denom should fail
+        //     let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+        //     let err = execute(
+        //         deps.as_mut(),
+        //         env.clone(),
+        //         mock_info("user", &[Coin::new(1000, denom.clone())]),
+        //         join_pool_msg,
+        //     )
+        //     .unwrap_err();
+        //     assert_eq!(expected_err, err);
+
+        //     // swap exact in with removing denom as token in should fail
+        //     let swap_msg = SudoMsg::SwapExactAmountIn {
+        //         token_in: Coin::new(1000, denom.clone()),
+        //         swap_fee: Decimal::zero(),
+        //         sender: "mock_sender".to_string(),
+        //         token_out_denom: "nbtc".to_string(),
+        //         token_out_min_amount: Uint128::new(500),
+        //     };
+
+        //     let err = sudo(deps.as_mut(), env.clone(), swap_msg).unwrap_err();
+        //     assert_eq!(expected_err, err);
+
+        //     // swap exact in with removing denom as token out should fail
+        //     let swap_msg = SudoMsg::SwapExactAmountIn {
+        //         token_in: Coin::new(1000, "nbtc"),
+        //         swap_fee: Decimal::zero(),
+        //         sender: "mock_sender".to_string(),
+        //         token_out_denom: denom.clone(),
+        //         token_out_min_amount: Uint128::new(500),
+        //     };
+
+        //     let err = sudo(deps.as_mut(), env.clone(), swap_msg).unwrap_err();
+        //     assert_eq!(expected_err, err);
+
+        //     // swap exact out with removing denom as token out should fail
+        //     let swap_msg = SudoMsg::SwapExactAmountOut {
+        //         sender: "mock_sender".to_string(),
+        //         token_out: Coin::new(500, denom.clone()),
+        //         swap_fee: Decimal::zero(),
+        //         token_in_denom: "nbtc".to_string(),
+        //         token_in_max_amount: Uint128::new(1000),
+        //     };
+
+        //     let err = sudo(deps.as_mut(), env.clone(), swap_msg).unwrap_err();
+        //     assert_eq!(expected_err, err);
+
+        //     // swap exact out with removing denom as token in should fail
+        //     let swap_msg = SudoMsg::SwapExactAmountOut {
+        //         sender: "mock_sender".to_string(),
+        //         token_out: Coin::new(500, "nbtc"),
+        //         swap_fee: Decimal::zero(),
+        //         token_in_denom: denom.clone(),
+        //         token_in_max_amount: Uint128::new(1000),
+        //     };
+
+        //     let err = sudo(deps.as_mut(), env.clone(), swap_msg).unwrap_err();
+        //     assert_eq!(expected_err, err);
+        // }
+
+        // exit with removing denom should have no restriction
+        deps.querier
+            .update_balance("someone", vec![Coin::new(4_000_000_000_000, alloyed_denom)]);
+        let info = mock_info("someone", &[]);
+
+        let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
+            tokens_out: vec![
+                Coin::new(1_000_000_000_000, "wbtc"),
+                Coin::new(1_000_000_000_000, "tbtc"),
+            ],
+        });
+        execute(deps.as_mut(), env.clone(), info, exit_pool_msg).unwrap();
     }
 
     #[test]
