@@ -69,7 +69,7 @@ fn add_normalization_factor_to_pool_assets(
     storage: &mut dyn Storage,
 ) -> Result<(), ContractError> {
     let pool_v2: Item<'_, TransmuterPoolV2> = Item::new(key::POOL);
-    let pool_v2_1: Item<'_, TransmuterPool> = Item::new(key::POOL);
+    let pool_v3: Item<'_, TransmuterPool> = Item::new(key::POOL);
 
     // transform pool assets from Coin -> Asset (adding normalization factor)
     let asset_norm_factors = asset_configs
@@ -106,7 +106,7 @@ fn add_normalization_factor_to_pool_assets(
             Ok(())
         })?;
 
-    pool_v2_1.save(storage, &TransmuterPool { pool_assets })?;
+    pool_v3.save(storage, &TransmuterPool { pool_assets })?;
     Ok(())
 }
 

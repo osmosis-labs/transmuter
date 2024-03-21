@@ -82,29 +82,6 @@ impl TransmuterPool {
             })
     }
 
-    pub fn get_pool_asset_by_denom_removed_included(
-        &self,
-        denom: &'_ str,
-    ) -> Result<&'_ Asset, ContractError> {
-        self.pool_assets
-            .iter()
-            .chain(self.removed_assets.iter())
-            .find(|pool_asset| pool_asset.denom() == denom)
-            .ok_or_else(|| ContractError::InvalidTransmuteDenom {
-                denom: denom.to_string(),
-                expected_denom: self
-                    .pool_assets
-                    .iter()
-                    .map(|pool_asset| pool_asset.denom().to_string())
-                    .chain(
-                        self.removed_assets
-                            .iter()
-                            .map(|pool_asset| pool_asset.denom().to_string()),
-                    )
-                    .collect(),
-            })
-    }
-
     pub fn pair_coins_with_normalization_factor(
         &self,
         coins: &[Coin],
@@ -115,23 +92,6 @@ impl TransmuterPool {
                 Ok((
                     coin.clone(),
                     self.get_pool_asset_by_denom(coin.denom.as_str())?
-                        .normalization_factor(),
-                ))
-            })
-            .collect::<Result<Vec<_>, ContractError>>()
-    }
-
-    // TODO: add test for this
-    pub fn pair_coins_with_normalization_factor_removed_included(
-        &self,
-        coins: &[Coin],
-    ) -> Result<Vec<(Coin, Uint128)>, ContractError> {
-        coins
-            .iter()
-            .map(|coin| {
-                Ok((
-                    coin.clone(),
-                    self.get_pool_asset_by_denom_removed_included(coin.denom.as_str())?
                         .normalization_factor(),
                 ))
             })

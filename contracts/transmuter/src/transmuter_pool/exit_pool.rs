@@ -10,7 +10,6 @@ impl TransmuterPool {
             let token_is_in_pool_assets = self
                 .pool_assets
                 .iter()
-                .chain(self.removed_assets.iter()) // TODO: add test for this
                 .any(|pool_asset| pool_asset.denom() == token.denom);
 
             if token_is_in_pool_assets {
