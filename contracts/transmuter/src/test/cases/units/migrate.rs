@@ -22,7 +22,7 @@ struct InstantiateMsgV2 {
 }
 
 #[test]
-fn test_migrate_v2_to_v2_1() {
+fn test_migrate_v2_to_v3() {
     // --- setup account ---
     let app = OsmosisTestApp::new();
     let signer = app

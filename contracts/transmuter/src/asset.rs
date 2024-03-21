@@ -43,6 +43,7 @@ impl AssetConfig {
             amount: Uint128::zero(),
             denom: self.denom,
             normalization_factor: self.normalization_factor,
+            is_corrupted: false,
         })
     }
 }
@@ -52,6 +53,7 @@ pub struct Asset {
     amount: Uint128,
     denom: String,
     normalization_factor: Uint128,
+    is_corrupted: bool,
 }
 
 impl Asset {
@@ -64,6 +66,7 @@ impl Asset {
             amount: amount.into(),
             denom: denom.to_string(),
             normalization_factor: normalization_factor.into(),
+            is_corrupted: false,
         }
     }
 
@@ -112,6 +115,11 @@ impl Asset {
         Ok(self)
     }
 
+    pub fn mark_as_corrupted(&'_ mut self) -> &'_ Self {
+        self.is_corrupted = true;
+        self
+    }
+
     pub fn denom(&self) -> &str {
         &self.denom
     }
@@ -122,6 +130,10 @@ impl Asset {
 
     pub fn normalization_factor(&self) -> Uint128 {
         self.normalization_factor
+    }
+
+    pub fn is_corrupted(&self) -> bool {
+        self.is_corrupted
     }
 
     pub fn config(&self) -> AssetConfig {
@@ -144,6 +156,7 @@ impl Asset {
             amount,
             denom: denom.to_string(),
             normalization_factor,
+            is_corrupted: false,
         }
     }
 
@@ -350,6 +363,7 @@ mod tests {
                 amount: Uint128::zero(),
                 denom: "denom1".to_string(),
                 normalization_factor: Uint128::one(),
+                is_corrupted: false,
             }
         );
 
@@ -364,6 +378,7 @@ mod tests {
                 amount: Uint128::zero(),
                 denom: "denom2".to_string(),
                 normalization_factor: Uint128::from(1000000u128),
+                is_corrupted: false,
             }
         );
 
@@ -383,6 +398,7 @@ mod tests {
             amount: Uint128::zero(),
             denom: "denom1".to_string(),
             normalization_factor: Uint128::one(),
+            is_corrupted: false,
         };
 
         assert_eq!(
@@ -397,5 +413,20 @@ mod tests {
             asset.set_normalization_factor(Uint128::zero()).unwrap_err(),
             ContractError::NormalizationFactorMustBePositive {}
         );
+    }
+
+    #[test]
+    fn test_mark_as_corrupted() {
+        let mut asset = Asset {
+            amount: Uint128::zero(),
+            denom: "denom1".to_string(),
+            normalization_factor: Uint128::one(),
+            is_corrupted: false,
+        };
+
+        assert_eq!(asset.is_corrupted(), false);
+
+        assert_eq!(asset.mark_as_corrupted().is_corrupted(), true);
+        assert_eq!(asset.is_corrupted(), true);
     }
 }
