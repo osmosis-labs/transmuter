@@ -42,6 +42,12 @@ impl TransmuterPool {
     where
         A: FnOnce(&mut Self) -> Result<R, ContractError>,
     {
+        // early return result without any checks if no corrupted assets
+        let has_no_corrupted_assets = self.pool_assets.iter().all(|asset| !asset.is_corrupted());
+        if has_no_corrupted_assets {
+            return action(self);
+        }
+
         let pool_asset_pre_action = self.pool_assets.clone();
         let corrupted_assets_pre_action = pool_asset_pre_action
             .iter()
