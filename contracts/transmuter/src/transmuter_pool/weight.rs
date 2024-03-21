@@ -158,10 +158,7 @@ mod tests {
         ]
     )]
     fn test_all_ratios(#[case] pool_assets: Vec<Asset>, #[case] expected: Vec<(String, Decimal)>) {
-        let pool = TransmuterPool {
-            pool_assets,
-            removed_assets: vec![],
-        };
+        let pool = TransmuterPool { pool_assets };
 
         let ratios = pool.weights().unwrap();
         assert_eq!(ratios, Some(expected));
@@ -174,7 +171,6 @@ mod tests {
                 Coin::new(0, "axlusdc"),
                 Coin::new(0, "whusdc"),
             ]),
-            removed_assets: vec![],
         };
 
         let ratios = pool.weights().unwrap();
