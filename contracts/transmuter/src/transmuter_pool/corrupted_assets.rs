@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cosmwasm_std::ensure;
+use cosmwasm_std::{ensure, Decimal};
 
 use crate::{asset::Asset, ContractError};
 
@@ -38,9 +38,9 @@ impl TransmuterPool {
 
     /// Enforce corrupted assets protocol on specific action. This will ensure that amount or weight
     /// of corrupted assets will never be increased.
-    pub fn enforce_corrupted_asset_protocol<A>(&mut self, action: A) -> Result<(), ContractError>
+    pub fn with_corrupted_asset_protocol<A>(&mut self, action: A) -> Result<(), ContractError>
     where
-        A: FnOnce(&mut Self) -> Result<(), ContractError>,
+        A: Fn(&mut Self) -> Result<(), ContractError>,
     {
         let pool_asset_pre_action = self.pool_assets.clone();
         let corrupted_assets_pre_action = pool_asset_pre_action
@@ -49,9 +49,8 @@ impl TransmuterPool {
             .map(|asset| (asset.denom().to_string(), asset))
             .collect::<HashMap<_, _>>();
 
-        let Some(weight_pre_action) = self.weights()? else {
-            return Ok(()); // total pool value = 0, no need to check
-        };
+        // if total pool value == 0 -> Empty mapping, later unwrap weight will be 0
+        let weight_pre_action = self.weights()?.unwrap_or_default();
         let weight_pre_action = weight_pre_action.into_iter().collect::<HashMap<_, _>>();
 
         action(self)?;
@@ -62,9 +61,8 @@ impl TransmuterPool {
             .into_iter()
             .filter(|asset| asset.is_corrupted());
 
-        let Some(weight_post_action) = self.weights()? else {
-            return Ok(()); // total pool value = 0, no need to check
-        };
+        // if total pool value == 0 -> Empty mapping, later unwrap weight will be 0
+        let weight_post_action = self.weights()?.unwrap_or_default();
         let weight_post_action = weight_post_action.into_iter().collect::<HashMap<_, _>>();
 
         for post_action in corrupted_assets_post_action {
@@ -73,8 +71,9 @@ impl TransmuterPool {
                 .get(post_action.denom())
                 .ok_or(ContractError::Never)?;
 
-            let weight_pre_action = weight_pre_action.get(&denom).ok_or(ContractError::Never)?;
-            let weight_post_action = weight_post_action.get(&denom).ok_or(ContractError::Never)?;
+            let zero = Decimal::zero();
+            let weight_pre_action = weight_pre_action.get(&denom).unwrap_or(&zero);
+            let weight_post_action = weight_post_action.get(&denom).unwrap_or(&zero);
 
             let has_amount_increased = pre_action.amount() < post_action.amount();
             let has_weight_increased = weight_pre_action < weight_post_action;
@@ -205,7 +204,7 @@ mod tests {
 
         // increase corrupted asset directly
         let err = pool
-            .enforce_corrupted_asset_protocol(|pool| {
+            .with_corrupted_asset_protocol(|pool| {
                 pool.pool_assets
                     .iter_mut()
                     .find(|asset| asset.denom() == "asset1")
@@ -224,7 +223,7 @@ mod tests {
 
         // decrease other asset -> increase corrupted asset weight
         let err = pool
-            .enforce_corrupted_asset_protocol(|pool| {
+            .with_corrupted_asset_protocol(|pool| {
                 pool.pool_assets
                     .iter_mut()
                     .find(|asset| asset.denom() == "asset2")
@@ -242,7 +241,7 @@ mod tests {
         );
 
         // decrease both corrupted and other asset with different weight
-        let err = pool.enforce_corrupted_asset_protocol(|pool| {
+        let err = pool.with_corrupted_asset_protocol(|pool| {
             pool.pool_assets
                 .iter_mut()
                 .find(|asset| asset.denom() == "asset1")
@@ -277,7 +276,7 @@ mod tests {
 
         // decrease both corrupted and other asset with slightly more weight on the corrupted asset
         // requires slightly more weight to work due to rounding error
-        pool.enforce_corrupted_asset_protocol(|pool| {
+        pool.with_corrupted_asset_protocol(|pool| {
             pool.pool_assets
                 .iter_mut()
                 .find(|asset| asset.denom() == "asset1")
