@@ -170,6 +170,9 @@ pub enum ContractError {
     #[error("Normalization factor must be positive")]
     NormalizationFactorMustBePositive {},
 
+    #[error("Corrupted asset: {denom} must not increase in amount or weight")]
+    CorruptedAssetRelativelyIncreased { denom: String },
+
     #[error("{0}")]
     OverflowError(#[from] OverflowError),
 
@@ -190,4 +193,8 @@ pub enum ContractError {
 
     #[error("Migration Error: {0}")]
     MigrationError(#[from] v3_0_0::MigrationError),
+
+    /// This error should never occur
+    #[error("")]
+    Never,
 }
