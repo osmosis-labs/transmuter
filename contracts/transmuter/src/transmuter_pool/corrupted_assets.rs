@@ -38,9 +38,9 @@ impl TransmuterPool {
 
     /// Enforce corrupted assets protocol on specific action. This will ensure that amount or weight
     /// of corrupted assets will never be increased.
-    pub fn with_corrupted_asset_protocol<A>(&mut self, action: A) -> Result<(), ContractError>
+    pub fn with_corrupted_asset_protocol<A, R>(&mut self, action: A) -> Result<R, ContractError>
     where
-        A: Fn(&mut Self) -> Result<(), ContractError>,
+        A: FnOnce(&mut Self) -> Result<R, ContractError>,
     {
         let pool_asset_pre_action = self.pool_assets.clone();
         let corrupted_assets_pre_action = pool_asset_pre_action
@@ -53,7 +53,7 @@ impl TransmuterPool {
         let weight_pre_action = self.weights()?.unwrap_or_default();
         let weight_pre_action = weight_pre_action.into_iter().collect::<HashMap<_, _>>();
 
-        action(self)?;
+        let res = action(self)?;
 
         let corrupted_assets_post_action = self
             .pool_assets
@@ -86,7 +86,7 @@ impl TransmuterPool {
             );
         }
 
-        Ok(())
+        Ok(res)
     }
 }
 
