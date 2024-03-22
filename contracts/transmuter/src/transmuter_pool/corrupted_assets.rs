@@ -36,6 +36,32 @@ impl TransmuterPool {
             .collect()
     }
 
+    pub fn is_corrupted_asset(&self, denom: &str) -> bool {
+        self.pool_assets
+            .iter()
+            .any(|asset| asset.denom() == denom && asset.is_corrupted())
+    }
+
+    pub fn remove_corrupted_asset(&mut self, denom: &str) -> Result<(), ContractError> {
+        let asset = self.get_pool_asset_by_denom(denom)?;
+        // make sure that removing asset is corrupted
+        ensure!(
+            asset.is_corrupted(),
+            ContractError::InvalidCorruptedAssetDenom {
+                denom: denom.to_string()
+            }
+        );
+
+        // make sure that removing asset has 0 amount
+        ensure!(
+            asset.amount().is_zero(),
+            ContractError::InvalidCorruptedAssetRemoval {}
+        );
+
+        self.pool_assets.retain(|asset| asset.denom() != denom);
+        Ok(())
+    }
+
     /// Enforce corrupted assets protocol on specific action. This will ensure that amount or weight
     /// of corrupted assets will never be increased.
     pub fn with_corrupted_asset_protocol<A, R>(&mut self, action: A) -> Result<R, ContractError>

@@ -41,6 +41,12 @@ pub enum ContractError {
     #[error("Not a pool asset denom: {denom}")]
     InvalidPoolAssetDenom { denom: String },
 
+    #[error("Not a corrupted asset denom: {denom}")]
+    InvalidCorruptedAssetDenom { denom: String },
+
+    #[error("Only corrupted asset with 0 amount can be removed")]
+    InvalidCorruptedAssetRemoval {},
+
     #[error("Pool asset denom count must be within {min} - {max} inclusive, but got: {actual}")]
     PoolAssetDenomCountOutOfRange {
         min: Uint64,

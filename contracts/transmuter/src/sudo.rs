@@ -4,7 +4,8 @@ use cosmwasm_std::{ensure, Coin, Decimal, DepsMut, Env, Response, Uint128};
 use crate::{
     contract::Transmuter,
     swap::{
-        BurnTarget, Entrypoint, SwapFromAlloyedConstraint, SwapToAlloyedConstraint, SwapVariant,
+        BurnTarget, Entrypoint, RedemptionMode, SwapFromAlloyedConstraint, SwapToAlloyedConstraint,
+        SwapVariant,
     },
     ContractError,
 };
@@ -94,6 +95,7 @@ impl SudoMsg {
                         sender,
                         deps,
                         env,
+                        RedemptionMode::Normal,
                     ),
                     SwapVariant::TokenToToken => transmuter.swap_non_alloyed_exact_amount_in(
                         token_in,
@@ -150,6 +152,7 @@ impl SudoMsg {
                         sender,
                         deps,
                         env,
+                        RedemptionMode::Normal,
                     ),
                     SwapVariant::TokenToToken => transmuter.swap_non_alloyed_exact_amount_out(
                         token_in_denom.as_str(),

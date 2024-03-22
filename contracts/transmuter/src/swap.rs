@@ -16,6 +16,11 @@ use crate::{
 /// Swap fee is hardcoded to zero intentionally.
 pub const SWAP_FEE: Decimal = Decimal::zero();
 
+pub enum RedemptionMode {
+    Normal,
+    Force,
+}
+
 impl Transmuter<'_> {
     /// Getting the [SwapVariant] of the swap operation
     /// assuming the swap token is not
@@ -157,6 +162,7 @@ impl Transmuter<'_> {
         sender: Addr,
         deps: DepsMut,
         env: Env,
+        redemption_mode: RedemptionMode,
     ) -> Result<Response, ContractError> {
         let mut pool: TransmuterPool = self.pool.load(deps.storage)?;
 
@@ -240,15 +246,35 @@ impl Transmuter<'_> {
         }?
         .to_string();
 
-        pool.exit_pool(&tokens_out)?;
+        match redemption_mode {
+            RedemptionMode::Normal => {
+                pool.exit_pool(&tokens_out)?;
 
-        // check and update limiters only if pool assets are not zero
-        if let Some(denom_weight_pairs) = pool.weights()? {
-            self.limiters.check_limits_and_update(
-                deps.storage,
-                denom_weight_pairs,
-                env.block.time,
-            )?;
+                // check and update limiters only if pool assets are not zero
+                if let Some(denom_weight_pairs) = pool.weights()? {
+                    self.limiters.check_limits_and_update(
+                        deps.storage,
+                        denom_weight_pairs,
+                        env.block.time,
+                    )?;
+                }
+            }
+            RedemptionMode::Force => {
+                pool.unchecked_exit_pool(&tokens_out)?;
+
+                // change limiter needs reset if force redemption since it gets by passed
+                // the current state will not be accurate
+                self.limiters.reset_change_limiter_states(deps.storage)?;
+
+                // remove corrupted assets from the pool & deregister all limiters for that denom.
+                // With force redemption, the only use case is that it will pull all the
+                // designated corrupted asset, so there is no need to check the amount here.
+                for token_out in tokens_out.iter() {
+                    pool.remove_corrupted_asset(token_out.denom.as_str())?;
+                    self.limiters
+                        .uncheck_deregister_all_for_denom(deps.storage, token_out.denom.as_str())?;
+                }
+            }
         }
 
         self.pool.save(deps.storage, &pool)?;
@@ -857,6 +883,7 @@ mod tests {
             sender,
             deps.as_mut(),
             mock_env(),
+            RedemptionMode::Normal,
         );
 
         assert_eq!(res, expected_res);
