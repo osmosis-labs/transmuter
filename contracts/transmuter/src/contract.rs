@@ -245,17 +245,7 @@ impl Transmuter<'_> {
                 Ok(pool)
             })?;
 
-        // remove all limiters for the removing assets
-        for denom in denoms {
-            self.limiters
-                .uncheck_deregister_all_for_denom(deps.storage, &denom)?;
-        }
-
-        // staled divisions in change limiters has become invalid after
-        // assets get removed, so we reset change limiter states
-        self.limiters.reset_change_limiter_states(deps.storage)?;
-
-        Ok(Response::new().add_attribute("method", "remove_assets"))
+        Ok(Response::new().add_attribute("method", "mark_corrupted_assets"))
     }
 
     #[msg(exec)]
@@ -867,7 +857,9 @@ mod tests {
     use crate::*;
 
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{attr, from_binary, BankMsg, SubMsgResponse, SubMsgResult, Uint64};
+    use cosmwasm_std::{
+        attr, from_binary, BankMsg, BlockInfo, SubMsgResponse, SubMsgResult, Uint64,
+    };
     use osmosis_std::types::osmosis::tokenfactory::v1beta1::MsgBurn;
 
     #[test]
@@ -1078,9 +1070,8 @@ mod tests {
         );
     }
 
-    #[ignore = "to be updated"]
     #[test]
-    fn test_remove_assets() {
+    fn test_mark_corrupted_assets() {
         let mut deps = mock_dependencies();
 
         // make denom has non-zero total supply
@@ -1141,8 +1132,8 @@ mod tests {
         // set limiters
         let change_limiter_params = LimiterParams::ChangeLimiter {
             window_config: WindowConfig {
-                window_size: Uint64::from(3600u64),
-                division_count: Uint64::from(10u64),
+                window_size: Uint64::from(3600000000000u64),
+                division_count: Uint64::from(5u64),
             },
             boundary_offset: Decimal::percent(20),
         };
@@ -1151,9 +1142,7 @@ mod tests {
             upper_limit: Decimal::percent(30),
         };
 
-        // remove assets
-
-        // Remove by non admin
+        // Mark corrupted assets by non-admin
         let info = mock_info("someone", &[]);
         let mark_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedAssets {
             denoms: vec!["wbtc".to_string(), "tbtc".to_string()],
@@ -1235,12 +1224,6 @@ mod tests {
             .unwrap();
         }
 
-        assert_clean_change_limiters_by_denom!(
-            "nbtc",
-            Transmuter::new().limiters,
-            deps.as_ref().storage
-        );
-
         // exit pool a bit to make sure the limiters are dirty
         deps.querier
             .update_balance("someone", vec![Coin::new(1_000, alloyed_denom.clone())]);
@@ -1251,16 +1234,10 @@ mod tests {
         let info = mock_info("someone", &[]);
         execute(deps.as_mut(), env.clone(), info.clone(), exit_pool_msg).unwrap();
 
-        assert_dirty_change_limiters_by_denom!(
-            "nbtc",
-            Transmuter::new().limiters,
-            deps.as_ref().storage
-        );
-
-        // Remove assets with admin
-        let removing_denoms = vec!["wbtc".to_string(), "tbtc".to_string()];
+        // Mark corrupted assets by admin
+        let corrupted_denoms = vec!["wbtc".to_string(), "tbtc".to_string()];
         let mark_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedAssets {
-            denoms: removing_denoms.clone(),
+            denoms: corrupted_denoms.clone(),
         });
 
         let info = mock_info(admin, &liquidity);
@@ -1271,20 +1248,8 @@ mod tests {
             mark_corrupted_assets_msg,
         )
         .unwrap();
-        // no bank message should be sent, the removed asset waits for withdrawal
+        // no bank message should be sent, the corrupted asset waits for withdrawal
         assert_eq!(res.messages, vec![]);
-
-        // change limiters must be reset
-        assert_clean_change_limiters_by_denom!(
-            "nbtc",
-            Transmuter::new().limiters,
-            deps.as_ref().storage
-        );
-        assert_clean_change_limiters_by_denom!(
-            "stbtc",
-            Transmuter::new().limiters,
-            deps.as_ref().storage
-        );
 
         // Check if the assets were removed
         let res = query(
@@ -1300,136 +1265,170 @@ mod tests {
         assert_eq!(
             total_pool_liquidity,
             vec![
+                Coin::new(1_000_000_000_000, "wbtc"),
+                Coin::new(1_000_000_000_000, "tbtc"),
                 Coin::new(999_999_999_000, "nbtc"),
                 Coin::new(1_000_000_000_000, "stbtc"),
             ]
         );
 
-        // check if removed denoms limiters are removed
-        let list_limiters_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
-        let res = query(deps.as_ref(), env.clone(), list_limiters_msg).unwrap();
-        let ListLimitersResponse { limiters } = from_binary(&res).unwrap();
-
-        let removed_denom_limiters = limiters
-            .into_iter()
-            .filter(|((denom, _), _)| removing_denoms.contains(denom))
-            .collect::<Vec<_>>();
-
-        assert_eq!(removed_denom_limiters, vec![]);
-
-        // register new static limiter for stbtc and nbtc and remove old ones
-        let static_limiter_params = LimiterParams::StaticLimiter {
-            upper_limit: Decimal::percent(60),
-        };
-        for denom in vec!["nbtc", "stbtc"] {
-            let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: denom.to_string(),
-                label: "static_limiter_60".to_string(),
-                limiter_params: static_limiter_params.clone(),
-            });
-
-            let info = mock_info(admin, &[]);
-            execute(
-                deps.as_mut(),
-                env.clone(),
-                info.clone(),
-                register_limiter_msg,
-            )
-            .unwrap();
-
-            let deregister_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::DeregisterLimiter {
-                denom: denom.to_string(),
-                label: "static_limiter".to_string(),
-            });
-
-            execute(
-                deps.as_mut(),
-                env.clone(),
-                info.clone(),
-                deregister_limiter_msg,
-            )
-            .unwrap();
-        }
-
-        // TODO: make sure these tests passed
-        // for denom in removing_denoms {
-        //     let expected_err = ContractError::InvalidTransmuteDenom {
-        //         denom: denom.clone(),
-        //         expected_denom: vec!["nbtc".to_string(), "stbtc".to_string()],
-        //     };
-
-        //     // join with removing denom should fail
-        //     let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-        //     let err = execute(
-        //         deps.as_mut(),
-        //         env.clone(),
-        //         mock_info("user", &[Coin::new(1000, denom.clone())]),
-        //         join_pool_msg,
-        //     )
-        //     .unwrap_err();
-        //     assert_eq!(expected_err, err);
-
-        //     // swap exact in with removing denom as token in should fail
-        //     let swap_msg = SudoMsg::SwapExactAmountIn {
-        //         token_in: Coin::new(1000, denom.clone()),
-        //         swap_fee: Decimal::zero(),
-        //         sender: "mock_sender".to_string(),
-        //         token_out_denom: "nbtc".to_string(),
-        //         token_out_min_amount: Uint128::new(500),
-        //     };
-
-        //     let err = sudo(deps.as_mut(), env.clone(), swap_msg).unwrap_err();
-        //     assert_eq!(expected_err, err);
-
-        //     // swap exact in with removing denom as token out should fail
-        //     let swap_msg = SudoMsg::SwapExactAmountIn {
-        //         token_in: Coin::new(1000, "nbtc"),
-        //         swap_fee: Decimal::zero(),
-        //         sender: "mock_sender".to_string(),
-        //         token_out_denom: denom.clone(),
-        //         token_out_min_amount: Uint128::new(500),
-        //     };
-
-        //     let err = sudo(deps.as_mut(), env.clone(), swap_msg).unwrap_err();
-        //     assert_eq!(expected_err, err);
-
-        //     // swap exact out with removing denom as token out should fail
-        //     let swap_msg = SudoMsg::SwapExactAmountOut {
-        //         sender: "mock_sender".to_string(),
-        //         token_out: Coin::new(500, denom.clone()),
-        //         swap_fee: Decimal::zero(),
-        //         token_in_denom: "nbtc".to_string(),
-        //         token_in_max_amount: Uint128::new(1000),
-        //     };
-
-        //     let err = sudo(deps.as_mut(), env.clone(), swap_msg).unwrap_err();
-        //     assert_eq!(expected_err, err);
-
-        //     // swap exact out with removing denom as token in should fail
-        //     let swap_msg = SudoMsg::SwapExactAmountOut {
-        //         sender: "mock_sender".to_string(),
-        //         token_out: Coin::new(500, "nbtc"),
-        //         swap_fee: Decimal::zero(),
-        //         token_in_denom: denom.clone(),
-        //         token_in_max_amount: Uint128::new(1000),
-        //     };
-
-        //     let err = sudo(deps.as_mut(), env.clone(), swap_msg).unwrap_err();
-        //     assert_eq!(expected_err, err);
-        // }
-
-        // exit with removing denom should have no restriction
+        // warm up the limiters
+        let env = increase_block_height(&env, 1);
         deps.querier
-            .update_balance("someone", vec![Coin::new(4_000_000_000_000, alloyed_denom)]);
-        let info = mock_info("someone", &[]);
-
+            .update_balance("someone", vec![Coin::new(4, alloyed_denom.clone())]);
         let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
             tokens_out: vec![
-                Coin::new(1_000_000_000_000, "wbtc"),
-                Coin::new(1_000_000_000_000, "tbtc"),
+                Coin::new(1, "wbtc"),
+                Coin::new(1, "tbtc"),
+                Coin::new(1, "nbtc"),
+                Coin::new(1, "stbtc"),
+            ],
+        });
+        let info = mock_info("someone", &[]);
+        execute(deps.as_mut(), env.clone(), info.clone(), exit_pool_msg).unwrap();
+
+        let env = increase_block_height(&env, 1);
+
+        deps.querier
+            .update_balance("someone", vec![Coin::new(4, alloyed_denom.clone())]);
+        let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
+            tokens_out: vec![
+                Coin::new(1, "wbtc"),
+                Coin::new(1, "tbtc"),
+                Coin::new(1, "nbtc"),
+                Coin::new(1, "stbtc"),
+            ],
+        });
+        let info = mock_info("someone", &[]);
+        execute(deps.as_mut(), env.clone(), info.clone(), exit_pool_msg).unwrap();
+
+        let env = increase_block_height(&env, 1);
+
+        for denom in corrupted_denoms {
+            let expected_err = ContractError::CorruptedAssetRelativelyIncreased {
+                denom: denom.clone(),
+            };
+
+            // join with corrupted denom should fail
+            let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+            let err = execute(
+                deps.as_mut(),
+                env.clone(),
+                mock_info("user", &[Coin::new(1000, denom.clone())]),
+                join_pool_msg,
+            )
+            .unwrap_err();
+            assert_eq!(expected_err, err);
+
+            // swap exact in with corrupted denom as token in should fail
+            let swap_msg = SudoMsg::SwapExactAmountIn {
+                token_in: Coin::new(1000, denom.clone()),
+                swap_fee: Decimal::zero(),
+                sender: "mock_sender".to_string(),
+                token_out_denom: "nbtc".to_string(),
+                token_out_min_amount: Uint128::new(500),
+            };
+
+            let err = sudo(deps.as_mut(), env.clone(), swap_msg).unwrap_err();
+            assert_eq!(expected_err, err);
+
+            // swap exact in with corrupted denom as token out should be ok since it decreases the corrupted asset
+            let swap_msg = SudoMsg::SwapExactAmountIn {
+                token_in: Coin::new(1000, "nbtc"),
+                swap_fee: Decimal::zero(),
+                sender: "mock_sender".to_string(),
+                token_out_denom: denom.clone(),
+                token_out_min_amount: Uint128::new(500),
+            };
+
+            sudo(deps.as_mut(), env.clone(), swap_msg).unwrap();
+
+            // swap exact out with corrupted denom as token out should be ok since it decreases the corrupted asset
+            let swap_msg = SudoMsg::SwapExactAmountOut {
+                sender: "mock_sender".to_string(),
+                token_out: Coin::new(500, denom.clone()),
+                swap_fee: Decimal::zero(),
+                token_in_denom: "nbtc".to_string(),
+                token_in_max_amount: Uint128::new(1000),
+            };
+
+            sudo(deps.as_mut(), env.clone(), swap_msg).unwrap();
+
+            // swap exact out with corrupted denom as token in should fail
+            let swap_msg = SudoMsg::SwapExactAmountOut {
+                sender: "mock_sender".to_string(),
+                token_out: Coin::new(500, "nbtc"),
+                swap_fee: Decimal::zero(),
+                token_in_denom: denom.clone(),
+                token_in_max_amount: Uint128::new(1000),
+            };
+
+            let err = sudo(deps.as_mut(), env.clone(), swap_msg).unwrap_err();
+            assert_eq!(expected_err, err);
+
+            // exit with by any denom requires corrupted denom to not increase in weight
+            // (this case increase other remaining corrupted denom weight)
+            deps.querier.update_balance(
+                "someone",
+                vec![Coin::new(4_000_000_000, alloyed_denom.clone())],
+            );
+
+            let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
+                tokens_out: vec![Coin::new(1_000_000_000, "stbtc")],
+            });
+
+            let info = mock_info("someone", &[]);
+
+            // this causes all corrupted denoms to be increased in weight
+            let err = execute(deps.as_mut(), env.clone(), info, exit_pool_msg).unwrap_err();
+            assert!(matches!(
+                err,
+                ContractError::CorruptedAssetRelativelyIncreased { .. }
+            ));
+
+            let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
+                tokens_out: vec![
+                    Coin::new(1_000_000_000, "nbtc"),
+                    Coin::new(1_000_000_000, denom.clone()),
+                ],
+            });
+
+            let info = mock_info("someone", &[]);
+
+            // this causes other corrupted denom to be increased relatively
+            let err = execute(deps.as_mut(), env.clone(), info, exit_pool_msg).unwrap_err();
+            assert!(matches!(
+                err,
+                ContractError::CorruptedAssetRelativelyIncreased { .. }
+            ));
+        }
+
+        // exit with corrupted denom requires all corrupted denom exit with the same value
+        deps.querier.update_balance(
+            "someone",
+            vec![Coin::new(4_000_000_000, alloyed_denom.clone())],
+        );
+        let info = mock_info("someone", &[]);
+        let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
+            tokens_out: vec![
+                Coin::new(2_000_000_000, "nbtc"),
+                Coin::new(1_000_000_000, "wbtc"),
+                Coin::new(1_000_000_000, "tbtc"),
             ],
         });
         execute(deps.as_mut(), env.clone(), info, exit_pool_msg).unwrap();
+    }
+
+    fn increase_block_height(env: &Env, height: u64) -> Env {
+        let block_time = 5; // hypothetical block time
+        Env {
+            block: BlockInfo {
+                height: env.block.height + height,
+                time: env.block.time.plus_seconds(block_time * height),
+                chain_id: env.block.chain_id.clone(),
+            },
+            ..env.clone()
+        }
     }
 
     #[test]
