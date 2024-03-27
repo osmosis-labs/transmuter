@@ -702,6 +702,23 @@ impl Transmuter<'_> {
         Ok(CalcInAmtGivenOutResponse { token_in })
     }
 
+    #[msg(query)]
+    pub(crate) fn get_corrupted_denoms(
+        &self,
+        ctx: (Deps, Env),
+    ) -> Result<GetCorrruptedDenomsResponse, ContractError> {
+        let (deps, _env) = ctx;
+
+        let pool = self.pool.load(deps.storage)?;
+        let corrupted_denoms = pool
+            .corrupted_assets()
+            .into_iter()
+            .map(|a| a.denom().to_string())
+            .collect();
+
+        Ok(GetCorrruptedDenomsResponse { corrupted_denoms })
+    }
+
     // --- admin ---
 
     #[msg(exec)]
@@ -880,6 +897,11 @@ pub struct CalcOutAmtGivenInResponse {
 #[cw_serde]
 pub struct CalcInAmtGivenOutResponse {
     pub token_in: Coin,
+}
+
+#[cw_serde]
+pub struct GetCorrruptedDenomsResponse {
+    pub corrupted_denoms: Vec<String>,
 }
 
 #[cw_serde]
@@ -1204,8 +1226,19 @@ mod tests {
             mark_corrupted_assets_msg,
         );
 
-        // Check if the attempt resulted in DenomHasNoSupply error
+        // Check if the attempt resulted in Unauthorized error
         assert_eq!(res.unwrap_err(), ContractError::Unauthorized {});
+
+        // Corrupted denoms must be empty
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedDenoms {}),
+        )
+        .unwrap();
+        let GetCorrruptedDenomsResponse { corrupted_denoms } = from_binary(&res).unwrap();
+
+        assert_eq!(corrupted_denoms, Vec::<String>::new());
 
         // The asset must not yet be removed
         let res = query(
@@ -1299,6 +1332,17 @@ mod tests {
         .unwrap();
         // no bank message should be sent, the corrupted asset waits for withdrawal
         assert_eq!(res.messages, vec![]);
+
+        // corrupted denoms must be updated
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedDenoms {}),
+        )
+        .unwrap();
+        let res: GetCorrruptedDenomsResponse = from_binary(&res).unwrap();
+
+        assert_eq!(res.corrupted_denoms, corrupted_denoms);
 
         // Check if the assets were removed
         let res = query(
