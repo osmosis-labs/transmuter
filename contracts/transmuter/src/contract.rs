@@ -239,8 +239,8 @@ impl Transmuter<'_> {
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
-        // only admin can mark corrupted assets
-        ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
+        // only moderator can mark corrupted assets
+        ensure_moderator_authority!(info.sender, self.role.moderator, deps.as_ref());
 
         self.pool
             .update(deps.storage, |mut pool| -> Result<_, ContractError> {
@@ -1134,6 +1134,7 @@ mod tests {
         );
 
         let admin = "admin";
+        let moderator = "moderator";
         let alloyed_subdenom = "btc";
         let init_msg = InstantiateMsg {
             pool_asset_configs: vec![
@@ -1145,7 +1146,7 @@ mod tests {
             alloyed_asset_subdenom: alloyed_subdenom.to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.to_string()),
-            moderator: None,
+            moderator: Some(moderator.to_string()),
         };
         let env = mock_env();
 
@@ -1190,7 +1191,7 @@ mod tests {
             upper_limit: Decimal::percent(30),
         };
 
-        // Mark corrupted assets by non-admin
+        // Mark corrupted assets by non-moderator
         let info = mock_info("someone", &[]);
         let mark_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedAssets {
             denoms: vec!["wbtc".to_string(), "tbtc".to_string()],
@@ -1282,13 +1283,13 @@ mod tests {
         let info = mock_info("someone", &[]);
         execute(deps.as_mut(), env.clone(), info.clone(), exit_pool_msg).unwrap();
 
-        // Mark corrupted assets by admin
+        // Mark corrupted assets by moderator
         let corrupted_denoms = vec!["wbtc".to_string(), "tbtc".to_string()];
         let mark_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedAssets {
             denoms: corrupted_denoms.clone(),
         });
 
-        let info = mock_info(admin, &liquidity);
+        let info = mock_info(moderator, &liquidity);
         let res = execute(
             deps.as_mut(),
             env.clone(),
