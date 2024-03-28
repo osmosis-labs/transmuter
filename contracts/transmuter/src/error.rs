@@ -41,6 +41,12 @@ pub enum ContractError {
     #[error("Not a pool asset denom: {denom}")]
     InvalidPoolAssetDenom { denom: String },
 
+    #[error("Not a corrupted asset denom: {denom}")]
+    InvalidCorruptedAssetDenom { denom: String },
+
+    #[error("Only corrupted asset with 0 amount can be removed")]
+    InvalidCorruptedAssetRemoval {},
+
     #[error("Pool asset denom count must be within {min} - {max} inclusive, but got: {actual}")]
     PoolAssetDenomCountOutOfRange {
         min: Uint64,
@@ -170,6 +176,9 @@ pub enum ContractError {
     #[error("Normalization factor must be positive")]
     NormalizationFactorMustBePositive {},
 
+    #[error("Corrupted asset: {denom} must not increase in amount or weight")]
+    CorruptedAssetRelativelyIncreased { denom: String },
+
     #[error("{0}")]
     OverflowError(#[from] OverflowError),
 
@@ -190,4 +199,8 @@ pub enum ContractError {
 
     #[error("Migration Error: {0}")]
     MigrationError(#[from] v3_0_0::MigrationError),
+
+    /// This error should never occur
+    #[error("")]
+    Never,
 }

@@ -6,6 +6,10 @@ use super::TransmuterPool;
 
 impl TransmuterPool {
     pub fn join_pool(&mut self, tokens_in: &[Coin]) -> Result<(), ContractError> {
+        self.with_corrupted_asset_protocol(|pool| pool.unchecked_join_pool(tokens_in))
+    }
+
+    fn unchecked_join_pool(&mut self, tokens_in: &[Coin]) -> Result<(), ContractError> {
         tokens_in.iter().try_for_each(|token_in| {
             // check if token_in is in pool_assets
             if let Some(pool_asset) = self

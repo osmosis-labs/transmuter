@@ -6,6 +6,10 @@ use super::TransmuterPool;
 
 impl TransmuterPool {
     pub fn exit_pool(&mut self, tokens_out: &[Coin]) -> Result<(), ContractError> {
+        self.with_corrupted_asset_protocol(|pool| pool.unchecked_exit_pool(tokens_out))
+    }
+
+    pub fn unchecked_exit_pool(&mut self, tokens_out: &[Coin]) -> Result<(), ContractError> {
         for token in tokens_out {
             let token_is_in_pool_assets = self
                 .pool_assets

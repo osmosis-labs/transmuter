@@ -240,15 +240,45 @@ impl Transmuter<'_> {
         }?
         .to_string();
 
-        pool.exit_pool(&tokens_out)?;
+        let is_force_exit_corrupted_assets = tokens_out.iter().all(|coin| {
+            let total_liquidity = pool
+                .get_pool_asset_by_denom(&coin.denom)
+                .map(|asset| asset.amount())
+                .unwrap_or_default();
 
-        // check and update limiters only if pool assets are not zero
-        if let Some(denom_weight_pairs) = pool.weights()? {
-            self.limiters.check_limits_and_update(
-                deps.storage,
-                denom_weight_pairs,
-                env.block.time,
-            )?;
+            let is_redeeming_total_liquidity = coin.amount == total_liquidity;
+
+            pool.is_corrupted_asset(&coin.denom) && is_redeeming_total_liquidity
+        });
+
+        // If all tokens out are corrupted assets and exit with all remaining liquidity
+        // then ignore the limiters and remove the corrupted assets from the pool
+        if is_force_exit_corrupted_assets {
+            pool.unchecked_exit_pool(&tokens_out)?;
+
+            // change limiter needs reset if force redemption since it gets by passed
+            // the current state will not be accurate
+            self.limiters.reset_change_limiter_states(deps.storage)?;
+
+            // remove corrupted assets from the pool & deregister all limiters for that denom.
+            // With force redemption, the only use case is that it will pull all the
+            // designated corrupted asset, so there is no need to check the amount here.
+            for token_out in tokens_out.iter() {
+                pool.remove_corrupted_asset(token_out.denom.as_str())?;
+                self.limiters
+                    .uncheck_deregister_all_for_denom(deps.storage, token_out.denom.as_str())?;
+            }
+        } else {
+            pool.exit_pool(&tokens_out)?;
+
+            // check and update limiters only if pool assets are not zero
+            if let Some(denom_weight_pairs) = pool.weights()? {
+                self.limiters.check_limits_and_update(
+                    deps.storage,
+                    denom_weight_pairs,
+                    env.block.time,
+                )?;
+            }
         }
 
         self.pool.save(deps.storage, &pool)?;

@@ -79,6 +79,15 @@ impl ChangeLimiter {
         .ensure_window_config_constraint()
     }
 
+    pub fn reset(self) -> Self {
+        Self {
+            divisions: vec![],
+            latest_value: Decimal::zero(),
+            window_config: self.window_config,
+            boundary_offset: self.boundary_offset,
+        }
+    }
+
     fn ensure_boundary_offset_constrain(self) -> Result<Self, ContractError> {
         ensure!(
             self.boundary_offset > Decimal::zero(),
@@ -360,6 +369,22 @@ impl<'a> Limiters<'a> {
             .map_err(Into::into)
     }
 
+    /// Deregsiter all limiters for the denom without checking if it will be empty.
+    /// This is useful when the asset is being removed, so that limiters for the asset are no longer needed.
+    pub fn uncheck_deregister_all_for_denom(
+        &self,
+        storage: &mut dyn Storage,
+        denom: &str,
+    ) -> Result<(), ContractError> {
+        let limiters = self.list_limiters_by_denom(storage, denom)?;
+
+        for (label, _) in limiters {
+            self.limiters.remove(storage, (denom, &label));
+        }
+
+        Ok(())
+    }
+
     pub fn deregister(
         &self,
         storage: &mut dyn Storage,
@@ -489,6 +514,7 @@ impl<'a> Limiters<'a> {
 
             for (label, limiter) in limiters {
                 // match limiter type
+
                 let limiter = match limiter {
                     Limiter::ChangeLimiter(limiter) => Limiter::ChangeLimiter(
                         limiter
@@ -523,10 +549,7 @@ impl<'a> Limiters<'a> {
                 Limiter::ChangeLimiter(limiter) => self.limiters.save(
                     storage,
                     (denom.as_str(), label.as_str()),
-                    &Limiter::ChangeLimiter(ChangeLimiter::new(
-                        limiter.window_config,
-                        limiter.boundary_offset,
-                    )?),
+                    &Limiter::ChangeLimiter(limiter.reset()),
                 )?,
                 Limiter::StaticLimiter(_) => {}
             };
@@ -534,6 +557,58 @@ impl<'a> Limiters<'a> {
 
         Ok(())
     }
+}
+
+/// This is used for testing if all change limiters has been newly created or reset.
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_clean_change_limiters_by_denom {
+    ($denom:expr, $lim:expr, $storage:expr) => {
+        let limiters = $lim
+            .list_limiters_by_denom($storage, $denom)
+            .expect("failed to list limiters");
+
+        for (label, limiter) in limiters {
+            match limiter {
+                Limiter::ChangeLimiter(limiter) => {
+                    assert_eq!(
+                        limiter,
+                        limiter.clone().reset(),
+                        "Change Limiter `{}/{}` is dirty but expect clean",
+                        $denom,
+                        label
+                    );
+                }
+                Limiter::StaticLimiter(_) => {}
+            };
+        }
+    };
+}
+
+/// This is used for testing if a change limiters for denom has been updated
+#[cfg(test)]
+#[macro_export]
+macro_rules! assert_dirty_change_limiters_by_denom {
+    ($denom:expr, $lim:expr, $storage:expr) => {
+        let limiters = $lim
+            .list_limiters_by_denom($storage, $denom)
+            .expect("failed to list limiters");
+
+        for (label, limiter) in limiters {
+            match limiter {
+                Limiter::ChangeLimiter(limiter) => {
+                    assert_ne!(
+                        limiter,
+                        limiter.clone().reset(),
+                        "Change Limiter `{}/{}` is clean but expect dirty",
+                        $denom,
+                        label
+                    );
+                }
+                Limiter::StaticLimiter(_) => {}
+            };
+        }
+    };
 }
 
 #[cfg(test)]
@@ -2702,6 +2777,8 @@ mod tests {
                 assert_eq!(divisions.len(), 1);
             }
 
+            assert_dirty_change_limiters_by_denom!("denoma", &limiters, &deps.storage);
+
             // reset limiters
             limiters
                 .reset_change_limiter_states(&mut deps.storage)
@@ -2712,6 +2789,8 @@ mod tests {
                     list_divisions(&limiters, denom.as_str(), window.as_str(), &deps.storage);
                 assert_eq!(divisions.len(), 0);
             }
+
+            assert_clean_change_limiters_by_denom!("denoma", &limiters, &deps.storage);
         }
     }
 
