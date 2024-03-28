@@ -8,10 +8,7 @@ use crate::{
     limiter::{Limiter, LimiterParams, Limiters},
     math::rescale,
     role::Role,
-    swap::{
-        BurnTarget, Entrypoint, RedemptionMode, SwapFromAlloyedConstraint, SwapToAlloyedConstraint,
-        SWAP_FEE,
-    },
+    swap::{BurnTarget, Entrypoint, SwapFromAlloyedConstraint, SwapToAlloyedConstraint, SWAP_FEE},
     transmuter_pool::TransmuterPool,
 };
 use cosmwasm_schema::cw_serde;
@@ -459,6 +456,7 @@ impl Transmuter<'_> {
         tokens_out: Vec<Coin>,
     ) -> Result<Response, ContractError> {
         let (deps, env, info) = ctx;
+
         self.swap_alloyed_asset_to_tokens(
             Entrypoint::Exec,
             SwapFromAlloyedConstraint::ExactOut {
@@ -469,53 +467,8 @@ impl Transmuter<'_> {
             info.sender,
             deps,
             env,
-            RedemptionMode::Normal,
         )
         .map(|res| res.add_attribute("method", "exit_pool"))
-    }
-
-    /// Redeem designated corrupted assets from the pool without limiter checks and corrupted asset constraints.
-    /// This is useful in case where there is more than single corrupted asset and the redemption does not include
-    /// all of the corrupted denoms, which may cause excluded corrupted denom weight to rise, which is prohibited.
-    #[msg(exec)]
-    pub fn force_redeem_corrupted_assets(
-        &self,
-        ctx: (DepsMut, Env, MessageInfo),
-        denoms: Vec<String>,
-    ) -> Result<Response, ContractError> {
-        let (deps, env, info) = ctx;
-
-        let pool = self.pool.load(deps.storage)?;
-
-        let tokens_out = denoms
-            .iter()
-            .map(|denom| {
-                // ensure that the denom is a corrupted asset
-                ensure!(
-                    pool.is_corrupted_asset(denom),
-                    ContractError::InvalidCorruptedAssetDenom {
-                        denom: denom.clone()
-                    }
-                );
-
-                Ok(pool.get_pool_asset_by_denom(denom)?.to_coin())
-            })
-            .collect::<Result<Vec<_>, ContractError>>()?;
-
-        // swap alloy to tokens without limiter checks & corrupted asset protocol
-        self.swap_alloyed_asset_to_tokens(
-            Entrypoint::Exec,
-            SwapFromAlloyedConstraint::ExactOut {
-                tokens_out: &tokens_out,
-                token_in_max_amount: Uint128::MAX,
-            },
-            BurnTarget::SenderAccount,
-            info.sender,
-            deps,
-            env,
-            RedemptionMode::Force,
-        )
-        .map(|res| res.add_attribute("method", "force_redeem_corrupted_assets"))
     }
 
     // === queries ===
@@ -928,7 +881,7 @@ mod tests {
 
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
     use cosmwasm_std::{
-        attr, from_binary, BankMsg, BlockInfo, SubMsgResponse, SubMsgResult, Uint64,
+        attr, from_binary, BankMsg, BlockInfo, Storage, SubMsgResponse, SubMsgResult, Uint64,
     };
     use osmosis_std::types::osmosis::tokenfactory::v1beta1::MsgBurn;
 
@@ -1515,12 +1468,12 @@ mod tests {
 
         deps.querier.update_balance(
             "someone",
-            vec![Coin::new(4_000_000_000, alloyed_denom.clone())],
+            vec![Coin::new(1_000_000_000_000, alloyed_denom.clone())], // TODO: increase shares
         );
-        let force_redeem_corrupted_assets_msg =
-            ContractExecMsg::Transmuter(ExecMsg::ForceRedeemCorruptedAssets {
-                denoms: vec!["nbtc".to_string()],
-            });
+        let all_nbtc = total_liquidity_of("nbtc", &deps.storage);
+        let force_redeem_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
+            tokens_out: vec![all_nbtc],
+        });
 
         let info = mock_info("someone", &[]);
         let err = execute(
@@ -1533,15 +1486,15 @@ mod tests {
 
         assert_eq!(
             err,
-            ContractError::InvalidCorruptedAssetDenom {
-                denom: "nbtc".to_string()
+            ContractError::CorruptedAssetRelativelyIncreased {
+                denom: "wbtc".to_string()
             }
         );
 
-        let force_redeem_corrupted_assets_msg =
-            ContractExecMsg::Transmuter(ExecMsg::ForceRedeemCorruptedAssets {
-                denoms: vec!["wbtc".to_string()],
-            });
+        let all_wbtc = total_liquidity_of("wbtc", &deps.storage);
+        let force_redeem_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
+            tokens_out: vec![all_wbtc],
+        });
 
         deps.querier.update_balance(
             "someone",
@@ -1591,10 +1544,10 @@ mod tests {
         assert_clean_change_limiters_by_denom!("nbtc", Transmuter::new().limiters, &deps.storage);
         assert_clean_change_limiters_by_denom!("stbtc", Transmuter::new().limiters, &deps.storage);
 
-        let force_redeem_corrupted_assets_msg =
-            ContractExecMsg::Transmuter(ExecMsg::ForceRedeemCorruptedAssets {
-                denoms: vec!["tbtc".to_string()],
-            });
+        let all_tbtc = total_liquidity_of("tbtc", &deps.storage);
+        let force_redeem_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
+            tokens_out: vec![all_tbtc],
+        });
 
         deps.querier.update_balance(
             "someone",
@@ -1653,6 +1606,18 @@ mod tests {
             },
             ..env.clone()
         }
+    }
+
+    fn total_liquidity_of(denom: &str, storage: &dyn Storage) -> Coin {
+        Transmuter::new()
+            .pool
+            .load(storage)
+            .unwrap()
+            .pool_assets
+            .into_iter()
+            .find(|a| a.denom() == denom)
+            .unwrap()
+            .to_coin()
     }
 
     #[test]
