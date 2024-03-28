@@ -120,6 +120,11 @@ impl Asset {
         self
     }
 
+    pub fn unmark_as_corrupted(&'_ mut self) -> &'_ Self {
+        self.is_corrupted = false;
+        self
+    }
+
     pub fn denom(&self) -> &str {
         &self.denom
     }

@@ -249,6 +249,26 @@ impl Transmuter<'_> {
     }
 
     #[msg(exec)]
+    fn unmark_corrupted_assets(
+        &self,
+        ctx: (DepsMut, Env, MessageInfo),
+        denoms: Vec<String>,
+    ) -> Result<Response, ContractError> {
+        let (deps, _env, info) = ctx;
+
+        // only moderator can unmark corrupted assets
+        ensure_moderator_authority!(info.sender, self.role.moderator, deps.as_ref());
+
+        self.pool
+            .update(deps.storage, |mut pool| -> Result<_, ContractError> {
+                pool.unmark_corrupted_assets(&denoms)?;
+                Ok(pool)
+            })?;
+
+        Ok(Response::new().add_attribute("method", "unmark_corrupted_assets"))
+    }
+
+    #[msg(exec)]
     fn register_limiter(
         &self,
         ctx: (DepsMut, Env, MessageInfo),
@@ -1544,34 +1564,73 @@ mod tests {
         assert_clean_change_limiters_by_denom!("nbtc", Transmuter::new().limiters, &deps.storage);
         assert_clean_change_limiters_by_denom!("stbtc", Transmuter::new().limiters, &deps.storage);
 
-        let all_tbtc = total_liquidity_of("tbtc", &deps.storage);
-        let force_redeem_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
-            tokens_out: vec![all_tbtc],
-        });
+        // try unmark nbtc should fail
+        let unmark_corrupted_assets_msg =
+            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedAssets {
+                denoms: vec!["nbtc".to_string()],
+            });
 
-        deps.querier.update_balance(
-            "someone",
-            vec![Coin::new(1_000_000_000_000, alloyed_denom.clone())],
+        let info = mock_info(moderator, &[]);
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            info.clone(),
+            unmark_corrupted_assets_msg,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::InvalidCorruptedAssetDenom {
+                denom: "nbtc".to_string()
+            }
         );
 
+        // unmark tbtc by non moderator should fail
+        let unmark_corrupted_assets_msg =
+            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedAssets {
+                denoms: vec!["tbtc".to_string()],
+            });
+
         let info = mock_info("someone", &[]);
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            info.clone(),
+            unmark_corrupted_assets_msg,
+        )
+        .unwrap_err();
+
+        assert_eq!(err, ContractError::Unauthorized {});
+
+        // unmark tbtc
+        let unmark_corrupted_assets_msg =
+            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedAssets {
+                denoms: vec!["tbtc".to_string()],
+            });
+
+        let info = mock_info(moderator, &[]);
         execute(
             deps.as_mut(),
             env.clone(),
             info.clone(),
-            force_redeem_corrupted_assets_msg,
+            unmark_corrupted_assets_msg,
         )
         .unwrap();
 
-        assert_eq!(
-            Transmuter::new()
-                .limiters
-                .list_limiters_by_denom(&deps.storage, "tbtc")
-                .unwrap(),
-            vec![]
-        );
+        // query corrupted denoms
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedDenoms {}),
+        )
+        .unwrap();
 
-        // check liquidity
+        let GetCorrruptedDenomsResponse { corrupted_denoms } = from_binary(&res).unwrap();
+
+        assert_eq!(corrupted_denoms, Vec::<String>::new());
+
+        // no liquidity or pool assets changes
         let GetTotalPoolLiquidityResponse {
             total_pool_liquidity,
         } = from_binary(
@@ -1587,13 +1646,21 @@ mod tests {
         assert_eq!(
             total_pool_liquidity,
             vec![
+                Coin::new(998999998498, "tbtc"),
                 Coin::new(998000001998, "nbtc"),
                 Coin::new(999999999998, "stbtc"),
             ]
         );
 
-        assert_clean_change_limiters_by_denom!("nbtc", Transmuter::new().limiters, &deps.storage);
-        assert_clean_change_limiters_by_denom!("stbtc", Transmuter::new().limiters, &deps.storage);
+        // still has all the limiters
+        assert_eq!(
+            Transmuter::new()
+                .limiters
+                .list_limiters_by_denom(&deps.storage, "tbtc")
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     fn increase_block_height(env: &Env, height: u64) -> Env {

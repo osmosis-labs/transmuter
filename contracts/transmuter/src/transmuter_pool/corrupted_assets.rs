@@ -29,6 +29,25 @@ impl TransmuterPool {
         Ok(())
     }
 
+    pub fn unmark_corrupted_assets(&mut self, denoms: &[String]) -> Result<(), ContractError> {
+        // check if denoms are of corrupted assets
+        for uncorrupted_denom in denoms {
+            ensure!(
+                self.is_corrupted_asset(uncorrupted_denom),
+                ContractError::InvalidCorruptedAssetDenom {
+                    denom: uncorrupted_denom.to_string()
+                }
+            );
+
+            self.pool_assets
+                .iter_mut()
+                .find(|asset| asset.denom() == uncorrupted_denom)
+                .map(|asset| asset.unmark_as_corrupted());
+        }
+
+        Ok(())
+    }
+
     pub fn corrupted_assets(&self) -> Vec<&Asset> {
         self.pool_assets
             .iter()
