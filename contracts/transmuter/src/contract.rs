@@ -4,7 +4,7 @@ use crate::{
     alloyed_asset::AlloyedAsset,
     asset::{Asset, AssetConfig},
     ensure_admin_authority, ensure_moderator_authority,
-    error::ContractError,
+    error::{non_empty_input_required, nonpayable, ContractError},
     limiter::{Limiter, LimiterParams, Limiters},
     math::rescale,
     role::Role,
@@ -80,7 +80,9 @@ impl Transmuter<'_> {
         admin: Option<String>,
         moderator: Option<String>,
     ) -> Result<Response, ContractError> {
-        let (deps, env, _info) = ctx;
+        let (deps, env, info) = ctx;
+
+        nonpayable(&info.funds)?;
 
         // store contract version for migration info
         cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
@@ -158,6 +160,8 @@ impl Transmuter<'_> {
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
+        nonpayable(&info.funds)?;
+
         // only admin can rescale normalization factor
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
@@ -191,6 +195,9 @@ impl Transmuter<'_> {
         asset_configs: Vec<AssetConfig>,
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
+
+        non_empty_input_required("asset_configs", &asset_configs)?;
+        nonpayable(&info.funds)?;
 
         // only admin can add new assets
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
@@ -236,6 +243,9 @@ impl Transmuter<'_> {
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
+        non_empty_input_required("denoms", &denoms)?;
+        nonpayable(&info.funds)?;
+
         // only moderator can mark corrupted assets
         ensure_moderator_authority!(info.sender, self.role.moderator, deps.as_ref());
 
@@ -255,6 +265,9 @@ impl Transmuter<'_> {
         denoms: Vec<String>,
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
+
+        non_empty_input_required("denoms", &denoms)?;
+        nonpayable(&info.funds)?;
 
         // only moderator can unmark corrupted assets
         ensure_moderator_authority!(info.sender, self.role.moderator, deps.as_ref());
@@ -277,6 +290,8 @@ impl Transmuter<'_> {
         limiter_params: LimiterParams,
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
+
+        nonpayable(&info.funds)?;
 
         // only admin can register limiter
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
@@ -333,6 +348,8 @@ impl Transmuter<'_> {
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
+        nonpayable(&info.funds)?;
+
         // only admin can deregister limiter
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
@@ -357,6 +374,8 @@ impl Transmuter<'_> {
         boundary_offset: Decimal,
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
+
+        nonpayable(&info.funds)?;
 
         // only admin can set boundary offset
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
@@ -390,6 +409,8 @@ impl Transmuter<'_> {
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
 
+        nonpayable(&info.funds)?;
+
         // only admin can set upper limit
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
@@ -416,6 +437,8 @@ impl Transmuter<'_> {
     ) -> Result<Response, ContractError> {
         let (deps, env, info) = ctx;
 
+        nonpayable(&info.funds)?;
+
         // only admin can set denom metadata
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
@@ -436,6 +459,8 @@ impl Transmuter<'_> {
         active: bool,
     ) -> Result<Response, ContractError> {
         let (deps, _env, info) = ctx;
+
+        nonpayable(&info.funds)?;
 
         // only moderator can set active status
         ensure_moderator_authority!(info.sender, self.role.moderator, deps.as_ref());
@@ -476,6 +501,9 @@ impl Transmuter<'_> {
         tokens_out: Vec<Coin>,
     ) -> Result<Response, ContractError> {
         let (deps, env, info) = ctx;
+
+        // it will deduct shares directly from the sender's account
+        nonpayable(&info.funds)?;
 
         self.swap_alloyed_asset_to_tokens(
             Entrypoint::Exec,
@@ -1295,7 +1323,7 @@ mod tests {
             denoms: corrupted_denoms.clone(),
         });
 
-        let info = mock_info(moderator, &liquidity);
+        let info = mock_info(moderator, &[]);
         let res = execute(
             deps.as_mut(),
             env.clone(),

@@ -14,8 +14,11 @@ pub enum ContractError {
     #[error("{0}")]
     VersionError(#[from] cw2::VersionError),
 
+    #[error("`{field}` must not be empty")]
+    NonEmptyInputRequired { field: String },
+
     #[error("Funds must be empty")]
-    EmptyFundsExpected {},
+    Nonpayable {},
 
     #[error("Funds must contain exactly one token")]
     SingleTokenExpected {},
@@ -203,4 +206,22 @@ pub enum ContractError {
     /// This error should never occur
     #[error("")]
     Never,
+}
+
+pub fn nonpayable(funds: &[Coin]) -> Result<(), ContractError> {
+    if funds.is_empty() {
+        Ok(())
+    } else {
+        Err(ContractError::Nonpayable {})
+    }
+}
+
+pub fn non_empty_input_required<T>(field_name: &str, value: &[T]) -> Result<(), ContractError> {
+    if value.is_empty() {
+        Err(ContractError::NonEmptyInputRequired {
+            field: field_name.to_string(),
+        })
+    } else {
+        Ok(())
+    }
 }
