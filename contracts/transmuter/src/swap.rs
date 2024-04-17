@@ -235,8 +235,32 @@ impl Transmuter<'_> {
                 Ok::<&Addr, ContractError>(&sender)
             }
 
-            // no need to check shares sufficiency since it requires pre-sending shares to the contract
-            BurnTarget::SentFunds => Ok(&env.contract.address),
+            // Burn from the sent funds, funds are guaranteed to be sent via cw-pool mechanism
+            // But to defend in depth, we still check the balance of the contract.
+            // Theoretically, alloyed asset balance should always remain 0 before any tx since
+            // it is always received and burned or minted and sent to another address.
+            // Except for the case where the contract is funded with alloyed assets directly
+            // that is not as part of transmuter mechanism.
+            //
+            // So it's safe to check just check that contract has enough alloyed assets to burn.
+            // Since it's only being a loss for the actor that does not follow the normal mechanism.
+            BurnTarget::SentFunds => {
+                // get alloyed denom contract balance
+                let alloyed_contract_balance = self
+                    .alloyed_asset
+                    .get_balance(deps.as_ref(), &env.contract.address)?;
+
+                // ensure that alloyed contract balance is greater than in_amount
+                ensure!(
+                    alloyed_contract_balance >= in_amount,
+                    ContractError::InsufficientShares {
+                        required: in_amount,
+                        available: alloyed_contract_balance
+                    }
+                );
+
+                Ok(&env.contract.address)
+            }
         }?
         .to_string();
 
@@ -851,8 +875,13 @@ mod tests {
         #[case] sender: Addr,
         #[case] expected_res: Result<Response, ContractError>,
     ) {
+        let alloyed_holder = match burn_target {
+            BurnTarget::SenderAccount => sender.to_string(),
+            BurnTarget::SentFunds => MOCK_CONTRACT_ADDR.to_string(),
+        };
+
         let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
-            sender.to_string().as_str(),
+            alloyed_holder.as_str(),
             &[Coin::new(2000000000000u128, "alloyed")],
         )]);
 

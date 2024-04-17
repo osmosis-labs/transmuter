@@ -176,7 +176,7 @@ mod tests {
         swap::{SwapExactAmountInResponseData, SwapExactAmountOutResponseData},
     };
     use cosmwasm_std::{
-        testing::{mock_dependencies, mock_env, mock_info},
+        testing::{mock_dependencies, mock_env, mock_info, MOCK_CONTRACT_ADDR},
         to_binary, BankMsg, Reply, SubMsgResponse, SubMsgResult,
     };
     use osmosis_std::types::osmosis::tokenfactory::v1beta1::{
@@ -286,6 +286,8 @@ mod tests {
         assert_eq!(res, expected);
 
         // Test swap with token in as alloyed asset
+        deps.querier
+            .update_balance(MOCK_CONTRACT_ADDR, vec![Coin::new(500, alloyed_denom)]);
         let swap_msg = SudoMsg::SwapExactAmountIn {
             sender: user.to_string(),
             token_in: Coin::new(500, alloyed_denom),
@@ -504,6 +506,9 @@ mod tests {
         assert_eq!(res, expected);
 
         // Test swap with token in as alloyed asset
+        deps.querier
+            .update_balance(MOCK_CONTRACT_ADDR, vec![Coin::new(500, alloyed_denom)]);
+
         let swap_msg = SudoMsg::SwapExactAmountOut {
             sender: user.to_string(),
             token_in_denom: alloyed_denom.to_string(),
