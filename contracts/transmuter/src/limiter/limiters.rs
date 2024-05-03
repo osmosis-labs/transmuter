@@ -432,10 +432,15 @@ impl<'a> Limiters<'a> {
 
                 // check if the limiter is a ChangeLimiter
                 match limiter {
-                    Limiter::ChangeLimiter(limiter) => Ok(Limiter::ChangeLimiter(ChangeLimiter {
-                        boundary_offset,
-                        ..limiter
-                    })),
+                    Limiter::ChangeLimiter(limiter) => Ok({
+                        let change_limiter = ChangeLimiter {
+                            boundary_offset,
+                            ..limiter
+                        }
+                        .ensure_boundary_offset_constrain()?;
+
+                        Limiter::ChangeLimiter(change_limiter)
+                    }),
                     Limiter::StaticLimiter(_) => Err(ContractError::WrongLimiterType {
                         expected: "change_limiter".to_string(),
                         actual: "static_limiter".to_string(),
@@ -2639,6 +2644,17 @@ mod tests {
                         actual: "static_limiter".to_string()
                     }
                 );
+
+                let err = limiters
+                    .set_change_limiter_boundary_offset(
+                        &mut deps.storage,
+                        "denomc",
+                        "1h",
+                        Decimal::zero(),
+                    )
+                    .unwrap_err();
+
+                assert_eq!(err, ContractError::ZeroBoundaryOffset {});
             }
 
             #[test]
