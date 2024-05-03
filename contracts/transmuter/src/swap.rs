@@ -534,11 +534,21 @@ impl Transmuter<'_> {
                 (pool, token_out)
             }
             SwapVariant::TokenToToken => {
-                let (_, token_out) = pool.transmute(
+                let (actual_token_in, token_out) = pool.transmute(
                     AmountConstraint::exact_in(token_in.amount),
                     &token_in.denom,
                     token_out_denom,
                 )?;
+
+                // ensure that actual_token_in is equal to token_in
+                ensure_eq!(
+                    token_in,
+                    actual_token_in,
+                    ContractError::InvalidTokenInAmount {
+                        expected: token_in.amount,
+                        actual: actual_token_in.amount
+                    }
+                );
 
                 (pool, token_out)
             }

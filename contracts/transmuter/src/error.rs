@@ -20,9 +20,6 @@ pub enum ContractError {
     #[error("Funds must be empty")]
     Nonpayable {},
 
-    #[error("Funds must contain exactly one token")]
-    SingleTokenExpected {},
-
     #[error("Funds must contain at least one token")]
     AtLeastSingleTokenExpected {},
 
@@ -95,9 +92,6 @@ pub enum ContractError {
 
     #[error("The pool is currently inactive")]
     InactivePool {},
-
-    #[error("Unexpected denom: expected: {expected}, actual: {actual}")]
-    UnexpectedDenom { expected: String, actual: String },
 
     #[error("Duplicated pool asset denom: {denom}")]
     DuplicatedPoolAssetDenom { denom: String },
