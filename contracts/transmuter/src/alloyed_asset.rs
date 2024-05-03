@@ -68,8 +68,15 @@ impl<'a> AlloyedAsset<'a> {
         &self,
         store: &mut dyn Storage,
         factor: Uint128,
-    ) -> StdResult<()> {
-        self.normalization_factor.save(store, &factor)
+    ) -> Result<(), ContractError> {
+        ensure!(
+            factor > Uint128::zero(),
+            ContractError::NormalizationFactorMustBePositive {}
+        );
+
+        self.normalization_factor
+            .save(store, &factor)
+            .map_err(Into::into)
     }
 
     /// calculate the amount of alloyed asset to mint/burn
@@ -298,5 +305,35 @@ mod tests {
         );
 
         assert_eq!(amount.unwrap(), Uint128::from(83u128));
+    }
+
+    #[test]
+    fn test_set_normalization_factor() {
+        let alloyed_assets =
+            AlloyedAsset::new("alloyed_denom", "alloyed_denom_normalization_factor");
+        let mut deps = mock_dependencies();
+
+        let alloyed_denom = "alloyed_denom".to_string();
+        alloyed_assets
+            .set_alloyed_denom(&mut deps.storage, &alloyed_denom)
+            .unwrap();
+
+        let err = alloyed_assets
+            .set_normalization_factor(&mut deps.storage, Uint128::zero())
+            .unwrap_err();
+
+        assert_eq!(err, ContractError::NormalizationFactorMustBePositive {});
+
+        let normaliztion_factor = Uint128::from(100u128);
+        alloyed_assets
+            .set_normalization_factor(&mut deps.storage, normaliztion_factor)
+            .unwrap();
+
+        assert_eq!(
+            alloyed_assets
+                .get_normalization_factor(deps.as_ref().storage)
+                .unwrap(),
+            normaliztion_factor
+        );
     }
 }
