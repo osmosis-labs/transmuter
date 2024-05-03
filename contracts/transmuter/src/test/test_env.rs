@@ -1,11 +1,11 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
-    contract::{ExecMsg, InstantiateMsg, QueryMsg},
+    contract::sv::{ExecMsg, InstantiateMsg, QueryMsg},
     ContractError,
 };
 
-use cosmwasm_std::{to_binary, Coin};
+use cosmwasm_std::{to_json_binary, Coin};
 use osmosis_std::types::{
     cosmos::bank::v1beta1::QueryAllBalancesRequest,
     cosmwasm::wasm::v1::MsgExecuteContractResponse,
@@ -174,7 +174,7 @@ impl<'a> TransmuterContract<'a> {
         let res = cp.create_cosmwasm_pool(
             MsgCreateCosmWasmPool {
                 code_id,
-                instantiate_msg: to_binary(instantiate_msg).unwrap().to_vec(),
+                instantiate_msg: to_json_binary(instantiate_msg).unwrap().to_vec(),
                 sender: signer.address(),
             },
             signer,

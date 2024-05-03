@@ -6,9 +6,10 @@ use osmosis_test_tube::{Account, OsmosisTestApp};
 
 use crate::{
     asset::AssetConfig,
+    contract::sv::{ExecMsg, InstantiateMsg, QueryMsg},
     contract::{
-        ExecMsg, GetShareDenomResponse, GetSharesResponse, GetTotalPoolLiquidityResponse,
-        GetTotalSharesResponse, InstantiateMsg, QueryMsg,
+        GetShareDenomResponse, GetSharesResponse, GetTotalPoolLiquidityResponse,
+        GetTotalSharesResponse,
     },
     test::test_env::{assert_contract_err, TestEnvBuilder},
     ContractError,
@@ -88,7 +89,7 @@ fn test_join_pool_with_single_lp_should_update_shares_and_liquidity_properly() {
 
         let t = TestEnvBuilder::new()
             .with_account("provider", case.funds.clone())
-            .with_instantiate_msg(crate::contract::InstantiateMsg {
+            .with_instantiate_msg(crate::contract::sv::InstantiateMsg {
                 pool_asset_configs: vec![
                     AssetConfig::from_denom_str("denoma"),
                     AssetConfig::from_denom_str("denomb"),

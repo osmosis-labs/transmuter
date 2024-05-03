@@ -3,7 +3,8 @@ use osmosis_test_tube::OsmosisTestApp;
 
 use crate::{
     asset::AssetConfig,
-    contract::{GetShareDenomResponse, GetTotalPoolLiquidityResponse, InstantiateMsg},
+    contract::sv::InstantiateMsg,
+    contract::{GetShareDenomResponse, GetTotalPoolLiquidityResponse},
     test::test_env::{assert_contract_err, TestEnvBuilder},
     ContractError,
 };
@@ -42,7 +43,7 @@ fn test_add_new_assets() {
     let err = t
         .contract
         .execute(
-            &crate::contract::ExecMsg::AddNewAssets {
+            &crate::contract::sv::ExecMsg::AddNewAssets {
                 asset_configs: denoms
                     .iter()
                     .map(|denom| AssetConfig::from_denom_str(denom.as_str()))
@@ -57,7 +58,7 @@ fn test_add_new_assets() {
 
     t.contract
         .execute(
-            &crate::contract::ExecMsg::AddNewAssets {
+            &crate::contract::sv::ExecMsg::AddNewAssets {
                 asset_configs: denoms
                     .iter()
                     .map(|denom| AssetConfig::from_denom_str(denom.as_str()))
@@ -73,7 +74,7 @@ fn test_add_new_assets() {
         total_pool_liquidity,
     } = t
         .contract
-        .query(&crate::contract::QueryMsg::GetTotalPoolLiquidity {})
+        .query(&crate::contract::sv::QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
 
     assert_eq!(
@@ -91,14 +92,14 @@ fn test_add_new_assets() {
         share_denom: alloyed_denom,
     } = t
         .contract
-        .query(&crate::contract::QueryMsg::GetShareDenom {})
+        .query(&crate::contract::sv::QueryMsg::GetShareDenom {})
         .unwrap();
 
     // Attempt to add alloyed_denom as asset, should error
     let err = t
         .contract
         .execute(
-            &crate::contract::ExecMsg::AddNewAssets {
+            &crate::contract::sv::ExecMsg::AddNewAssets {
                 asset_configs: vec![AssetConfig::from_denom_str(alloyed_denom.as_str())],
             },
             &[],

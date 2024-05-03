@@ -171,13 +171,13 @@ mod tests {
     use super::*;
     use crate::{
         asset::AssetConfig,
-        contract::{ContractExecMsg, ExecMsg, InstantiateMsg},
+        contract::sv::{ContractExecMsg, ExecMsg, InstantiateMsg},
         execute, instantiate, reply, sudo,
         swap::{SwapExactAmountInResponseData, SwapExactAmountOutResponseData},
     };
     use cosmwasm_std::{
         testing::{mock_dependencies, mock_env, mock_info, MOCK_CONTRACT_ADDR},
-        to_binary, BankMsg, Reply, SubMsgResponse, SubMsgResult,
+        to_json_binary, BankMsg, Reply, SubMsgResponse, SubMsgResult,
     };
     use osmosis_std::types::osmosis::tokenfactory::v1beta1::{
         MsgBurn, MsgCreateDenomResponse, MsgMint,
@@ -277,7 +277,7 @@ mod tests {
                 amount: vec![Coin::new(500, "whusdc".to_string())],
             })
             .set_data(
-                to_binary(&SwapExactAmountInResponseData {
+                to_json_binary(&SwapExactAmountInResponseData {
                     token_out_amount: Uint128::from(500u128),
                 })
                 .unwrap(),
@@ -310,7 +310,7 @@ mod tests {
                 amount: vec![Coin::new(500, "whusdc".to_string())],
             })
             .set_data(
-                to_binary(&SwapExactAmountInResponseData {
+                to_json_binary(&SwapExactAmountInResponseData {
                     token_out_amount: Uint128::from(500u128),
                 })
                 .unwrap(),
@@ -337,7 +337,7 @@ mod tests {
                 mint_to_address: user.to_string(),
             })
             .set_data(
-                to_binary(&SwapExactAmountInResponseData {
+                to_json_binary(&SwapExactAmountInResponseData {
                     token_out_amount: Uint128::from(500u128),
                 })
                 .unwrap(),
@@ -497,7 +497,7 @@ mod tests {
                 amount: vec![Coin::new(500, "whusdc".to_string())],
             })
             .set_data(
-                to_binary(&SwapExactAmountOutResponseData {
+                to_json_binary(&SwapExactAmountOutResponseData {
                     token_in_amount: Uint128::from(500u128),
                 })
                 .unwrap(),
@@ -531,7 +531,7 @@ mod tests {
                 amount: vec![Coin::new(500, "whusdc".to_string())],
             })
             .set_data(
-                to_binary(&SwapExactAmountOutResponseData {
+                to_json_binary(&SwapExactAmountOutResponseData {
                     token_in_amount: Uint128::from(500u128),
                 })
                 .unwrap(),
@@ -558,7 +558,7 @@ mod tests {
                 mint_to_address: user.to_string(),
             })
             .set_data(
-                to_binary(&SwapExactAmountOutResponseData {
+                to_json_binary(&SwapExactAmountOutResponseData {
                     token_in_amount: Uint128::from(500u128),
                 })
                 .unwrap(),

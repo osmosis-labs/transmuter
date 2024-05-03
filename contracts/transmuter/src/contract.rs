@@ -13,8 +13,8 @@ use crate::{
 };
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_ne, Addr, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Reply, Response,
-    StdError, Storage, SubMsg, Uint128,
+    ensure, ensure_ne, Addr, Coin, Decimal, DepsMut, Env, Reply, Response, StdError, Storage,
+    SubMsg, Uint128,
 };
 
 use cw_storage_plus::Item;
@@ -23,7 +23,10 @@ use osmosis_std::types::{
     osmosis::tokenfactory::v1beta1::{MsgCreateDenom, MsgCreateDenomResponse, MsgSetDenomMetadata},
 };
 
-use sylvia::contract;
+use sylvia::{
+    contract,
+    types::{ExecCtx, InstantiateCtx, QueryCtx},
+};
 
 /// version info for migration
 pub const CONTRACT_NAME: &str = "crates.io:transmuter";
@@ -53,7 +56,7 @@ pub mod key {
 }
 
 #[contract]
-#[error(ContractError)]
+#[sv::error(ContractError)]
 impl Transmuter<'_> {
     /// Create a Transmuter instance.
     pub const fn new() -> Self {
@@ -70,18 +73,16 @@ impl Transmuter<'_> {
     }
 
     /// Instantiate the contract.
-    #[msg(instantiate)]
+    #[sv::msg(instantiate)]
     pub fn instantiate(
         &self,
-        ctx: (DepsMut, Env, MessageInfo),
+        InstantiateCtx { deps, env, info }: InstantiateCtx,
         pool_asset_configs: Vec<AssetConfig>,
         alloyed_asset_subdenom: String,
         alloyed_asset_normalization_factor: Uint128,
         admin: Option<String>,
         moderator: String,
     ) -> Result<Response, ContractError> {
-        let (deps, env, info) = ctx;
-
         nonpayable(&info.funds)?;
 
         // store contract version for migration info
@@ -149,15 +150,13 @@ impl Transmuter<'_> {
 
     // === executes ===
 
-    #[msg(exec)]
+    #[sv::msg(exec)]
     fn rescale_normalization_factor(
         &self,
-        ctx: (DepsMut, Env, MessageInfo),
+        ExecCtx { deps, env: _, info }: ExecCtx,
         numerator: Uint128,
         denominator: Uint128,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
-
         nonpayable(&info.funds)?;
 
         // only admin can rescale normalization factor
@@ -186,14 +185,12 @@ impl Transmuter<'_> {
             .add_attribute("denominator", denominator))
     }
 
-    #[msg(exec)]
+    #[sv::msg(exec)]
     fn add_new_assets(
         &self,
-        ctx: (DepsMut, Env, MessageInfo),
+        ExecCtx { deps, env: _, info }: ExecCtx,
         asset_configs: Vec<AssetConfig>,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
-
         non_empty_input_required("asset_configs", &asset_configs)?;
         nonpayable(&info.funds)?;
 
@@ -233,14 +230,12 @@ impl Transmuter<'_> {
     /// both in terms of amount and weight.
     /// The only way to redeem other pool asset, is to also redeem the corrupted asset
     /// with the same pool-defnined value.
-    #[msg(exec)]
+    #[sv::msg(exec)]
     fn mark_corrupted_assets(
         &self,
-        ctx: (DepsMut, Env, MessageInfo),
+        ExecCtx { deps, env: _, info }: ExecCtx,
         denoms: Vec<String>,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
-
         non_empty_input_required("denoms", &denoms)?;
         nonpayable(&info.funds)?;
 
@@ -256,14 +251,12 @@ impl Transmuter<'_> {
         Ok(Response::new().add_attribute("method", "mark_corrupted_assets"))
     }
 
-    #[msg(exec)]
+    #[sv::msg(exec)]
     fn unmark_corrupted_assets(
         &self,
-        ctx: (DepsMut, Env, MessageInfo),
+        ExecCtx { deps, env: _, info }: ExecCtx,
         denoms: Vec<String>,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
-
         non_empty_input_required("denoms", &denoms)?;
         nonpayable(&info.funds)?;
 
@@ -279,16 +272,14 @@ impl Transmuter<'_> {
         Ok(Response::new().add_attribute("method", "unmark_corrupted_assets"))
     }
 
-    #[msg(exec)]
+    #[sv::msg(exec)]
     fn register_limiter(
         &self,
-        ctx: (DepsMut, Env, MessageInfo),
+        ExecCtx { deps, env: _, info }: ExecCtx,
         denom: String,
         label: String,
         limiter_params: LimiterParams,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
-
         nonpayable(&info.funds)?;
 
         // only admin can register limiter
@@ -337,15 +328,13 @@ impl Transmuter<'_> {
             .add_attributes(limiter_attrs))
     }
 
-    #[msg(exec)]
+    #[sv::msg(exec)]
     fn deregister_limiter(
         &self,
-        ctx: (DepsMut, Env, MessageInfo),
+        ExecCtx { deps, env: _, info }: ExecCtx,
         denom: String,
         label: String,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
-
         nonpayable(&info.funds)?;
 
         // only admin can deregister limiter
@@ -363,16 +352,14 @@ impl Transmuter<'_> {
         Ok(Response::new().add_attributes(attrs))
     }
 
-    #[msg(exec)]
+    #[sv::msg(exec)]
     fn set_change_limiter_boundary_offset(
         &self,
-        ctx: (DepsMut, Env, MessageInfo),
+        ExecCtx { deps, env: _, info }: ExecCtx,
         denom: String,
         label: String,
         boundary_offset: Decimal,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
-
         nonpayable(&info.funds)?;
 
         // only admin can set boundary offset
@@ -397,16 +384,14 @@ impl Transmuter<'_> {
         Ok(Response::new().add_attributes(attrs))
     }
 
-    #[msg(exec)]
+    #[sv::msg(exec)]
     fn set_static_limiter_upper_limit(
         &self,
-        ctx: (DepsMut, Env, MessageInfo),
+        ExecCtx { deps, env: _, info }: ExecCtx,
         denom: String,
         label: String,
         upper_limit: Decimal,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
-
         nonpayable(&info.funds)?;
 
         // only admin can set upper limit
@@ -427,14 +412,12 @@ impl Transmuter<'_> {
         Ok(Response::new().add_attributes(attrs))
     }
 
-    #[msg(exec)]
+    #[sv::msg(exec)]
     pub fn set_alloyed_denom_metadata(
         &self,
-        ctx: (DepsMut, Env, MessageInfo),
+        ExecCtx { deps, env, info }: ExecCtx,
         metadata: Metadata,
     ) -> Result<Response, ContractError> {
-        let (deps, env, info) = ctx;
-
         nonpayable(&info.funds)?;
 
         // only admin can set denom metadata
@@ -450,14 +433,12 @@ impl Transmuter<'_> {
             .add_message(msg_set_denom_metadata))
     }
 
-    #[msg(exec)]
+    #[sv::msg(exec)]
     fn set_active_status(
         &self,
-        ctx: (DepsMut, Env, MessageInfo),
+        ExecCtx { deps, env: _, info }: ExecCtx,
         active: bool,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
-
         nonpayable(&info.funds)?;
 
         // only moderator can set active status
@@ -490,9 +471,11 @@ impl Transmuter<'_> {
 
     /// Join pool with tokens that exist in the pool.
     /// Token used to join pool is sent to the contract via `funds` in `MsgExecuteContract`.
-    #[msg(exec)]
-    pub fn join_pool(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
-        let (deps, env, info) = ctx;
+    #[sv::msg(exec)]
+    pub fn join_pool(
+        &self,
+        ExecCtx { deps, env, info }: ExecCtx,
+    ) -> Result<Response, ContractError> {
         self.swap_tokens_to_alloyed_asset(
             Entrypoint::Exec,
             SwapToAlloyedConstraint::ExactIn {
@@ -509,14 +492,12 @@ impl Transmuter<'_> {
     /// Exit pool with `tokens_out` amount of tokens.
     /// As long as the sender has enough shares, the contract will send `tokens_out` amount of tokens to the sender.
     /// The amount of shares will be deducted from the sender's shares.
-    #[msg(exec)]
+    #[sv::msg(exec)]
     pub fn exit_pool(
         &self,
-        ctx: (DepsMut, Env, MessageInfo),
+        ExecCtx { deps, env, info }: ExecCtx,
         tokens_out: Vec<Coin>,
     ) -> Result<Response, ContractError> {
-        let (deps, env, info) = ctx;
-
         // it will deduct shares directly from the sender's account
         nonpayable(&info.funds)?;
 
@@ -536,13 +517,11 @@ impl Transmuter<'_> {
 
     // === queries ===
 
-    #[msg(query)]
+    #[sv::msg(query)]
     fn list_asset_configs(
         &self,
-        ctx: (Deps, Env),
+        QueryCtx { deps, env: _ }: QueryCtx,
     ) -> Result<ListAssetConfigsResponse, ContractError> {
-        let (deps, _env) = ctx;
-
         let pool = self.pool.load(deps.storage)?;
         let alloyed_asset_config = AssetConfig {
             denom: self.alloyed_asset.get_alloyed_denom(deps.storage)?,
@@ -559,22 +538,22 @@ impl Transmuter<'_> {
         })
     }
 
-    #[msg(query)]
-    fn list_limiters(&self, ctx: (Deps, Env)) -> Result<ListLimitersResponse, ContractError> {
-        let (deps, _env) = ctx;
-
+    #[sv::msg(query)]
+    fn list_limiters(
+        &self,
+        QueryCtx { deps, env: _ }: QueryCtx,
+    ) -> Result<ListLimitersResponse, ContractError> {
         let limiters = self.limiters.list_limiters(deps.storage)?;
 
         Ok(ListLimitersResponse { limiters })
     }
 
-    #[msg(query)]
+    #[sv::msg(query)]
     pub fn get_shares(
         &self,
-        ctx: (Deps, Env),
+        QueryCtx { deps, env: _ }: QueryCtx,
         address: String,
     ) -> Result<GetSharesResponse, ContractError> {
-        let (deps, _env) = ctx;
         Ok(GetSharesResponse {
             shares: self
                 .alloyed_asset
@@ -582,49 +561,45 @@ impl Transmuter<'_> {
         })
     }
 
-    #[msg(query)]
+    #[sv::msg(query)]
     pub(crate) fn get_share_denom(
         &self,
-        ctx: (Deps, Env),
+        QueryCtx { deps, env: _ }: QueryCtx,
     ) -> Result<GetShareDenomResponse, ContractError> {
-        let (deps, _env) = ctx;
         Ok(GetShareDenomResponse {
             share_denom: self.alloyed_asset.get_alloyed_denom(deps.storage)?,
         })
     }
 
-    #[msg(query)]
-    pub(crate) fn get_swap_fee(
-        &self,
-        _ctx: (Deps, Env),
-    ) -> Result<GetSwapFeeResponse, ContractError> {
+    #[sv::msg(query)]
+    pub(crate) fn get_swap_fee(&self, _ctx: QueryCtx) -> Result<GetSwapFeeResponse, ContractError> {
         Ok(GetSwapFeeResponse { swap_fee: SWAP_FEE })
     }
 
-    #[msg(query)]
-    pub(crate) fn is_active(&self, ctx: (Deps, Env)) -> Result<IsActiveResponse, ContractError> {
-        let (deps, _env) = ctx;
+    #[sv::msg(query)]
+    pub(crate) fn is_active(
+        &self,
+        QueryCtx { deps, env: _ }: QueryCtx,
+    ) -> Result<IsActiveResponse, ContractError> {
         Ok(IsActiveResponse {
             is_active: self.active_status.load(deps.storage)?,
         })
     }
 
-    #[msg(query)]
+    #[sv::msg(query)]
     pub(crate) fn get_total_shares(
         &self,
-        ctx: (Deps, Env),
+        QueryCtx { deps, env: _ }: QueryCtx,
     ) -> Result<GetTotalSharesResponse, ContractError> {
-        let (deps, _env) = ctx;
         let total_shares = self.alloyed_asset.get_total_supply(deps)?;
         Ok(GetTotalSharesResponse { total_shares })
     }
 
-    #[msg(query)]
+    #[sv::msg(query)]
     pub(crate) fn get_total_pool_liquidity(
         &self,
-        ctx: (Deps, Env),
+        QueryCtx { deps, env: _ }: QueryCtx,
     ) -> Result<GetTotalPoolLiquidityResponse, ContractError> {
-        let (deps, _env) = ctx;
         let pool = self.pool.load(deps.storage)?;
 
         Ok(GetTotalPoolLiquidityResponse {
@@ -632,15 +607,13 @@ impl Transmuter<'_> {
         })
     }
 
-    #[msg(query)]
+    #[sv::msg(query)]
     pub(crate) fn spot_price(
         &self,
-        ctx: (Deps, Env),
+        QueryCtx { deps, env: _ }: QueryCtx,
         quote_asset_denom: String,
         base_asset_denom: String,
     ) -> Result<SpotPriceResponse, ContractError> {
-        let (deps, _env) = ctx;
-
         // ensure that it's not the same denom
         ensure!(
             quote_asset_denom != base_asset_denom,
@@ -690,41 +663,39 @@ impl Transmuter<'_> {
         })
     }
 
-    #[msg(query)]
+    #[sv::msg(query)]
     pub(crate) fn calc_out_amt_given_in(
         &self,
-        ctx: (Deps, Env),
+        QueryCtx { deps, env: _ }: QueryCtx,
         token_in: Coin,
         token_out_denom: String,
         swap_fee: Decimal,
     ) -> Result<CalcOutAmtGivenInResponse, ContractError> {
         self.ensure_valid_swap_fee(swap_fee)?;
-        let (_pool, token_out) = self.out_amt_given_in(ctx.0, token_in, &token_out_denom)?;
+        let (_pool, token_out) = self.out_amt_given_in(deps, token_in, &token_out_denom)?;
 
         Ok(CalcOutAmtGivenInResponse { token_out })
     }
 
-    #[msg(query)]
+    #[sv::msg(query)]
     pub(crate) fn calc_in_amt_given_out(
         &self,
-        ctx: (Deps, Env),
+        QueryCtx { deps, env: _ }: QueryCtx,
         token_out: Coin,
         token_in_denom: String,
         swap_fee: Decimal,
     ) -> Result<CalcInAmtGivenOutResponse, ContractError> {
         self.ensure_valid_swap_fee(swap_fee)?;
-        let (_pool, token_in) = self.in_amt_given_out(ctx.0, token_out, token_in_denom)?;
+        let (_pool, token_in) = self.in_amt_given_out(deps, token_out, token_in_denom)?;
 
         Ok(CalcInAmtGivenOutResponse { token_in })
     }
 
-    #[msg(query)]
+    #[sv::msg(query)]
     pub(crate) fn get_corrupted_denoms(
         &self,
-        ctx: (Deps, Env),
+        QueryCtx { deps, env: _ }: QueryCtx,
     ) -> Result<GetCorrruptedDenomsResponse, ContractError> {
-        let (deps, _env) = ctx;
-
         let pool = self.pool.load(deps.storage)?;
         let corrupted_denoms = pool
             .corrupted_assets()
@@ -737,14 +708,12 @@ impl Transmuter<'_> {
 
     // --- admin ---
 
-    #[msg(exec)]
+    #[sv::msg(exec)]
     pub fn transfer_admin(
         &self,
-        ctx: (DepsMut, Env, MessageInfo),
+        ExecCtx { deps, env: _, info }: ExecCtx,
         candidate: String,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
-
         let candidate_addr = deps.api.addr_validate(&candidate)?;
         self.role
             .admin
@@ -755,31 +724,31 @@ impl Transmuter<'_> {
             .add_attribute("candidate", candidate))
     }
 
-    #[msg(exec)]
+    #[sv::msg(exec)]
     pub fn cancel_admin_transfer(
         &self,
-        ctx: (DepsMut, Env, MessageInfo),
+        ExecCtx { deps, env: _, info }: ExecCtx,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
         self.role.admin.cancel_transfer(deps, info.sender)?;
 
         Ok(Response::new().add_attribute("method", "cancel_admin_transfer"))
     }
 
-    #[msg(exec)]
+    #[sv::msg(exec)]
     pub fn reject_admin_transfer(
         &self,
-        ctx: (DepsMut, Env, MessageInfo),
+        ExecCtx { deps, env: _, info }: ExecCtx,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
         self.role.admin.reject_transfer(deps, info.sender)?;
 
         Ok(Response::new().add_attribute("method", "reject_admin_transfer"))
     }
 
-    #[msg(exec)]
-    pub fn claim_admin(&self, ctx: (DepsMut, Env, MessageInfo)) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
+    #[sv::msg(exec)]
+    pub fn claim_admin(
+        &self,
+        ExecCtx { deps, env: _, info }: ExecCtx,
+    ) -> Result<Response, ContractError> {
         let sender_string = info.sender.to_string();
         self.role.admin.claim(deps, info.sender)?;
 
@@ -788,46 +757,43 @@ impl Transmuter<'_> {
             .add_attribute("new_admin", sender_string))
     }
 
-    #[msg(exec)]
+    #[sv::msg(exec)]
     pub fn renounce_adminship(
         &self,
-        ctx: (DepsMut, Env, MessageInfo),
+        ExecCtx { deps, env: _, info }: ExecCtx,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
         self.role.admin.renounce(deps, info.sender)?;
 
         Ok(Response::new().add_attribute("method", "renounce_adminship"))
     }
 
-    #[msg(query)]
-    fn get_admin(&self, ctx: (Deps, Env)) -> Result<GetAdminResponse, ContractError> {
-        let (deps, _env) = ctx;
-
+    #[sv::msg(query)]
+    fn get_admin(
+        &self,
+        QueryCtx { deps, env: _ }: QueryCtx,
+    ) -> Result<GetAdminResponse, ContractError> {
         Ok(GetAdminResponse {
             admin: self.role.admin.current(deps)?,
         })
     }
 
-    #[msg(query)]
+    #[sv::msg(query)]
     fn get_admin_candidate(
         &self,
-        ctx: (Deps, Env),
+        QueryCtx { deps, env: _ }: QueryCtx,
     ) -> Result<GetAdminCandidateResponse, ContractError> {
-        let (deps, _env) = ctx;
-
         Ok(GetAdminCandidateResponse {
             admin_candidate: self.role.admin.candidate(deps)?,
         })
     }
 
     // -- moderator --
-    #[msg(exec)]
+    #[sv::msg(exec)]
     pub fn assign_moderator(
         &self,
-        ctx: (DepsMut, Env, MessageInfo),
+        ExecCtx { deps, env: _, info }: ExecCtx,
         address: String,
     ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
         let moderator_address = deps.api.addr_validate(&address)?;
 
         self.role
@@ -838,10 +804,11 @@ impl Transmuter<'_> {
             .add_attribute("moderator", address))
     }
 
-    #[msg(query)]
-    fn get_moderator(&self, ctx: (Deps, Env)) -> Result<GetModeratorResponse, ContractError> {
-        let (deps, _env) = ctx;
-
+    #[sv::msg(query)]
+    fn get_moderator(
+        &self,
+        QueryCtx { deps, env: _ }: QueryCtx,
+    ) -> Result<GetModeratorResponse, ContractError> {
         Ok(GetModeratorResponse {
             moderator: self.role.moderator.get(deps)?,
         })
@@ -925,6 +892,7 @@ pub struct GetModeratorResponse {
 
 #[cfg(test)]
 mod tests {
+    use super::sv::*;
     use super::*;
     use crate::limiter::{ChangeLimiter, StaticLimiter, WindowConfig};
     use crate::sudo::SudoMsg;
@@ -932,7 +900,7 @@ mod tests {
 
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
     use cosmwasm_std::{
-        attr, from_binary, BankMsg, BlockInfo, Storage, SubMsgResponse, SubMsgResult, Uint64,
+        attr, from_json, BankMsg, BlockInfo, Storage, SubMsgResponse, SubMsgResult, Uint64,
     };
     use osmosis_std::types::osmosis::tokenfactory::v1beta1::MsgBurn;
 
@@ -1132,7 +1100,7 @@ mod tests {
         .unwrap();
         let GetTotalPoolLiquidityResponse {
             total_pool_liquidity,
-        } = from_binary(&res).unwrap();
+        } = from_json(res).unwrap();
 
         assert_eq!(
             total_pool_liquidity,
@@ -1241,7 +1209,7 @@ mod tests {
             ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedDenoms {}),
         )
         .unwrap();
-        let GetCorrruptedDenomsResponse { corrupted_denoms } = from_binary(&res).unwrap();
+        let GetCorrruptedDenomsResponse { corrupted_denoms } = from_json(res).unwrap();
 
         assert_eq!(corrupted_denoms, Vec::<String>::new());
 
@@ -1254,7 +1222,7 @@ mod tests {
         .unwrap();
         let GetTotalPoolLiquidityResponse {
             total_pool_liquidity,
-        } = from_binary(&res).unwrap();
+        } = from_json(res).unwrap();
 
         assert_eq!(
             total_pool_liquidity,
@@ -1345,7 +1313,7 @@ mod tests {
             ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedDenoms {}),
         )
         .unwrap();
-        let res: GetCorrruptedDenomsResponse = from_binary(&res).unwrap();
+        let res: GetCorrruptedDenomsResponse = from_json(res).unwrap();
 
         assert_eq!(res.corrupted_denoms, corrupted_denoms);
 
@@ -1358,7 +1326,7 @@ mod tests {
         .unwrap();
         let GetTotalPoolLiquidityResponse {
             total_pool_liquidity,
-        } = from_binary(&res).unwrap();
+        } = from_json(res).unwrap();
 
         assert_eq!(
             total_pool_liquidity,
@@ -1565,8 +1533,8 @@ mod tests {
         // check liquidity
         let GetTotalPoolLiquidityResponse {
             total_pool_liquidity,
-        } = from_binary(
-            &query(
+        } = from_json(
+            query(
                 deps.as_ref(),
                 env.clone(),
                 ContractQueryMsg::Transmuter(QueryMsg::GetTotalPoolLiquidity {}),
@@ -1658,15 +1626,15 @@ mod tests {
         )
         .unwrap();
 
-        let GetCorrruptedDenomsResponse { corrupted_denoms } = from_binary(&res).unwrap();
+        let GetCorrruptedDenomsResponse { corrupted_denoms } = from_json(res).unwrap();
 
         assert_eq!(corrupted_denoms, Vec::<String>::new());
 
         // no liquidity or pool assets changes
         let GetTotalPoolLiquidityResponse {
             total_pool_liquidity,
-        } = from_binary(
-            &query(
+        } = from_json(
+            query(
                 deps.as_ref(),
                 env.clone(),
                 ContractQueryMsg::Transmuter(QueryMsg::GetTotalPoolLiquidity {}),
@@ -1761,7 +1729,7 @@ mod tests {
             ContractQueryMsg::Transmuter(QueryMsg::IsActive {}),
         )
         .unwrap();
-        let active_status: IsActiveResponse = from_binary(&res).unwrap();
+        let active_status: IsActiveResponse = from_json(res).unwrap();
         assert!(active_status.is_active);
 
         // Attempt to set the active status by a non-admin user.
@@ -1788,7 +1756,7 @@ mod tests {
             ContractQueryMsg::Transmuter(QueryMsg::IsActive {}),
         )
         .unwrap();
-        let active_status: IsActiveResponse = from_binary(&res).unwrap();
+        let active_status: IsActiveResponse = from_json(res).unwrap();
         assert!(!active_status.is_active);
 
         // try to set the active status to false again
@@ -1852,7 +1820,7 @@ mod tests {
             ContractQueryMsg::Transmuter(QueryMsg::IsActive {}),
         )
         .unwrap();
-        let active_status: IsActiveResponse = from_binary(&res).unwrap();
+        let active_status: IsActiveResponse = from_json(res).unwrap();
         assert!(active_status.is_active);
 
         // Test that JoinPool is active when active status is true
@@ -1900,7 +1868,7 @@ mod tests {
             ContractQueryMsg::Transmuter(QueryMsg::IsActive {}),
         )
         .unwrap();
-        let active_status: IsActiveResponse = from_binary(&res).unwrap();
+        let active_status: IsActiveResponse = from_json(res).unwrap();
         assert!(!active_status.is_active);
 
         // Set the active status back to true through sudo
@@ -1915,7 +1883,7 @@ mod tests {
             ContractQueryMsg::Transmuter(QueryMsg::IsActive {}),
         )
         .unwrap();
-        let active_status: IsActiveResponse = from_binary(&res).unwrap();
+        let active_status: IsActiveResponse = from_json(res).unwrap();
         assert!(active_status.is_active);
 
         // try to set active status to true when it's already true
@@ -1968,7 +1936,7 @@ mod tests {
             ContractQueryMsg::Transmuter(QueryMsg::GetAdminCandidate {}),
         )
         .unwrap();
-        let admin_candidate: GetAdminCandidateResponse = from_binary(&res).unwrap();
+        let admin_candidate: GetAdminCandidateResponse = from_json(res).unwrap();
         assert_eq!(
             admin_candidate.admin_candidate.unwrap().as_str(),
             canceling_candidate
@@ -1993,7 +1961,7 @@ mod tests {
             ContractQueryMsg::Transmuter(QueryMsg::GetAdminCandidate {}),
         )
         .unwrap();
-        let admin_candidate: GetAdminCandidateResponse = from_binary(&res).unwrap();
+        let admin_candidate: GetAdminCandidateResponse = from_json(res).unwrap();
         assert_eq!(admin_candidate.admin_candidate, None);
 
         // Transfer admin rights to the rejecting candidate
@@ -2009,7 +1977,7 @@ mod tests {
             ContractQueryMsg::Transmuter(QueryMsg::GetAdminCandidate {}),
         )
         .unwrap();
-        let admin_candidate: GetAdminCandidateResponse = from_binary(&res).unwrap();
+        let admin_candidate: GetAdminCandidateResponse = from_json(res).unwrap();
         assert_eq!(
             admin_candidate.admin_candidate.unwrap().as_str(),
             rejecting_candidate
@@ -2034,7 +2002,7 @@ mod tests {
             ContractQueryMsg::Transmuter(QueryMsg::GetAdminCandidate {}),
         )
         .unwrap();
-        let admin_candidate: GetAdminCandidateResponse = from_binary(&res).unwrap();
+        let admin_candidate: GetAdminCandidateResponse = from_json(res).unwrap();
         assert_eq!(admin_candidate.admin_candidate, None);
 
         // Transfer admin rights to the candidate
@@ -2050,7 +2018,7 @@ mod tests {
             ContractQueryMsg::Transmuter(QueryMsg::GetAdminCandidate {}),
         )
         .unwrap();
-        let admin_candidate: GetAdminCandidateResponse = from_binary(&res).unwrap();
+        let admin_candidate: GetAdminCandidateResponse = from_json(res).unwrap();
         assert_eq!(admin_candidate.admin_candidate.unwrap().as_str(), candidate);
 
         // Claim admin rights by the candidate
@@ -2070,7 +2038,7 @@ mod tests {
             ContractQueryMsg::Transmuter(QueryMsg::GetAdmin {}),
         )
         .unwrap();
-        let admin: GetAdminResponse = from_binary(&res).unwrap();
+        let admin: GetAdminResponse = from_json(res).unwrap();
         assert_eq!(admin.admin.as_str(), candidate);
 
         // Renounce admin rights
@@ -2125,7 +2093,7 @@ mod tests {
             ContractQueryMsg::Transmuter(QueryMsg::GetModerator {}),
         )
         .unwrap();
-        let moderator_response: GetModeratorResponse = from_binary(&res).unwrap();
+        let moderator_response: GetModeratorResponse = from_json(res).unwrap();
         assert_eq!(moderator_response.moderator, moderator);
 
         let new_moderator = "new_moderator";
@@ -2161,7 +2129,7 @@ mod tests {
             ContractQueryMsg::Transmuter(QueryMsg::GetModerator {}),
         )
         .unwrap();
-        let moderator_response: GetModeratorResponse = from_binary(&res).unwrap();
+        let moderator_response: GetModeratorResponse = from_json(res).unwrap();
         assert_eq!(moderator_response.moderator, new_moderator);
     }
 
@@ -2284,7 +2252,7 @@ mod tests {
         // Query the list of limiters
         let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
         let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListLimitersResponse = from_binary(&res).unwrap();
+        let limiters: ListLimitersResponse = from_json(res).unwrap();
 
         assert_eq!(
             limiters.limiters,
@@ -2330,7 +2298,7 @@ mod tests {
         // Query the list of limiters
         let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
         let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListLimitersResponse = from_binary(&res).unwrap();
+        let limiters: ListLimitersResponse = from_json(res).unwrap();
 
         assert_eq!(
             limiters.limiters,
@@ -2412,7 +2380,7 @@ mod tests {
         // Query the list of limiters
         let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
         let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListLimitersResponse = from_binary(&res).unwrap();
+        let limiters: ListLimitersResponse = from_json(res).unwrap();
 
         assert_eq!(
             limiters.limiters,
@@ -2491,7 +2459,7 @@ mod tests {
         // Query the list of limiters
         let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
         let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListLimitersResponse = from_binary(&res).unwrap();
+        let limiters: ListLimitersResponse = from_json(res).unwrap();
 
         assert_eq!(
             limiters.limiters,
@@ -2591,7 +2559,7 @@ mod tests {
         // Query the list of limiters
         let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
         let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListLimitersResponse = from_binary(&res).unwrap();
+        let limiters: ListLimitersResponse = from_json(res).unwrap();
 
         assert_eq!(
             limiters.limiters,
@@ -2738,8 +2706,8 @@ mod tests {
         // Check pool asset
         let GetTotalPoolLiquidityResponse {
             total_pool_liquidity,
-        } = from_binary(
-            &query(
+        } = from_json(
+            query(
                 deps.as_ref(),
                 env,
                 ContractQueryMsg::Transmuter(QueryMsg::GetTotalPoolLiquidity {}),
@@ -2948,7 +2916,7 @@ mod tests {
             }),
         )
         .unwrap();
-        let shares: GetSharesResponse = from_binary(&res).unwrap();
+        let shares: GetSharesResponse = from_json(res).unwrap();
         assert_eq!(shares.shares.u128(), 2000u128);
 
         // Query the total shares
@@ -2958,7 +2926,7 @@ mod tests {
             ContractQueryMsg::Transmuter(QueryMsg::GetTotalShares {}),
         )
         .unwrap();
-        let total_shares: GetTotalSharesResponse = from_binary(&res).unwrap();
+        let total_shares: GetTotalSharesResponse = from_json(res).unwrap();
         assert_eq!(total_shares.total_shares.u128(), 2000u128);
 
         // Query the total pool liquidity
@@ -2968,7 +2936,7 @@ mod tests {
             ContractQueryMsg::Transmuter(QueryMsg::GetTotalPoolLiquidity {}),
         )
         .unwrap();
-        let total_pool_liquidity: GetTotalPoolLiquidityResponse = from_binary(&res).unwrap();
+        let total_pool_liquidity: GetTotalPoolLiquidityResponse = from_json(res).unwrap();
         assert_eq!(
             total_pool_liquidity.total_pool_liquidity,
             vec![Coin::new(1000, "uosmo"), Coin::new(1000, "uion")]
@@ -2996,7 +2964,7 @@ mod tests {
         )
         .unwrap();
 
-        let total_shares: GetTotalSharesResponse = from_binary(&res).unwrap();
+        let total_shares: GetTotalSharesResponse = from_json(res).unwrap();
 
         assert_eq!(total_shares.total_shares.u128(), 3000u128);
 
@@ -3008,7 +2976,7 @@ mod tests {
         )
         .unwrap();
 
-        let total_pool_liquidity: GetTotalPoolLiquidityResponse = from_binary(&res).unwrap();
+        let total_pool_liquidity: GetTotalPoolLiquidityResponse = from_json(res).unwrap();
 
         assert_eq!(
             total_pool_liquidity.total_pool_liquidity,
@@ -3070,7 +3038,7 @@ mod tests {
         )
         .unwrap();
 
-        let share_denom: GetShareDenomResponse = from_binary(&res).unwrap();
+        let share_denom: GetShareDenomResponse = from_json(res).unwrap();
         assert_eq!(share_denom.share_denom, "usomoion");
     }
 
@@ -3184,7 +3152,7 @@ mod tests {
         )
         .unwrap();
 
-        let spot_price: SpotPriceResponse = from_binary(&res).unwrap();
+        let spot_price: SpotPriceResponse = from_json(res).unwrap();
         assert_eq!(spot_price.spot_price, Decimal::one());
 
         // Test spot price with alloyed denom
@@ -3198,7 +3166,7 @@ mod tests {
         )
         .unwrap();
 
-        let spot_price: SpotPriceResponse = from_binary(&res).unwrap();
+        let spot_price: SpotPriceResponse = from_json(res).unwrap();
         assert_eq!(spot_price.spot_price, Decimal::one());
 
         let res = query(
@@ -3211,7 +3179,7 @@ mod tests {
         )
         .unwrap();
 
-        let spot_price: SpotPriceResponse = from_binary(&res).unwrap();
+        let spot_price: SpotPriceResponse = from_json(res).unwrap();
         assert_eq!(spot_price.spot_price, Decimal::one());
     }
 
@@ -3423,7 +3391,7 @@ mod tests {
                     swap_fee,
                 }),
             )
-            .map(|value| from_binary(&value).unwrap());
+            .map(|value| from_json(value).unwrap());
 
             assert_eq!(res, expected, "case: {}", name);
         }
@@ -3628,7 +3596,7 @@ mod tests {
                     swap_fee,
                 }),
             )
-            .map(|value| from_binary(&value).unwrap());
+            .map(|value| from_json(value).unwrap());
 
             assert_eq!(res, expected, "case: {}", name);
         }
@@ -3688,7 +3656,7 @@ mod tests {
             env.clone(),
             ContractQueryMsg::Transmuter(QueryMsg::ListAssetConfigs {}),
         )
-        .map(|value| from_binary(&value).unwrap());
+        .map(|value| from_json(value).unwrap());
 
         assert_eq!(
             res,
@@ -3724,7 +3692,7 @@ mod tests {
             env.clone(),
             ContractQueryMsg::Transmuter(QueryMsg::ListAssetConfigs {}),
         )
-        .map(|value| from_binary(&value).unwrap());
+        .map(|value| from_json(value).unwrap());
 
         assert_eq!(
             res,
@@ -3766,7 +3734,7 @@ mod tests {
             env.clone(),
             ContractQueryMsg::Transmuter(QueryMsg::ListAssetConfigs {}),
         )
-        .map(|value| from_binary(&value).unwrap());
+        .map(|value| from_json(value).unwrap());
 
         assert_eq!(
             res,

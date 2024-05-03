@@ -1,8 +1,10 @@
 use crate::{
     asset::AssetConfig,
+    contract::sv::InstantiateMsg,
+    contract::sv::QueryMsg,
     contract::{
         GetShareDenomResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse,
-        InstantiateMsg, IsActiveResponse, QueryMsg,
+        IsActiveResponse,
     },
 };
 use cosmwasm_std::{Coin, Uint128};

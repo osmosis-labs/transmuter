@@ -2,9 +2,11 @@ use std::{str::FromStr, vec};
 
 use crate::{
     asset::AssetConfig,
+    contract::sv::QueryMsg,
+    contract::sv::{ExecMsg, InstantiateMsg},
     contract::{
-        ExecMsg, GetShareDenomResponse, GetSharesResponse, GetTotalPoolLiquidityResponse,
-        GetTotalSharesResponse, InstantiateMsg, ListLimitersResponse, QueryMsg,
+        GetShareDenomResponse, GetSharesResponse, GetTotalPoolLiquidityResponse,
+        GetTotalSharesResponse, ListLimitersResponse,
     },
     limiter::{ChangeLimiter, Limiter, LimiterParams, StaticLimiter, WindowConfig},
     test::{

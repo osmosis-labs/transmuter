@@ -7,7 +7,8 @@ use osmosis_test_tube::{OsmosisTestApp, Runner};
 
 use crate::{
     asset::AssetConfig,
-    contract::{ExecMsg, GetShareDenomResponse, InstantiateMsg, QueryMsg},
+    contract::sv::{ExecMsg, InstantiateMsg, QueryMsg},
+    contract::GetShareDenomResponse,
     test::test_env::{assert_contract_err, TestEnvBuilder},
 };
 

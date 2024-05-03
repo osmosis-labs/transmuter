@@ -1,6 +1,6 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_eq, to_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env, Response,
+    ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env, Response,
     StdError, Uint128,
 };
 use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
@@ -372,7 +372,7 @@ impl Transmuter<'_> {
 
         Ok(Response::new()
             .add_message(send_token_out_to_sender_msg)
-            .set_data(to_binary(&swap_result)?))
+            .set_data(to_json_binary(&swap_result)?))
     }
 
     pub fn swap_non_alloyed_exact_amount_out(
@@ -418,7 +418,7 @@ impl Transmuter<'_> {
 
         Ok(Response::new()
             .add_message(send_token_out_to_sender_msg)
-            .set_data(to_binary(&swap_result)?))
+            .set_data(to_json_binary(&swap_result)?))
     }
 
     pub fn in_amt_given_out(
@@ -585,7 +585,7 @@ where
     T: Serialize + ?Sized,
 {
     Ok(match entrypoint {
-        Entrypoint::Sudo => response.set_data(to_binary(data)?),
+        Entrypoint::Sudo => response.set_data(to_json_binary(data)?),
         Entrypoint::Exec => response,
     })
 }
@@ -697,7 +697,7 @@ mod tests {
         },
         Addr::unchecked("addr1"),
         Ok(Response::new()
-            .set_data(to_binary(&SwapExactAmountInResponseData {
+            .set_data(to_json_binary(&SwapExactAmountInResponseData {
                 token_out_amount: Uint128::new(10000u128)
             }).unwrap())
             .add_message(MsgMint {
@@ -730,7 +730,7 @@ mod tests {
         },
         Addr::unchecked("addr1"),
         Ok(Response::new()
-            .set_data(to_binary(&SwapExactAmountOutResponseData {
+            .set_data(to_json_binary(&SwapExactAmountOutResponseData {
                 token_in_amount: Uint128::new(100u128)
             }).unwrap())
             .add_message(MsgMint {
@@ -821,7 +821,7 @@ mod tests {
                 to_address: "addr1".to_string(),
                 amount: vec![Coin::new(1u128, "denom1")]
             })
-            .set_data(to_binary(&SwapExactAmountInResponseData {
+            .set_data(to_json_binary(&SwapExactAmountInResponseData {
                 token_out_amount: Uint128::from(1u128)
             }).unwrap()))
     )]
@@ -862,7 +862,7 @@ mod tests {
                 to_address: "addr1".to_string(),
                 amount: vec![Coin::new(1u128, "denom1")]
             })
-            .set_data(to_binary(&SwapExactAmountOutResponseData {
+            .set_data(to_json_binary(&SwapExactAmountOutResponseData {
                 token_in_amount: Uint128::from(100u128)
             }).unwrap()))
     )]
@@ -930,7 +930,7 @@ mod tests {
                 to_address: "addr1".to_string(),
                 amount: vec![Coin::new(1000u128, "denom2")]
             })
-            .set_data(to_binary(&SwapExactAmountInResponseData {
+            .set_data(to_json_binary(&SwapExactAmountInResponseData {
                 token_out_amount: Uint128::from(1000u128)
             }).unwrap()))
     )]
@@ -944,7 +944,7 @@ mod tests {
                 to_address: "addr1".to_string(),
                 amount: vec![Coin::new(10u128, "denom1")]
             })
-            .set_data(to_binary(&SwapExactAmountInResponseData {
+            .set_data(to_json_binary(&SwapExactAmountInResponseData {
                 token_out_amount: Uint128::from(10u128)
             }).unwrap()))
     )]
@@ -1027,7 +1027,7 @@ mod tests {
                 to_address: "addr1".to_string(),
                 amount: vec![Coin::new(1000u128, "denom2")]
             })
-            .set_data(to_binary(&SwapExactAmountOutResponseData {
+            .set_data(to_json_binary(&SwapExactAmountOutResponseData {
                 token_in_amount: 100u128.into()
             }).unwrap()))
     )]
@@ -1041,7 +1041,7 @@ mod tests {
                 to_address: "addr1".to_string(),
                 amount: vec![Coin::new(10u128, "denom1")]
             })
-            .set_data(to_binary(&SwapExactAmountOutResponseData {
+            .set_data(to_json_binary(&SwapExactAmountOutResponseData {
                 token_in_amount: 100u128.into()
             }).unwrap()))
     )]

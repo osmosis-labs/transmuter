@@ -2,11 +2,12 @@ use std::{iter, path::PathBuf};
 
 use crate::{
     asset::AssetConfig,
-    contract::{GetModeratorResponse, ListAssetConfigsResponse, QueryMsg},
+    contract::sv::QueryMsg,
+    contract::{GetModeratorResponse, ListAssetConfigsResponse},
     test::{modules::cosmwasm_pool::CosmwasmPool, test_env::TransmuterContract},
 };
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{to_binary, Coin, Uint128};
+use cosmwasm_std::{to_json_binary, Coin, Uint128};
 use osmosis_std::types::osmosis::cosmwasmpool::v1beta1::{
     ContractInfoByPoolIdRequest, ContractInfoByPoolIdResponse, MigratePoolContractsProposal,
     MsgCreateCosmWasmPool, UploadCosmWasmPoolCodeAndWhiteListProposal,
@@ -61,7 +62,7 @@ fn test_migrate_v2_to_v3() {
         .create_cosmwasm_pool(
             MsgCreateCosmWasmPool {
                 code_id,
-                instantiate_msg: to_binary(&instantiate_msg).unwrap().to_vec(),
+                instantiate_msg: to_json_binary(&instantiate_msg).unwrap().to_vec(),
                 sender: signer.address(),
             },
             &signer,
@@ -103,7 +104,7 @@ fn test_migrate_v2_to_v3() {
             pool_ids: vec![pool_id],
             new_code_id: 0, // upload new code, so set this to 0
             wasm_byte_code: TransmuterContract::get_wasm_byte_code(),
-            migrate_msg: to_binary(&migrate_msg).unwrap().to_vec(),
+            migrate_msg: to_json_binary(&migrate_msg).unwrap().to_vec(),
         },
         signer.address(),
         &signer,

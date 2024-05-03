@@ -2,7 +2,7 @@
 
 use cosmwasm_schema::write_api;
 
-use transmuter::contract::{ExecMsg, InstantiateMsg, QueryMsg};
+use transmuter::contract::sv::{ExecMsg, InstantiateMsg, QueryMsg};
 
 fn main() {
     write_api! {

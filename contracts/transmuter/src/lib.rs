@@ -20,7 +20,8 @@ mod entry_points {
         ensure, entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response,
     };
 
-    use crate::contract::{ContractExecMsg, ContractQueryMsg, ExecMsg, InstantiateMsg, Transmuter};
+    use crate::contract::sv::{ContractExecMsg, ContractQueryMsg, ExecMsg, InstantiateMsg};
+    use crate::contract::Transmuter;
     use crate::error::ContractError;
     use crate::migrations;
     use crate::sudo::SudoMsg;
@@ -34,7 +35,10 @@ mod entry_points {
                 _ => {
                     ensure!(
                         CONTRACT
-                            .is_active(($deps.as_ref(), $env.clone()))?
+                            .is_active(sylvia::types::QueryCtx {
+                                deps: $deps.as_ref(),
+                                env: $env.clone()
+                            })?
                             .is_active,
                         ContractError::InactivePool {}
                     );

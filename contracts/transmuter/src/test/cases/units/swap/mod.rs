@@ -8,9 +8,10 @@ use osmosis_std::types::osmosis::poolmanager::v1beta1::{
 use osmosis_test_tube::{Account, Bank, Module, OsmosisTestApp};
 
 use crate::asset::{convert_amount, AssetConfig, Rounding};
+use crate::contract::sv::{ExecMsg, QueryMsg};
 use crate::contract::{
-    ExecMsg, GetShareDenomResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse,
-    ListAssetConfigsResponse, QueryMsg,
+    GetShareDenomResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse,
+    ListAssetConfigsResponse,
 };
 
 use crate::math::lcm_from_iter;
@@ -496,7 +497,7 @@ fn pool_with_single_lp(
                 .map(|coin| Coin::new(10000000000000000000000000, coin.denom.clone()))
                 .collect(),
         )
-        .with_instantiate_msg(crate::contract::InstantiateMsg {
+        .with_instantiate_msg(crate::contract::sv::InstantiateMsg {
             pool_asset_configs: pool_assets
                 .iter()
                 .map(|c| {

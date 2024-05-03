@@ -1,9 +1,6 @@
 use cosmwasm_std::{Coin, Uint128};
 
-use crate::{
-    asset::AssetConfig,
-    contract::{GetShareDenomResponse, QueryMsg},
-};
+use crate::{asset::AssetConfig, contract::sv::QueryMsg, contract::GetShareDenomResponse};
 
 use super::{pool_with_single_lp, test_swap_share_denom_success_case, SwapMsg};
 const REMAINING_DENOM0: u128 = 1_000_000_000_000;
