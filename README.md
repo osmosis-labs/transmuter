@@ -321,7 +321,7 @@ There are 2 special roles in the contract:
 | `set_change_limiter_boundary_offset` | ✓     |           |                 |
 | `set_static_limiter_upper_limit`     | ✓     |           |                 |
 | `set_alloyed_denom_metadata`         | ✓     |           |                 |
-| `set_active_status`                  | ✓     |           |                 |
+| `set_active_status`                  |       | ✓         |                 |
 | `transfer_admin`                     | ✓     |           |                 |
 | `cancel_admin_transfer`              | ✓     |           |                 |
 | `reject_admin_transfer`              |       |           | ✓               |
