@@ -93,6 +93,9 @@ pub enum ContractError {
     #[error("The pool is currently inactive")]
     InactivePool {},
 
+    #[error("Attempt to set pool to active status to {status} when it is already {status}")]
+    UnchangedActiveStatus { status: bool },
+
     #[error("Duplicated pool asset denom: {denom}")]
     DuplicatedPoolAssetDenom { denom: String },
 

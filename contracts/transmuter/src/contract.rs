@@ -13,8 +13,8 @@ use crate::{
 };
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, Addr, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Reply, Response, StdError,
-    SubMsg, Uint128,
+    ensure, ensure_ne, Addr, Coin, Decimal, Deps, DepsMut, Env, MessageInfo, Reply, Response,
+    StdError, Storage, SubMsg, Uint128,
 };
 
 use cw_storage_plus::Item;
@@ -466,11 +466,28 @@ impl Transmuter<'_> {
         ensure_moderator_authority!(info.sender, self.role.moderator, deps.as_ref());
 
         // set active status
-        self.active_status.save(deps.storage, &active)?;
+        self.checked_set_active_status(deps.storage, active)?;
 
         Ok(Response::new()
             .add_attribute("method", "set_active_status")
             .add_attribute("active", active.to_string()))
+    }
+
+    pub(crate) fn checked_set_active_status(
+        &self,
+        storage: &mut dyn Storage,
+        active: bool,
+    ) -> Result<bool, ContractError> {
+        self.active_status
+            .update(storage, |prev_active| -> Result<bool, ContractError> {
+                ensure_ne!(
+                    prev_active,
+                    active,
+                    ContractError::UnchangedActiveStatus { status: active }
+                );
+
+                Ok(active)
+            })
     }
 
     /// Join pool with tokens that exist in the pool.
@@ -1769,7 +1786,13 @@ mod tests {
 
         // Set the active status to false.
         let msg = ContractExecMsg::Transmuter(ExecMsg::SetActiveStatus { active: false });
-        execute(deps.as_mut(), env.clone(), mock_info(moderator, &[]), msg).unwrap();
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(moderator, &[]),
+            msg.clone(),
+        )
+        .unwrap();
 
         // Check the active status again.
         let res = query(
@@ -1780,6 +1803,10 @@ mod tests {
         .unwrap();
         let active_status: IsActiveResponse = from_binary(&res).unwrap();
         assert!(!active_status.is_active);
+
+        // try to set the active status to false again
+        let err = execute(deps.as_mut(), env.clone(), mock_info(moderator, &[]), msg).unwrap_err();
+        assert_eq!(err, ContractError::UnchangedActiveStatus { status: false });
 
         // Test that JoinPool is blocked when active status is false
         let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
@@ -1897,12 +1924,19 @@ mod tests {
         // Check the active status again.
         let res = query(
             deps.as_ref(),
-            env,
+            env.clone(),
             ContractQueryMsg::Transmuter(QueryMsg::IsActive {}),
         )
         .unwrap();
         let active_status: IsActiveResponse = from_binary(&res).unwrap();
         assert!(active_status.is_active);
+
+        // try to set active status to true when it's already true
+        let set_active_status_msg = SudoMsg::SetActive { is_active: true };
+
+        let err = sudo(deps.as_mut(), env, set_active_status_msg).unwrap_err();
+
+        assert_eq!(err, ContractError::UnchangedActiveStatus { status: true });
     }
 
     #[test]

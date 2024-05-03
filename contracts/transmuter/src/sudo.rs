@@ -47,7 +47,7 @@ impl SudoMsg {
         match self {
             SudoMsg::SetActive { is_active } => {
                 let (deps, _env) = ctx;
-                transmuter.active_status.save(deps.storage, &is_active)?;
+                transmuter.checked_set_active_status(deps.storage, is_active)?;
 
                 Ok(Response::new().add_attribute("method", "set_active"))
             }
