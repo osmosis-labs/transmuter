@@ -34,7 +34,7 @@ fn test_admin_set_denom_metadata() {
             alloyed_asset_subdenom: alloyed_asset_subdenom.to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: None,
-            moderator: None,
+            moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
         })
         .with_admin("admin")
         .build(&app);

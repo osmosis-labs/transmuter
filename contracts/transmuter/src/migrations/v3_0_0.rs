@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::{
     asset::{Asset, AssetConfig},
-    contract::{key, CONTRACT_NAME, CONTRACT_VERSION},
+    contract::{key, Transmuter, CONTRACT_NAME, CONTRACT_VERSION},
     limiter::Limiters,
     transmuter_pool::TransmuterPool,
     ContractError,
@@ -23,12 +23,18 @@ pub enum MigrationError {
 
     #[error("Adding normalization factor for non-pool asset: {denom}")]
     AddingNormalizationFactorForNonPoolAsset { denom: String },
+
+    #[error(
+        "Moderator address is required if there is no previous moderator set in the contract state"
+    )]
+    MissingModerator,
 }
 
 #[cw_serde]
 pub struct MigrateMsg {
     pub asset_configs: Vec<AssetConfig>,
     pub alloyed_asset_normalization_factor: Uint128,
+    pub moderator: Option<String>,
 }
 
 #[cw_serde]
@@ -36,7 +42,7 @@ pub struct TransmuterPoolV2 {
     pub pool_assets: Vec<Coin>,
 }
 
-pub fn execute_migration(deps: DepsMut, msg: MigrateMsg) -> Result<Response, ContractError> {
+pub fn execute_migration(mut deps: DepsMut, msg: MigrateMsg) -> Result<Response, ContractError> {
     // Assert that the stored contract version matches the expected version before migration
     cw2::assert_contract_version(deps.storage, CONTRACT_NAME, FROM_VERSION)?;
 
@@ -53,6 +59,22 @@ pub fn execute_migration(deps: DepsMut, msg: MigrateMsg) -> Result<Response, Con
     // migrating states
     add_normalization_factor_to_pool_assets(msg.asset_configs, deps.storage)?;
     set_alloyed_asset_normalization_factor(msg.alloyed_asset_normalization_factor, deps.storage)?;
+
+    let transmuter = Transmuter::new();
+
+    // set moderator
+    if let Some(moderator) = msg.moderator {
+        let moderator = deps.api.addr_validate(&moderator)?;
+        transmuter
+            .role
+            .moderator
+            .unchecked_set(deps.branch(), moderator)?;
+    } else {
+        ensure!(
+            transmuter.role.moderator.get(deps.as_ref()).is_ok(),
+            MigrationError::MissingModerator
+        );
+    }
 
     // reset all staled change limiter states as normalization factor will affect weight calculation
     Limiters::new(key::LIMITERS).reset_change_limiter_states(deps.storage)?;
@@ -198,6 +220,7 @@ mod tests {
                 },
             ],
             alloyed_asset_normalization_factor: Uint128::from(2u128),
+            moderator: Some("osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string()),
         };
 
         let res = execute_migration(deps.as_mut(), msg).unwrap();
@@ -249,13 +272,15 @@ mod tests {
             )
             .unwrap();
 
-        let msg = MigrateMsg {
+        let migrate_msg = MigrateMsg {
             asset_configs: vec![AssetConfig {
                 denom: "denom1".to_string(),
                 normalization_factor: Uint128::from(1000u128),
             }],
             alloyed_asset_normalization_factor: Uint128::from(2u128),
+            moderator: Some("osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string()),
         };
+        let msg = migrate_msg;
 
         let err = execute_migration(deps.as_mut(), msg).unwrap_err();
 
@@ -298,6 +323,7 @@ mod tests {
                 },
             ],
             alloyed_asset_normalization_factor: Uint128::from(2u128),
+            moderator: Some("osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string()),
         };
 
         let err = execute_migration(deps.as_mut(), msg).unwrap_err();
@@ -321,6 +347,7 @@ mod tests {
         let msg = MigrateMsg {
             asset_configs: vec![],
             alloyed_asset_normalization_factor: Uint128::zero(),
+            moderator: Some("osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string()),
         };
 
         let err = execute_migration(deps.as_mut(), msg).unwrap_err();
@@ -331,5 +358,146 @@ mod tests {
                 found: "1.0.0".to_string()
             })
         );
+    }
+
+    #[test]
+    fn test_set_moderator_with_no_existing_moderator() {
+        let mut deps = mock_dependencies();
+
+        cw2::set_contract_version(&mut deps.storage, CONTRACT_NAME, FROM_VERSION).unwrap();
+
+        Item::new(key::POOL)
+            .save(
+                &mut deps.storage,
+                &TransmuterPoolV2 {
+                    pool_assets: vec![Coin::new(10000, "denom1"), Coin::new(20000, "denom2")],
+                },
+            )
+            .unwrap();
+
+        let msg = MigrateMsg {
+            asset_configs: vec![
+                AssetConfig {
+                    denom: "denom1".to_string(),
+                    normalization_factor: Uint128::from(1000u128),
+                },
+                AssetConfig {
+                    denom: "denom2".to_string(),
+                    normalization_factor: Uint128::from(10000u128),
+                },
+            ],
+            alloyed_asset_normalization_factor: Uint128::from(2u128),
+            moderator: None,
+        };
+
+        let err = execute_migration(deps.as_mut(), msg.clone()).unwrap_err();
+        assert_eq!(
+            err,
+            ContractError::MigrationError(MigrationError::MissingModerator)
+        );
+
+        let msg = MigrateMsg {
+            moderator: Some("osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string()),
+            ..msg
+        };
+
+        execute_migration(deps.as_mut(), msg).unwrap();
+
+        let moderator = Item::<'_, String>::new(key::MODERATOR)
+            .load(&deps.storage)
+            .unwrap();
+
+        assert_eq!(
+            moderator,
+            "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string()
+        );
+    }
+
+    #[test]
+    fn test_set_moderator_with_existing_moderator() {
+        let mut deps = mock_dependencies();
+
+        cw2::set_contract_version(&mut deps.storage, CONTRACT_NAME, FROM_VERSION).unwrap();
+
+        Item::new(key::POOL)
+            .save(
+                &mut deps.storage,
+                &TransmuterPoolV2 {
+                    pool_assets: vec![Coin::new(10000, "denom1"), Coin::new(20000, "denom2")],
+                },
+            )
+            .unwrap();
+
+        let existing_moderator = "osmo1existingmoderator".to_string();
+        Item::new(key::MODERATOR)
+            .save(&mut deps.storage, &existing_moderator)
+            .unwrap();
+
+        let msg = MigrateMsg {
+            asset_configs: vec![
+                AssetConfig {
+                    denom: "denom1".to_string(),
+                    normalization_factor: Uint128::from(1000u128),
+                },
+                AssetConfig {
+                    denom: "denom2".to_string(),
+                    normalization_factor: Uint128::from(10000u128),
+                },
+            ],
+            alloyed_asset_normalization_factor: Uint128::from(2u128),
+            moderator: Some("osmo1newmoderator".to_string()),
+        };
+
+        execute_migration(deps.as_mut(), msg).unwrap();
+
+        let moderator = Item::<'_, String>::new(key::MODERATOR)
+            .load(&deps.storage)
+            .unwrap();
+
+        assert_eq!(moderator, "osmo1newmoderator".to_string());
+    }
+
+    #[test]
+    fn test_set_no_moderator_with_existing_moderator() {
+        let mut deps = mock_dependencies();
+
+        cw2::set_contract_version(&mut deps.storage, CONTRACT_NAME, FROM_VERSION).unwrap();
+
+        Item::new(key::POOL)
+            .save(
+                &mut deps.storage,
+                &TransmuterPoolV2 {
+                    pool_assets: vec![Coin::new(10000, "denom1"), Coin::new(20000, "denom2")],
+                },
+            )
+            .unwrap();
+
+        let existing_moderator = "osmo1existingmoderator".to_string();
+        Item::new(key::MODERATOR)
+            .save(&mut deps.storage, &existing_moderator)
+            .unwrap();
+
+        let msg = MigrateMsg {
+            asset_configs: vec![
+                AssetConfig {
+                    denom: "denom1".to_string(),
+                    normalization_factor: Uint128::from(1000u128),
+                },
+                AssetConfig {
+                    denom: "denom2".to_string(),
+                    normalization_factor: Uint128::from(10000u128),
+                },
+            ],
+            alloyed_asset_normalization_factor: Uint128::from(2u128),
+            moderator: None,
+        };
+
+        execute_migration(deps.as_mut(), msg).unwrap();
+
+        let moderator = Item::<'_, String>::new(key::MODERATOR)
+            .load(&deps.storage)
+            .unwrap();
+
+        assert_eq!(moderator, existing_moderator);
     }
 }

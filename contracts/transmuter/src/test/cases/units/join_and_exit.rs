@@ -96,7 +96,7 @@ fn test_join_pool_with_single_lp_should_update_shares_and_liquidity_properly() {
                 alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
                 alloyed_asset_normalization_factor: Uint128::one(),
                 admin: None,
-                moderator: None,
+                moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
             })
             .build(&app);
 
@@ -239,7 +239,7 @@ fn test_join_pool_should_update_shares_and_liquidity_properly() {
                 alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
                 alloyed_asset_normalization_factor: Uint128::one(),
                 admin: None,
-                moderator: None,
+                moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
             })
             .build(&app);
 
@@ -362,7 +362,7 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
                 alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
                 alloyed_asset_normalization_factor: Uint128::one(),
                 admin: None,
-                moderator: None,
+                moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
             })
             .build(&app);
 
@@ -562,7 +562,7 @@ fn test_exit_pool_greater_than_their_shares_should_fail() {
                 alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
                 alloyed_asset_normalization_factor: Uint128::one(),
                 admin: None,
-                moderator: None,
+                moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
             })
             .build(&app);
 
@@ -614,7 +614,7 @@ fn test_exit_pool_within_shares_but_over_joined_denom_amount() {
             alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: None,
-            moderator: None,
+            moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
         })
         .build(&app);
 

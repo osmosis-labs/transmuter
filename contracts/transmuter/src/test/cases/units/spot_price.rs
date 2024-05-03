@@ -37,7 +37,7 @@ fn test_spot_price(liquidity: &[Coin]) {
             "transmuter/poolshare".to_string(),
             Uint128::one(),
             None,
-            None,
+            "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
         )
         .unwrap();
 

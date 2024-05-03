@@ -47,6 +47,7 @@ fn test_join_pool() {
             "provider_2",
             vec![Coin::new(2_000, COSMOS_USDC), Coin::new(2_000, AXL_USDC)],
         )
+        .with_account("moderator", vec![])
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_configs: vec![
                 AssetConfig::from_denom_str(AXL_USDC),
@@ -55,7 +56,7 @@ fn test_join_pool() {
             alloyed_asset_subdenom: "usdc".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: None,
-            moderator: None,
+            moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
         })
         .build(&app);
 
@@ -223,7 +224,7 @@ fn test_swap() {
             alloyed_asset_subdenom: "usdc".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: None,
-            moderator: None,
+            moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
         })
         .build(&app);
 
@@ -485,7 +486,7 @@ fn test_exit_pool() {
             alloyed_asset_subdenom: "usdc".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: None,
-            moderator: None,
+            moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
         })
         .build(&app);
 
@@ -695,7 +696,7 @@ fn test_3_pool_swap() {
             alloyed_asset_subdenom: "usdc".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: None,
-            moderator: None,
+            moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
         })
         .build(&app);
 
@@ -914,7 +915,7 @@ fn test_swap_alloyed_asset() {
             alloyed_asset_subdenom: alloyed_asset_subdenom.to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: None,
-            moderator: None,
+            moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
         })
         .build(&app);
 
@@ -971,7 +972,7 @@ fn test_limiters() {
             alloyed_asset_subdenom: "usdc".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.address()),
-            moderator: None,
+            moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
         })
         .build(&app);
 

@@ -28,15 +28,7 @@ impl<'a> Role<'a> {
         // ensure that only admin can assign moderator
         ensure_admin_authority!(sender, self.admin, deps.as_ref());
 
-        self.moderator.set(deps, address)
-    }
-
-    // Only admin can remove moderator
-    pub fn remove_moderator(&self, sender: Addr, deps: DepsMut) -> Result<(), ContractError> {
-        // ensure that only admin can remove moderator
-        ensure_admin_authority!(sender, self.admin, deps.as_ref());
-
-        self.moderator.remove(deps)
+        self.moderator.unchecked_set(deps, address)
     }
 }
 
@@ -44,7 +36,7 @@ impl<'a> Role<'a> {
 mod tests {
     use super::*;
     use cosmwasm_std::testing::mock_dependencies;
-    use cosmwasm_std::{Addr, StdError};
+    use cosmwasm_std::Addr;
 
     #[test]
     fn test_assign_remove_moderator() {
@@ -67,18 +59,6 @@ mod tests {
         let err = role
             .assign_moderator(non_admin.clone(), deps.as_mut(), moderator)
             .unwrap_err();
-
-        assert_eq!(err, ContractError::Unauthorized {});
-
-        // Test remove moderator by admin
-        role.remove_moderator(admin, deps.as_mut()).unwrap();
-        assert_eq!(
-            role.moderator.get(deps.as_ref()).unwrap_err(),
-            ContractError::Std(StdError::not_found("moderator"))
-        );
-
-        // Test remove moderator by non-admin
-        let err = role.remove_moderator(non_admin, deps.as_mut()).unwrap_err();
 
         assert_eq!(err, ContractError::Unauthorized {});
     }

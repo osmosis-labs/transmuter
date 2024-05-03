@@ -32,7 +32,7 @@ fn test_add_new_assets() {
             admin: None, // override by admin account set above
             alloyed_asset_subdenom: "denomx".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
-            moderator: None,
+            moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
         })
         .build(&app);
 

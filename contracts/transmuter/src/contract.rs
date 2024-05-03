@@ -78,7 +78,7 @@ impl Transmuter<'_> {
         alloyed_asset_subdenom: String,
         alloyed_asset_normalization_factor: Uint128,
         admin: Option<String>,
-        moderator: Option<String>,
+        moderator: String,
     ) -> Result<Response, ContractError> {
         let (deps, env, info) = ctx;
 
@@ -94,12 +94,10 @@ impl Transmuter<'_> {
                 .init(deps.storage, deps.api.addr_validate(&admin)?)?;
         }
 
-        // set moderator if exists
-        if let Some(moderator) = moderator {
-            self.role
-                .moderator
-                .init(deps.storage, deps.api.addr_validate(&moderator)?)?;
-        }
+        // set moderator
+        self.role
+            .moderator
+            .init(deps.storage, deps.api.addr_validate(&moderator)?)?;
 
         let pool_assets = pool_asset_configs
             .into_iter()
@@ -840,18 +838,6 @@ impl Transmuter<'_> {
             .add_attribute("moderator", address))
     }
 
-    #[msg(exec)]
-    pub fn remove_moderator(
-        &self,
-        ctx: (DepsMut, Env, MessageInfo),
-    ) -> Result<Response, ContractError> {
-        let (deps, _env, info) = ctx;
-
-        self.role.remove_moderator(info.sender, deps)?;
-
-        Ok(Response::new().add_attribute("method", "remove_moderator"))
-    }
-
     #[msg(query)]
     fn get_moderator(&self, ctx: (Deps, Env)) -> Result<GetModeratorResponse, ContractError> {
         let (deps, _env) = ctx;
@@ -966,6 +952,7 @@ mod tests {
         );
 
         let admin = "admin";
+        let moderator = "moderator";
         let init_msg = InstantiateMsg {
             pool_asset_configs: vec![
                 AssetConfig::from_denom_str("uosmo"),
@@ -974,7 +961,7 @@ mod tests {
             alloyed_asset_subdenom: "uosmouion".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.to_string()),
-            moderator: None,
+            moderator: moderator.to_string(),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -1186,7 +1173,7 @@ mod tests {
             alloyed_asset_subdenom: alloyed_subdenom.to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.to_string()),
-            moderator: Some(moderator.to_string()),
+            moderator: moderator.to_string(),
         };
         let env = mock_env();
 
@@ -1750,7 +1737,7 @@ mod tests {
             alloyed_asset_subdenom: "uosmouion".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.to_string()),
-            moderator: Some(moderator.to_string()),
+            moderator: moderator.to_string(),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -1948,6 +1935,7 @@ mod tests {
             .update_balance("someone", vec![Coin::new(1, "uosmo"), Coin::new(1, "uion")]);
 
         let admin = "admin";
+        let moderator = "moderator";
         let canceling_candidate = "canceling_candidate";
         let rejecting_candidate = "rejecting_candidate";
         let candidate = "candidate";
@@ -1959,7 +1947,7 @@ mod tests {
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
-            moderator: None,
+            moderator: moderator.to_string(),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -2126,36 +2114,7 @@ mod tests {
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
-            moderator: None,
-        };
-        instantiate(deps.as_mut(), mock_env(), mock_info(admin, &[]), init_msg).unwrap();
-
-        // Check the current moderator
-        let err = query(
-            deps.as_ref(),
-            mock_env(),
-            ContractQueryMsg::Transmuter(QueryMsg::GetModerator {}),
-        )
-        .unwrap_err();
-
-        assert_eq!(err, ContractError::Std(StdError::not_found("moderator")));
-
-        let mut deps = mock_dependencies();
-
-        // make denom has non-zero total supply
-        deps.querier
-            .update_balance("someone", vec![Coin::new(1, "uosmo"), Coin::new(1, "uion")]);
-
-        // Instantiate the contract.
-        let init_msg = InstantiateMsg {
-            pool_asset_configs: vec![
-                AssetConfig::from_denom_str("uosmo"),
-                AssetConfig::from_denom_str("uion"),
-            ],
-            admin: Some(admin.to_string()),
-            alloyed_asset_subdenom: "usomoion".to_string(),
-            alloyed_asset_normalization_factor: Uint128::one(),
-            moderator: Some(moderator.to_string()),
+            moderator: moderator.to_string(),
         };
         instantiate(deps.as_mut(), mock_env(), mock_info(admin, &[]), init_msg).unwrap();
 
@@ -2204,36 +2163,6 @@ mod tests {
         .unwrap();
         let moderator_response: GetModeratorResponse = from_binary(&res).unwrap();
         assert_eq!(moderator_response.moderator, new_moderator);
-
-        // Try to remove moderator by non admin
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info("non_admin", &[]),
-            ContractExecMsg::Transmuter(ExecMsg::RemoveModerator {}),
-        )
-        .unwrap_err();
-
-        assert_eq!(err, ContractError::Unauthorized {});
-
-        // Remove moderator by admin
-        execute(
-            deps.as_mut(),
-            mock_env(),
-            mock_info(admin, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::RemoveModerator {}),
-        )
-        .unwrap();
-
-        // Check the current moderator
-        let err = query(
-            deps.as_ref(),
-            mock_env(),
-            ContractQueryMsg::Transmuter(QueryMsg::GetModerator {}),
-        )
-        .unwrap_err();
-
-        assert_eq!(err, ContractError::Std(StdError::not_found("moderator")));
     }
 
     #[test]
@@ -2253,7 +2182,7 @@ mod tests {
                 AssetConfig::from_denom_str("uion"),
             ],
             admin: Some(admin.to_string()),
-            moderator: None,
+            moderator: "moderator".to_string(),
             alloyed_asset_subdenom: "usomoion".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
         };
@@ -2698,7 +2627,7 @@ mod tests {
             ],
             alloyed_asset_subdenom: "uosmouion".to_string(),
             admin: Some(admin.to_string()),
-            moderator: None,
+            moderator: "moderator".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
         };
         let env = mock_env();
@@ -2765,7 +2694,7 @@ mod tests {
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
-            moderator: None,
+            moderator: "moderator".to_string(),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -2842,7 +2771,7 @@ mod tests {
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
-            moderator: None,
+            moderator: "moderator".to_string(),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -2967,7 +2896,7 @@ mod tests {
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
-            moderator: None,
+            moderator: "moderator".to_string(),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -3104,7 +3033,7 @@ mod tests {
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
-            moderator: None,
+            moderator: "moderator".to_string(),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -3162,7 +3091,7 @@ mod tests {
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "usomoion".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
-            moderator: None,
+            moderator: "moderator".to_string(),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -3305,7 +3234,7 @@ mod tests {
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "alloyedusdc".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
-            moderator: None,
+            moderator: "moderator".to_string(),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -3519,7 +3448,7 @@ mod tests {
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "alloyedusdc".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
-            moderator: None,
+            moderator: "moderator".to_string(),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -3724,7 +3653,7 @@ mod tests {
             admin: Some(admin.to_string()),
             alloyed_asset_subdenom: "alloyedusdc".to_string(),
             alloyed_asset_normalization_factor: Uint128::from(100u128),
-            moderator: None,
+            moderator: "moderator".to_string(),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);

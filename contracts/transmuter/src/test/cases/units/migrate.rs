@@ -2,7 +2,7 @@ use std::{iter, path::PathBuf};
 
 use crate::{
     asset::AssetConfig,
-    contract::{ListAssetConfigsResponse, QueryMsg},
+    contract::{GetModeratorResponse, ListAssetConfigsResponse, QueryMsg},
     test::{modules::cosmwasm_pool::CosmwasmPool, test_env::TransmuterContract},
 };
 use cosmwasm_schema::cw_serde;
@@ -92,6 +92,7 @@ fn test_migrate_v2_to_v3() {
             },
         ],
         alloyed_asset_normalization_factor: Uint128::new(10),
+        moderator: Some("osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string()),
     };
 
     gov.propose_and_execute(
@@ -125,6 +126,9 @@ fn test_migrate_v2_to_v3() {
         t.query(&QueryMsg::ListAssetConfigs {}).unwrap();
 
     assert_eq!(asset_configs, expected_asset_configs);
+
+    let GetModeratorResponse { moderator } = t.query(&QueryMsg::GetModerator {}).unwrap();
+    assert_eq!(moderator, migrate_msg.moderator.unwrap());
 }
 
 fn get_prev_version_of_wasm_byte_code(version: &str) -> Vec<u8> {

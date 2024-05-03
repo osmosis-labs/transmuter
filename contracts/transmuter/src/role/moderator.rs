@@ -25,18 +25,10 @@ impl<'a> Moderator<'a> {
             .map_err(Into::into)
     }
 
-    pub(super) fn set(&self, deps: DepsMut, address: Addr) -> Result<(), ContractError> {
+    pub(crate) fn unchecked_set(&self, deps: DepsMut, address: Addr) -> Result<(), ContractError> {
         self.moderator
             .save(deps.storage, &address)
             .map_err(Into::into)
-    }
-
-    pub(super) fn remove(&self, deps: DepsMut) -> Result<(), ContractError> {
-        // ensure moderator is set
-        self.get(deps.as_ref())?;
-
-        self.moderator.remove(deps.storage);
-        Ok(())
     }
 }
 

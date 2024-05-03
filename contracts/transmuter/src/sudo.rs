@@ -203,7 +203,7 @@ mod tests {
             alloyed_asset_subdenom: "uusdc".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.to_string()),
-            moderator: None,
+            moderator: "moderator".to_string(),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
@@ -423,7 +423,7 @@ mod tests {
             alloyed_asset_subdenom: "uusdc".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.to_string()),
-            moderator: None,
+            moderator: "moderator".to_string(),
         };
         let env = mock_env();
         let info = mock_info(admin, &[]);
