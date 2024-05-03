@@ -763,8 +763,8 @@ mod tests {
                 &mut deps.storage,
                 &TransmuterPool {
                     pool_assets: vec![
-                        Asset::new(Uint128::from(1000u128), "denom1", 1u128),
-                        Asset::new(Uint128::from(1000u128), "denom2", 10u128),
+                        Asset::new(Uint128::from(1000u128), "denom1", 1u128).unwrap(),
+                        Asset::new(Uint128::from(1000u128), "denom2", 10u128).unwrap(),
                     ],
                 },
             )
@@ -900,8 +900,8 @@ mod tests {
                 &mut deps.storage,
                 &TransmuterPool {
                     pool_assets: vec![
-                        Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128),
-                        Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128),
+                        Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                        Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
                     ],
                 },
             )
@@ -997,8 +997,8 @@ mod tests {
                 &mut deps.storage,
                 &TransmuterPool {
                     pool_assets: vec![
-                        Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128),
-                        Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128),
+                        Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                        Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
                     ],
                 },
             )
@@ -1094,8 +1094,8 @@ mod tests {
                 &mut deps.storage,
                 &TransmuterPool {
                     pool_assets: vec![
-                        Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128),
-                        Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128),
+                        Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                        Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
                     ],
                 },
             )

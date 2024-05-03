@@ -157,7 +157,14 @@ mod tests {
             ("c".to_string(), Decimal::from_ratio(6000u128, 400_000_012_000u128))
         ]
     )]
-    fn test_all_ratios(#[case] pool_assets: Vec<Asset>, #[case] expected: Vec<(String, Decimal)>) {
+    fn test_all_ratios(
+        #[case] pool_assets: Vec<Result<Asset, ContractError>>,
+        #[case] expected: Vec<(String, Decimal)>,
+    ) {
+        let pool_assets = pool_assets
+            .into_iter()
+            .map(|asset| asset.unwrap())
+            .collect();
         let pool = TransmuterPool { pool_assets };
 
         let ratios = pool.weights().unwrap();

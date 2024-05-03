@@ -61,13 +61,19 @@ impl Asset {
         amount: impl Into<Uint128>,
         denom: &str,
         normalization_factor: impl Into<Uint128>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, ContractError> {
+        let normalization_factor = normalization_factor.into();
+        ensure!(
+            normalization_factor > Uint128::zero(),
+            ContractError::NormalizationFactorMustBePositive {}
+        );
+
+        Ok(Self {
             amount: amount.into(),
             denom: denom.to_string(),
-            normalization_factor: normalization_factor.into(),
+            normalization_factor,
             is_corrupted: false,
-        }
+        })
     }
 
     pub fn update_amount<F>(&'_ mut self, f: F) -> Result<&'_ Self, ContractError>

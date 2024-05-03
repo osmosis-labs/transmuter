@@ -110,7 +110,7 @@ fn add_normalization_factor_to_pool_assets(
                 }
             })?;
 
-            Ok(Asset::new(coin.amount, &coin.denom, *normalization_factor))
+            Asset::new(coin.amount, &coin.denom, *normalization_factor)
         })
         .collect::<Result<Vec<Asset>, ContractError>>()?;
 
@@ -136,6 +136,11 @@ fn set_alloyed_asset_normalization_factor(
     alloyed_asset_normalization_factor: Uint128,
     storage: &mut dyn Storage,
 ) -> Result<(), ContractError> {
+    ensure!(
+        alloyed_asset_normalization_factor > Uint128::zero(),
+        ContractError::NormalizationFactorMustBePositive {}
+    );
+
     Item::<'_, Uint128>::new(key::ALLOYED_ASSET_NORMALIZATION_FACTOR)
         .save(storage, &alloyed_asset_normalization_factor)?;
 
@@ -235,8 +240,8 @@ mod tests {
         assert_eq!(
             pool_assets,
             vec![
-                Asset::new(10000u128, "denom1", 1000u128),
-                Asset::new(20000u128, "denom2", 10000u128)
+                Asset::new(10000u128, "denom1", 1000u128).unwrap(),
+                Asset::new(20000u128, "denom2", 10000u128).unwrap()
             ]
         );
 
@@ -290,6 +295,78 @@ mod tests {
                 denom: "denom2".to_string()
             })
         );
+    }
+
+    #[test]
+    fn test_zero_pool_asset_normalization_factor() {
+        let mut deps = mock_dependencies();
+
+        cw2::set_contract_version(&mut deps.storage, CONTRACT_NAME, FROM_VERSION).unwrap();
+
+        Item::new(key::POOL)
+            .save(
+                &mut deps.storage,
+                &TransmuterPoolV2 {
+                    pool_assets: vec![Coin::new(10000, "denom1"), Coin::new(20000, "denom2")],
+                },
+            )
+            .unwrap();
+
+        let migrate_msg = MigrateMsg {
+            asset_configs: vec![
+                AssetConfig {
+                    denom: "denom1".to_string(),
+                    normalization_factor: Uint128::from(1000u128),
+                },
+                AssetConfig {
+                    denom: "denom2".to_string(),
+                    normalization_factor: Uint128::zero(),
+                },
+            ],
+            alloyed_asset_normalization_factor: Uint128::from(2u128),
+            moderator: Some("osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string()),
+        };
+        let msg = migrate_msg;
+
+        let err = execute_migration(deps.as_mut(), msg).unwrap_err();
+
+        assert_eq!(err, ContractError::NormalizationFactorMustBePositive {});
+    }
+
+    #[test]
+    fn test_zero_alloyed_normalization_factor() {
+        let mut deps = mock_dependencies();
+
+        cw2::set_contract_version(&mut deps.storage, CONTRACT_NAME, FROM_VERSION).unwrap();
+
+        Item::new(key::POOL)
+            .save(
+                &mut deps.storage,
+                &TransmuterPoolV2 {
+                    pool_assets: vec![Coin::new(10000, "denom1"), Coin::new(20000, "denom2")],
+                },
+            )
+            .unwrap();
+
+        let migrate_msg = MigrateMsg {
+            asset_configs: vec![
+                AssetConfig {
+                    denom: "denom1".to_string(),
+                    normalization_factor: Uint128::from(1000u128),
+                },
+                AssetConfig {
+                    denom: "denom2".to_string(),
+                    normalization_factor: Uint128::from(1000u128),
+                },
+            ],
+            alloyed_asset_normalization_factor: Uint128::zero(),
+            moderator: Some("osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string()),
+        };
+        let msg = migrate_msg;
+
+        let err = execute_migration(deps.as_mut(), msg).unwrap_err();
+
+        assert_eq!(err, ContractError::NormalizationFactorMustBePositive {});
     }
 
     #[test]
