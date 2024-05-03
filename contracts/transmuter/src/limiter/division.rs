@@ -790,7 +790,7 @@ mod tests {
 
         let base_divisions = divisions;
 
-        let divisions = vec![
+        let divisions = [
             base_divisions.clone(),
             vec![{
                 let started_at = Timestamp::from_nanos(1700);
@@ -825,7 +825,7 @@ mod tests {
                 / Decimal::from_ratio(600u128, 1u128)
         );
 
-        let divisions = vec![
+        let divisions = [
             base_divisions.clone(),
             vec![{
                 let started_at = Timestamp::from_nanos(1700);
@@ -861,7 +861,7 @@ mod tests {
                 / Decimal::from_ratio(600u128, 1u128)
         );
 
-        let divisions = vec![
+        let divisions = [
             base_divisions,
             vec![{
                 let started_at = Timestamp::from_nanos(1700);

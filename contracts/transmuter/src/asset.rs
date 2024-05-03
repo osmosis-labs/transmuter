@@ -429,9 +429,9 @@ mod tests {
             is_corrupted: false,
         };
 
-        assert_eq!(asset.is_corrupted(), false);
+        assert!(!asset.is_corrupted());
 
-        assert_eq!(asset.mark_as_corrupted().is_corrupted(), true);
-        assert_eq!(asset.is_corrupted(), true);
+        assert!(asset.mark_as_corrupted().is_corrupted());
+        assert!(asset.is_corrupted());
     }
 }

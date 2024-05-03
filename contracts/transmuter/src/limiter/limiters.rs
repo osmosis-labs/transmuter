@@ -234,7 +234,7 @@ impl ChangeLimiter {
 
         let mut divisions = self.divisions;
 
-        while let Some(division) = divisions.get(0) {
+        while let Some(division) = divisions.first() {
             // if window completely passed the division, remove the division
             if division.is_outdated(
                 block_time,
@@ -2157,7 +2157,7 @@ mod tests {
             // 1st division is removed, and add new division
             assert_eq!(
                 list_divisions(&limiter, "denomb", "1h", &deps.storage),
-                vec![
+                [
                     old_divs[1..].to_vec(),
                     vec![Division::new(
                         block_time.minus_minutes(5), // @75 (= 15 * 5)

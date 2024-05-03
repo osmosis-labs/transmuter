@@ -413,8 +413,8 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
             total_pool_liquidity,
             case.join
                 .iter()
+                .filter(|&coin| !coin.amount.is_zero())
                 .cloned()
-                .filter(|coin| !coin.amount.is_zero())
                 .collect::<Vec<Coin>>(),
             "check if pool liquidity is updated: {:?}",
             case

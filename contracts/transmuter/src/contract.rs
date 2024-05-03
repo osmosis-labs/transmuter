@@ -1011,7 +1011,7 @@ mod tests {
         };
 
         let info = mock_info(admin, &[]);
-        for denom in vec!["uosmo", "uion"] {
+        for denom in ["uosmo", "uion"] {
             let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
                 denom: denom.to_string(),
                 label: "change_limiter".to_string(),
@@ -1049,7 +1049,7 @@ mod tests {
         let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
         execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
 
-        for denom in vec!["uosmo", "uion"] {
+        for denom in ["uosmo", "uion"] {
             assert_dirty_change_limiters_by_denom!(
                 denom,
                 Transmuter::new().limiters,
@@ -1111,7 +1111,7 @@ mod tests {
         execute(deps.as_mut(), env.clone(), info, add_assets_msg).unwrap();
 
         // Reset change limiter states if new assets are added
-        for denom in vec!["uosmo", "uion"] {
+        for denom in ["uosmo", "uion"] {
             assert_clean_change_limiters_by_denom!(
                 denom,
                 Transmuter::new().limiters,
@@ -1277,7 +1277,7 @@ mod tests {
         execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
 
         // set limiters
-        for denom in vec!["wbtc", "tbtc", "nbtc", "stbtc"] {
+        for denom in ["wbtc", "tbtc", "nbtc", "stbtc"] {
             let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
                 denom: denom.to_string(),
                 label: "change_limiter".to_string(),

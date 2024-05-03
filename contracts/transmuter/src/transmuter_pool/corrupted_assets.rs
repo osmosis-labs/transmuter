@@ -220,7 +220,7 @@ mod tests {
             ])
             .into_iter()
             .map(|asset| {
-                if vec!["asset1", "asset2", "asset3"].contains(&asset.denom()) {
+                if ["asset1", "asset2", "asset3"].contains(&asset.denom()) {
                     asset.clone().mark_as_corrupted().to_owned()
                 } else {
                     asset
