@@ -6,8 +6,8 @@ impl TransmuterPool {
     pub fn add_new_assets(&mut self, assets: Vec<Asset>) -> Result<(), ContractError> {
         self.pool_assets.extend(assets);
 
-        self.ensure_no_duplicated_denom()?;
-        self.ensure_pool_asset_count_within_range()
+        self.ensure_pool_asset_count_within_range()?;
+        self.ensure_no_duplicated_denom()
     }
 }
 

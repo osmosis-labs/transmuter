@@ -3395,20 +3395,18 @@ mod tests {
                 token_in: Coin::new(1000, "axlusdc"),
                 token_out_denom: "axlusdc".to_string(),
                 swap_fee: Decimal::zero(),
-                expected: Err(StdError::generic_err(
-                    "token_in_denom and token_out_denom cannot be the same",
-                )
-                .into()),
+                expected: Err(ContractError::SameDenomNotAllowed {
+                    denom: "axlusdc".to_string(),
+                }),
             },
             Case {
                 name: String::from("same denom error (alloyed asset)"),
                 token_in: Coin::new(1000, "alloyedusdc"),
                 token_out_denom: "alloyedusdc".to_string(),
                 swap_fee: Decimal::zero(),
-                expected: Err(StdError::generic_err(
-                    "token_in_denom and token_out_denom cannot be the same",
-                )
-                .into()),
+                expected: Err(ContractError::SameDenomNotAllowed {
+                    denom: "alloyedusdc".to_string(),
+                }),
             },
             Case {
                 name: String::from("alloyedusdc to axlusdc - ok"),
@@ -3611,20 +3609,18 @@ mod tests {
                 token_in_denom: "axlusdc".to_string(),
                 token_out: Coin::new(1000, "axlusdc"),
                 swap_fee: Decimal::zero(),
-                expected: Err(StdError::generic_err(
-                    "token_in_denom and token_out_denom cannot be the same",
-                )
-                .into()),
+                expected: Err(ContractError::SameDenomNotAllowed {
+                    denom: "axlusdc".to_string(),
+                }),
             },
             Case {
                 name: String::from("same denom error (alloyed asset)"),
                 token_in_denom: "alloyedusdc".to_string(),
                 token_out: Coin::new(1000, "alloyedusdc"),
                 swap_fee: Decimal::zero(),
-                expected: Err(StdError::generic_err(
-                    "token_in_denom and token_out_denom cannot be the same",
-                )
-                .into()),
+                expected: Err(ContractError::SameDenomNotAllowed {
+                    denom: "alloyedusdc".to_string(),
+                }),
             },
             Case {
                 name: String::from("alloyedusdc to axlusdc - ok"),

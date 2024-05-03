@@ -87,18 +87,17 @@ impl TransmuterPool {
     where
         A: FnOnce(&mut Self) -> Result<R, ContractError>,
     {
-        // early return result without any checks if no corrupted assets
-        let has_no_corrupted_assets = self.pool_assets.iter().all(|asset| !asset.is_corrupted());
-        if has_no_corrupted_assets {
-            return action(self);
-        }
-
         let pool_asset_pre_action = self.pool_assets.clone();
         let corrupted_assets_pre_action = pool_asset_pre_action
             .iter()
             .filter(|asset| asset.is_corrupted())
             .map(|asset| (asset.denom().to_string(), asset))
             .collect::<HashMap<_, _>>();
+
+        // early return result without any checks if no corrupted assets
+        if corrupted_assets_pre_action.is_empty() {
+            return action(self);
+        }
 
         // if total pool value == 0 -> Empty mapping, later unwrap weight will be 0
         let weight_pre_action = self.weights()?.unwrap_or_default();

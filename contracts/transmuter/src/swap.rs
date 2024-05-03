@@ -427,12 +427,6 @@ impl Transmuter<'_> {
         token_out: Coin,
         token_in_denom: String,
     ) -> Result<(TransmuterPool, Coin), ContractError> {
-        // ensure token in denom and token out denom are not the same
-        ensure!(
-            token_out.denom != token_in_denom,
-            StdError::generic_err("token_in_denom and token_out_denom cannot be the same")
-        );
-
         let swap_variant = self.swap_variant(&token_in_denom, &token_out.denom, deps)?;
         let mut pool = self.pool.load(deps.storage)?;
 
@@ -494,12 +488,6 @@ impl Transmuter<'_> {
         token_in: Coin,
         token_out_denom: &str,
     ) -> Result<(TransmuterPool, Coin), ContractError> {
-        // ensure token in denom and token out denom are not the same
-        ensure!(
-            token_out_denom != token_in.denom,
-            StdError::generic_err("token_in_denom and token_out_denom cannot be the same")
-        );
-
         let mut pool = self.pool.load(deps.storage)?;
         let swap_variant = self.swap_variant(&token_in.denom, token_out_denom, deps)?;
 
