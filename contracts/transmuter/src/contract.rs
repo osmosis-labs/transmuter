@@ -757,16 +757,6 @@ impl Transmuter<'_> {
             .add_attribute("new_admin", sender_string))
     }
 
-    #[sv::msg(exec)]
-    pub fn renounce_adminship(
-        &self,
-        ExecCtx { deps, env: _, info }: ExecCtx,
-    ) -> Result<Response, ContractError> {
-        self.role.admin.renounce(deps, info.sender)?;
-
-        Ok(Response::new().add_attribute("method", "renounce_adminship"))
-    }
-
     #[sv::msg(query)]
     fn get_admin(
         &self,
@@ -2040,26 +2030,6 @@ mod tests {
         .unwrap();
         let admin: GetAdminResponse = from_json(res).unwrap();
         assert_eq!(admin.admin.as_str(), candidate);
-
-        // Renounce admin rights
-        let renounce_admin_msg = ContractExecMsg::Transmuter(ExecMsg::RenounceAdminship {});
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            mock_info(candidate, &[]),
-            renounce_admin_msg,
-        )
-        .unwrap();
-
-        // Check the current admin
-        let err = query(
-            deps.as_ref(),
-            env,
-            ContractQueryMsg::Transmuter(QueryMsg::GetAdmin {}),
-        )
-        .unwrap_err();
-
-        assert_eq!(err, ContractError::Std(StdError::not_found("admin")));
     }
 
     #[test]

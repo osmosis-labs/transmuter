@@ -125,18 +125,6 @@ impl<'a> Admin<'a> {
         }
     }
 
-    /// Renounce admin rights
-    pub fn renounce(&self, deps: DepsMut, sender: Addr) -> Result<(), ContractError> {
-        // Make sure that the sender is the current admin
-        let current_admin = self.current(deps.as_ref())?;
-        ensure!(sender == current_admin, ContractError::Unauthorized {});
-
-        // Set the current admin to the candidate
-        self.state.remove(deps.storage);
-
-        Ok(())
-    }
-
     fn state(&self, deps: Deps) -> Result<AdminState, ContractError> {
         self.state
             .may_load(deps.storage)?
@@ -288,16 +276,5 @@ mod tests {
             admin.state.load(&deps.storage).unwrap(),
             AdminState::Claimed(new_admin_addr.clone())
         );
-
-        // renounce by non-admin
-        assert_eq!(
-            admin.renounce(deps.as_mut(), old_admin_addr).unwrap_err(),
-            ContractError::Unauthorized {}
-        );
-
-        // renounce by admin
-        assert_eq!(admin.renounce(deps.as_mut(), new_admin_addr), Ok(()));
-
-        assert_eq!(admin.state.may_load(&deps.storage).unwrap(), None);
     }
 }
