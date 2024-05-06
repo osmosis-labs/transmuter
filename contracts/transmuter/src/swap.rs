@@ -283,15 +283,6 @@ impl Transmuter<'_> {
             // change limiter needs reset if force redemption since it gets by passed
             // the current state will not be accurate
             self.limiters.reset_change_limiter_states(deps.storage)?;
-
-            // remove corrupted assets from the pool & deregister all limiters for that denom.
-            // With force redemption, the only use case is that it will pull all the
-            // designated corrupted asset, so there is no need to check the amount here.
-            for token_out in tokens_out.iter() {
-                pool.remove_corrupted_asset(token_out.denom.as_str())?;
-                self.limiters
-                    .uncheck_deregister_all_for_denom(deps.storage, token_out.denom.as_str())?;
-            }
         } else {
             pool.exit_pool(&tokens_out)?;
 
@@ -302,6 +293,16 @@ impl Transmuter<'_> {
                     denom_weight_pairs,
                     env.block.time,
                 )?;
+            }
+        }
+
+        // remove corrupted assets from the pool & deregister all limiters for that denom
+        // when each corrupted asset is all redeemed
+        for corrupted in pool.clone().corrupted_assets() {
+            if corrupted.amount().is_zero() {
+                pool.remove_corrupted_asset(corrupted.denom())?;
+                self.limiters
+                    .uncheck_deregister_all_for_denom(deps.storage, corrupted.denom())?;
             }
         }
 
@@ -642,7 +643,7 @@ pub enum BurnTarget {
 
 #[cfg(test)]
 mod tests {
-    use crate::asset::Asset;
+    use crate::{asset::Asset, limiter::LimiterParams};
 
     use super::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, MOCK_CONTRACT_ADDR};
@@ -880,7 +881,7 @@ mod tests {
 
         let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
             alloyed_holder.as_str(),
-            &[Coin::new(2000000000000u128, "alloyed")],
+            &[Coin::new(110000000000000u128, "alloyed")],
         )]);
 
         let transmuter = Transmuter::new();
@@ -917,6 +918,276 @@ mod tests {
         );
 
         assert_eq!(res, expected_res);
+
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+
+        for denom in ["denom1", "denom2"] {
+            assert!(pool.has_denom(denom))
+        }
+    }
+
+    #[rstest]
+    #[case(
+        Entrypoint::Sudo,
+        SwapFromAlloyedConstraint::ExactOut {
+            tokens_out: &[Coin::new(1000000000000u128, "denom1")],
+            token_in_max_amount: Uint128::from(100000000000000u128),
+        },
+        vec!["denom1"],
+        vec!["denom1"],
+        BurnTarget::SentFunds,
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(MsgBurn {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(Coin::new(100000000000000u128, "alloyed").into()),
+                burn_from_address: MOCK_CONTRACT_ADDR.to_string()
+            })
+            .add_message(BankMsg::Send {
+                to_address: "addr1".to_string(),
+                amount: vec![Coin::new(1000000000000u128, "denom1")]
+            })
+            .set_data(to_json_binary(&SwapExactAmountOutResponseData {
+                token_in_amount: Uint128::from(100000000000000u128)
+            }).unwrap()))
+    )]
+    #[case(
+        Entrypoint::Sudo,
+        SwapFromAlloyedConstraint::ExactIn {
+            token_out_denom: "denom1",
+            token_out_min_amount: 1000000000000u128.into(),
+            token_in_amount: 100000000000000u128.into(),
+        },
+        vec!["denom1"],
+        vec!["denom1"],
+        BurnTarget::SentFunds,
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(MsgBurn {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(Coin::new(100000000000000u128, "alloyed").into()),
+                burn_from_address: MOCK_CONTRACT_ADDR.to_string()
+            })
+            .add_message(BankMsg::Send {
+                to_address: "addr1".to_string(),
+                amount: vec![Coin::new(1000000000000u128, "denom1")]
+            })
+            .set_data(to_json_binary(&SwapExactAmountInResponseData {
+                token_out_amount: 1000000000000u128.into(),
+            }).unwrap()))
+    )]
+    #[case(
+        Entrypoint::Exec,
+        SwapFromAlloyedConstraint::ExactIn {
+            token_out_denom: "denom1",
+            token_out_min_amount: 1000000000000u128.into(),
+            token_in_amount: 100000000000000u128.into(),
+        },
+        vec!["denom1"],
+        vec!["denom1"],
+        BurnTarget::SenderAccount,
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(MsgBurn {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(Coin::new(100000000000000u128, "alloyed").into()),
+                burn_from_address: "addr1".to_string()
+            })
+            .add_message(BankMsg::Send {
+                to_address: "addr1".to_string(),
+                amount: vec![Coin::new(1000000000000u128, "denom1")]
+            }))
+    )]
+    #[case(
+        Entrypoint::Exec,
+        SwapFromAlloyedConstraint::ExactOut {
+            tokens_out: &[Coin::new(1000000000000u128, "denom1")],
+            token_in_max_amount: Uint128::from(100000000000000u128),
+        },
+        vec!["denom1"],
+        vec!["denom1"],
+        BurnTarget::SenderAccount,
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(MsgBurn {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(Coin::new(100000000000000u128, "alloyed").into()),
+                burn_from_address: "addr1".to_string()
+            })
+            .add_message(BankMsg::Send {
+                to_address: "addr1".to_string(),
+                amount: vec![Coin::new(1000000000000u128, "denom1")]
+            }))
+    )]
+    #[case(
+        Entrypoint::Sudo,
+        SwapFromAlloyedConstraint::ExactOut {
+            tokens_out: &[Coin::new(1000000000000u128, "denom1"), Coin::new(1000000000000u128, "denom2")],
+            token_in_max_amount: Uint128::from(110000000000000u128),
+        },
+        vec!["denom1", "denom2"],
+        vec!["denom1", "denom2"],
+        BurnTarget::SentFunds,
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(MsgBurn {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(Coin::new(110000000000000u128, "alloyed").into()),
+                burn_from_address: MOCK_CONTRACT_ADDR.to_string()
+            })
+            .add_message(BankMsg::Send {
+                to_address: "addr1".to_string(),
+                amount: vec![Coin::new(1000000000000u128, "denom1"), Coin::new(1000000000000u128, "denom2")]
+            })
+            .set_data(to_json_binary(&SwapExactAmountOutResponseData {
+                token_in_amount: Uint128::from(110000000000000u128),
+            }).unwrap()))
+    )]
+    #[case(
+        Entrypoint::Sudo,
+        SwapFromAlloyedConstraint::ExactOut {
+            tokens_out: &[Coin::new(1000000000000u128, "denom1"), Coin::new(500000000000u128, "denom2")],
+            token_in_max_amount: Uint128::from(105000000000000u128),
+        },
+        vec!["denom1", "denom2"],
+        vec!["denom1"],
+        BurnTarget::SentFunds,
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(MsgBurn {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(Coin::new(105000000000000u128, "alloyed").into()),
+                burn_from_address: MOCK_CONTRACT_ADDR.to_string()
+            })
+            .add_message(BankMsg::Send {
+                to_address: "addr1".to_string(),
+                amount: vec![Coin::new(1000000000000u128, "denom1"), Coin::new(500000000000u128, "denom2")],
+            })
+            .set_data(to_json_binary(&SwapExactAmountOutResponseData {
+                token_in_amount: Uint128::from(105000000000000u128),
+            }).unwrap()))
+    )]
+    fn test_swap_alloyed_asset_to_tokens_with_corrupted_assets(
+        #[case] entrypoint: Entrypoint,
+        #[case] constraint: SwapFromAlloyedConstraint,
+        #[case] corrupted_denoms: Vec<&str>,
+        #[case] removed_denoms: Vec<&str>,
+        #[case] burn_target: BurnTarget,
+        #[case] sender: Addr,
+        #[case] expected_res: Result<Response, ContractError>,
+    ) {
+        let alloyed_holder = match burn_target {
+            BurnTarget::SenderAccount => sender.to_string(),
+            BurnTarget::SentFunds => MOCK_CONTRACT_ADDR.to_string(),
+        };
+
+        let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
+            alloyed_holder.as_str(),
+            &[Coin::new(210000000000000u128, "alloyed")],
+        )]);
+
+        let transmuter = Transmuter::new();
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_normalization_factor(&mut deps.storage, 100u128.into())
+            .unwrap();
+
+        let mut pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(), // 1000000000000 * 100
+                Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(), // 1000000000000 * 10
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 1u128).unwrap(), // 1000000000000 * 100
+            ],
+        };
+
+        let all_denoms = pool
+            .clone()
+            .pool_assets
+            .into_iter()
+            .map(|asset| asset.denom().to_string())
+            .collect::<Vec<_>>();
+
+        pool.mark_corrupted_assets(
+            corrupted_denoms
+                .iter()
+                .map(|denom| denom.to_string())
+                .collect::<Vec<_>>()
+                .as_slice(),
+        )
+        .unwrap();
+
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        for denom in all_denoms.clone() {
+            transmuter
+                .limiters
+                .register(
+                    &mut deps.storage,
+                    denom.as_str(),
+                    "static",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(100),
+                    },
+                )
+                .unwrap();
+        }
+
+        let res = transmuter.swap_alloyed_asset_to_tokens(
+            entrypoint,
+            constraint,
+            burn_target,
+            sender,
+            deps.as_mut(),
+            mock_env(),
+        );
+
+        assert_eq!(res, expected_res);
+
+        // all drained denoms that are corrupted should not be in the pool
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+
+        for denom in all_denoms {
+            if removed_denoms.contains(&denom.as_str()) {
+                assert!(
+                    !pool.has_denom(denom.as_str()),
+                    "must not contain {} since it's corrupted and drained",
+                    denom
+                );
+
+                // limiters should be removed
+                assert!(
+                    transmuter
+                        .limiters
+                        .list_limiters_by_denom(&deps.storage, denom.as_str())
+                        .unwrap()
+                        .is_empty(),
+                    "must not contain limiter for {} since it's corrupted and drained",
+                    denom
+                );
+            } else {
+                assert!(
+                    pool.has_denom(denom.as_str()),
+                    "must contain {} since it's not corrupted or not drained",
+                    denom
+                );
+
+                // limiters should be removed
+                assert!(
+                    !transmuter
+                        .limiters
+                        .list_limiters_by_denom(&deps.storage, denom.as_str())
+                        .unwrap()
+                        .is_empty(),
+                    "must contain limiter for {} since it's not corrupted or not drained",
+                    denom
+                );
+            }
+        }
     }
 
     #[rstest]
