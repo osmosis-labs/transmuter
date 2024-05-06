@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{ensure, ensure_eq, Coin, DepsMut, Response, Storage, Uint128};
+use cosmwasm_std::{ensure, ensure_eq, Coin, DepsMut, Env, Response, Storage, Uint128};
 use cw_storage_plus::Item;
 use thiserror::Error;
 
@@ -42,7 +42,11 @@ pub struct TransmuterPoolV2 {
     pub pool_assets: Vec<Coin>,
 }
 
-pub fn execute_migration(mut deps: DepsMut, msg: MigrateMsg) -> Result<Response, ContractError> {
+pub fn execute_migration(
+    mut deps: DepsMut,
+    env: Env,
+    msg: MigrateMsg,
+) -> Result<Response, ContractError> {
     // Assert that the stored contract version matches the expected version before migration
     cw2::assert_contract_version(deps.storage, CONTRACT_NAME, FROM_VERSION)?;
 
@@ -76,8 +80,14 @@ pub fn execute_migration(mut deps: DepsMut, msg: MigrateMsg) -> Result<Response,
         );
     }
 
+    let pool = transmuter.pool.load(deps.storage)?;
+
     // reset all staled change limiter states as normalization factor will affect weight calculation
-    Limiters::new(key::LIMITERS).reset_change_limiter_states(deps.storage)?;
+    Limiters::new(key::LIMITERS).reset_change_limiter_states(
+        deps.storage,
+        env.block.time,
+        pool.weights()?.unwrap_or_default(),
+    )?;
 
     // Set the contract version to the target version after successful migration
     cw2::set_contract_version(deps.storage, CONTRACT_NAME, TO_VERSION)?;
@@ -149,7 +159,10 @@ fn set_alloyed_asset_normalization_factor(
 
 #[cfg(test)]
 mod tests {
-    use cosmwasm_std::{testing::mock_dependencies, Decimal, Timestamp, Uint64};
+    use cosmwasm_std::{
+        testing::{mock_dependencies, mock_env},
+        Decimal, Timestamp, Uint64,
+    };
 
     use crate::limiter::{LimiterParams, WindowConfig};
 
@@ -228,7 +241,10 @@ mod tests {
             moderator: Some("osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string()),
         };
 
-        let res = execute_migration(deps.as_mut(), msg).unwrap();
+        let mut env = mock_env();
+        env.block.time = Timestamp::from_nanos(100000000020000u64);
+
+        let res = execute_migration(deps.as_mut(), env, msg).unwrap();
 
         assert_eq!(
             res,
@@ -252,14 +268,23 @@ mod tests {
 
         assert_eq!(alloyed_asset_normalization_factor, Uint128::from(2u128));
 
-        // running check_limits_and_update again with the same params should not fail
+        // must not change > 1% with new normalization factor
+        // normalized total is 120000, denom1 is 100000, so it's 100000/120000 = 83.33%
         limiters
             .check_limits_and_update(
                 &mut deps.storage,
-                vec![("denom1".to_string(), Decimal::percent(10))],
-                Timestamp::from_nanos(100000000010000u64),
+                vec![("denom1".to_string(), Decimal::percent(84))],
+                Timestamp::from_nanos(100000000030000u64),
             )
             .unwrap();
+
+        limiters
+            .check_limits_and_update(
+                &mut deps.storage,
+                vec![("denom1".to_string(), Decimal::percent(85))],
+                Timestamp::from_nanos(100000000030000u64),
+            )
+            .unwrap_err();
     }
 
     #[test]
@@ -287,7 +312,7 @@ mod tests {
         };
         let msg = migrate_msg;
 
-        let err = execute_migration(deps.as_mut(), msg).unwrap_err();
+        let err = execute_migration(deps.as_mut(), mock_env(), msg).unwrap_err();
 
         assert_eq!(
             err,
@@ -328,7 +353,7 @@ mod tests {
         };
         let msg = migrate_msg;
 
-        let err = execute_migration(deps.as_mut(), msg).unwrap_err();
+        let err = execute_migration(deps.as_mut(), mock_env(), msg).unwrap_err();
 
         assert_eq!(err, ContractError::NormalizationFactorMustBePositive {});
     }
@@ -364,7 +389,7 @@ mod tests {
         };
         let msg = migrate_msg;
 
-        let err = execute_migration(deps.as_mut(), msg).unwrap_err();
+        let err = execute_migration(deps.as_mut(), mock_env(), msg).unwrap_err();
 
         assert_eq!(err, ContractError::NormalizationFactorMustBePositive {});
     }
@@ -403,7 +428,7 @@ mod tests {
             moderator: Some("osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string()),
         };
 
-        let err = execute_migration(deps.as_mut(), msg).unwrap_err();
+        let err = execute_migration(deps.as_mut(), mock_env(), msg).unwrap_err();
 
         assert_eq!(
             err,
@@ -427,7 +452,7 @@ mod tests {
             moderator: Some("osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string()),
         };
 
-        let err = execute_migration(deps.as_mut(), msg).unwrap_err();
+        let err = execute_migration(deps.as_mut(), mock_env(), msg).unwrap_err();
         assert_eq!(
             err,
             ContractError::VersionError(cw2::VersionError::WrongVersion {
@@ -467,7 +492,7 @@ mod tests {
             moderator: None,
         };
 
-        let err = execute_migration(deps.as_mut(), msg.clone()).unwrap_err();
+        let err = execute_migration(deps.as_mut(), mock_env(), msg.clone()).unwrap_err();
         assert_eq!(
             err,
             ContractError::MigrationError(MigrationError::MissingModerator)
@@ -478,7 +503,7 @@ mod tests {
             ..msg
         };
 
-        execute_migration(deps.as_mut(), msg).unwrap();
+        execute_migration(deps.as_mut(), mock_env(), msg).unwrap();
 
         let moderator = Item::<'_, String>::new(key::MODERATOR)
             .load(&deps.storage)
@@ -525,7 +550,7 @@ mod tests {
             moderator: Some("osmo1newmoderator".to_string()),
         };
 
-        execute_migration(deps.as_mut(), msg).unwrap();
+        execute_migration(deps.as_mut(), mock_env(), msg).unwrap();
 
         let moderator = Item::<'_, String>::new(key::MODERATOR)
             .load(&deps.storage)
@@ -569,7 +594,7 @@ mod tests {
             moderator: None,
         };
 
-        execute_migration(deps.as_mut(), msg).unwrap();
+        execute_migration(deps.as_mut(), mock_env(), msg).unwrap();
 
         let moderator = Item::<'_, String>::new(key::MODERATOR)
             .load(&deps.storage)

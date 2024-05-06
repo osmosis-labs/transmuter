@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{ensure, Decimal, StdError, Storage, Timestamp, Uint64};
 use cw_storage_plus::Map;
@@ -77,6 +79,14 @@ impl ChangeLimiter {
         }
         .ensure_boundary_offset_constrain()?
         .ensure_window_config_constraint()
+    }
+
+    pub fn divisions(&self) -> &[Division] {
+        &self.divisions
+    }
+
+    pub fn latest_value(&self) -> Decimal {
+        self.latest_value
     }
 
     pub fn reset(self) -> Self {
@@ -540,22 +550,33 @@ impl<'a> Limiters<'a> {
         Ok(())
     }
 
-    /// If the normalization factor updated, or new asset being added, staled divisions will become invalid.
-    /// This function cleans up the staled divisions.
+    /// If the normalization factor has a non-uniform update, staled divisions will become invalid.
+    /// In case of adding new assets, even if there is nothing wrong with the normalization factor,
+    /// the asset composition change required some time to be properly reflected.
+    ///
+    /// This function cleans up the staled divisions and create new division with updated state,
+    /// which is a start over with the new asset composition and normalization factor.
     pub fn reset_change_limiter_states(
         &self,
         storage: &mut dyn Storage,
+        block_time: Timestamp,
+        weights: Vec<(String, Decimal)>,
     ) -> Result<(), ContractError> {
         // there is no need to limit, since the number of limiters is expected to be small
         let limiters = self.list_limiters(storage)?;
+        let weights: HashMap<String, Decimal> = weights.into_iter().collect();
 
         for ((denom, label), limiter) in limiters {
             match limiter {
-                Limiter::ChangeLimiter(limiter) => self.limiters.save(
-                    storage,
-                    (denom.as_str(), label.as_str()),
-                    &Limiter::ChangeLimiter(limiter.reset()),
-                )?,
+                Limiter::ChangeLimiter(limiter) => {
+                    self.limiters
+                        .save(storage, (denom.as_str(), label.as_str()), {
+                            let value = weights.get(denom.as_str()).copied().ok_or_else(|| {
+                                StdError::not_found(format!("weight for {}", denom))
+                            })?;
+                            &Limiter::ChangeLimiter(limiter.reset().update(block_time, value)?)
+                        })?
+                }
                 Limiter::StaticLimiter(_) => {}
             };
         }
@@ -567,24 +588,28 @@ impl<'a> Limiters<'a> {
 /// This is used for testing if all change limiters has been newly created or reset.
 #[cfg(test)]
 #[macro_export]
-macro_rules! assert_clean_change_limiters_by_denom {
-    ($denom:expr, $lim:expr, $storage:expr) => {
-        let limiters = $lim
+macro_rules! assert_reset_change_limiters_by_denom {
+    ($denom:expr, $reset_at:expr, $transmuter:expr, $storage:expr) => {
+        let pool = $transmuter.pool.load($storage).unwrap();
+        let weights = pool
+            .weights()
+            .unwrap()
+            .unwrap_or_default()
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>();
+
+        let limiters = $transmuter
+            .limiters
             .list_limiters_by_denom($storage, $denom)
             .expect("failed to list limiters");
 
-        for (label, limiter) in limiters {
-            match limiter {
-                Limiter::ChangeLimiter(limiter) => {
-                    assert_eq!(
-                        limiter,
-                        limiter.clone().reset(),
-                        "Change Limiter `{}/{}` is dirty but expect clean",
-                        $denom,
-                        label
-                    );
-                }
-                Limiter::StaticLimiter(_) => {}
+        for (_label, limiter) in limiters {
+            if let $crate::limiter::Limiter::ChangeLimiter(limiter) = limiter {
+                let value = *weights.get($denom).unwrap();
+                assert_eq!(
+                    limiter.divisions(),
+                    &[$crate::limiter::Division::new($reset_at, $reset_at, value, value).unwrap()]
+                )
             };
         }
     };
@@ -602,6 +627,7 @@ macro_rules! assert_dirty_change_limiters_by_denom {
         for (label, limiter) in limiters {
             match limiter {
                 Limiter::ChangeLimiter(limiter) => {
+                    limiter.divisions();
                     assert_ne!(
                         limiter,
                         limiter.clone().reset(),
@@ -2772,11 +2798,11 @@ mod tests {
             // update limiters
 
             let block_time = Timestamp::from_nanos(1661231280000000000);
-            let value_a = Decimal::one();
+            let value = Decimal::one();
             limiters
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), value_a)],
+                    vec![("denoma".to_string(), value)],
                     block_time,
                 )
                 .unwrap();
@@ -2790,23 +2816,35 @@ mod tests {
             for (denom, window) in keys.iter() {
                 let divisions =
                     list_divisions(&limiters, denom.as_str(), window.as_str(), &deps.storage);
-                assert_eq!(divisions.len(), 1);
+
+                assert_eq!(
+                    divisions,
+                    vec![Division::new(block_time, block_time, value, value).unwrap()]
+                )
             }
 
             assert_dirty_change_limiters_by_denom!("denoma", &limiters, &deps.storage);
 
             // reset limiters
+            let block_time = block_time.plus_hours(1);
+            let value = Decimal::percent(2);
             limiters
-                .reset_change_limiter_states(&mut deps.storage)
+                .reset_change_limiter_states(
+                    &mut deps.storage,
+                    block_time,
+                    vec![("denoma".to_string(), value)],
+                )
                 .unwrap();
 
             for (denom, window) in keys.iter() {
                 let divisions =
                     list_divisions(&limiters, denom.as_str(), window.as_str(), &deps.storage);
-                assert_eq!(divisions.len(), 0);
-            }
 
-            assert_clean_change_limiters_by_denom!("denoma", &limiters, &deps.storage);
+                assert_eq!(
+                    divisions,
+                    vec![Division::new(block_time, block_time, value, value).unwrap()]
+                );
+            }
         }
     }
 

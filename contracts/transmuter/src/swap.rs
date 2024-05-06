@@ -282,7 +282,11 @@ impl Transmuter<'_> {
 
             // change limiter needs reset if force redemption since it gets by passed
             // the current state will not be accurate
-            self.limiters.reset_change_limiter_states(deps.storage)?;
+            self.limiters.reset_change_limiter_states(
+                deps.storage,
+                env.block.time,
+                pool.weights()?.unwrap_or_default(),
+            )?;
         } else {
             pool.exit_pool(&tokens_out)?;
 

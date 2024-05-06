@@ -188,7 +188,7 @@ impl Transmuter<'_> {
     #[sv::msg(exec)]
     fn add_new_assets(
         &self,
-        ExecCtx { deps, env: _, info }: ExecCtx,
+        ExecCtx { deps, env, info }: ExecCtx,
         asset_configs: Vec<AssetConfig>,
     ) -> Result<Response, ContractError> {
         non_empty_input_required("asset_configs", &asset_configs)?;
@@ -217,10 +217,11 @@ impl Transmuter<'_> {
         pool.add_new_assets(assets)?;
         self.pool.save(deps.storage, &pool)?;
 
-        // staled divisions in change limiters has become invalid after
-        // new assets are added to the pool
-        // so we reset change limiter states
-        self.limiters.reset_change_limiter_states(deps.storage)?;
+        self.limiters.reset_change_limiter_states(
+            deps.storage,
+            env.block.time,
+            pool.weights()?.unwrap_or_default(),
+        )?;
 
         Ok(Response::new().add_attribute("method", "add_new_assets"))
     }
@@ -882,6 +883,7 @@ pub struct GetModeratorResponse {
 
 #[cfg(test)]
 mod tests {
+
     use super::sv::*;
     use super::*;
     use crate::limiter::{ChangeLimiter, StaticLimiter, WindowConfig};
@@ -1004,9 +1006,20 @@ mod tests {
         }
 
         // join pool a bit more to make limiters dirty
+        let mut env = env.clone();
+        env.block.time = env.block.time.plus_nanos(360);
+
         let info = mock_info(
             "someone",
-            &[Coin::new(1000, "uosmo"), Coin::new(1000, "uion")],
+            &[Coin::new(550, "uosmo"), Coin::new(500, "uion")],
+        );
+        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+        execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
+
+        env.block.time = env.block.time.plus_nanos(3000);
+        let info = mock_info(
+            "someone",
+            &[Coin::new(450, "uosmo"), Coin::new(500, "uion")],
         );
         let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
         execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
@@ -1031,6 +1044,8 @@ mod tests {
                 .collect(),
         });
 
+        env.block.time = env.block.time.plus_nanos(360);
+
         let res = execute(
             deps.as_mut(),
             env.clone(),
@@ -1054,6 +1069,8 @@ mod tests {
                 .collect(),
         });
 
+        env.block.time = env.block.time.plus_nanos(360);
+
         // Attempt to add assets by non-admin
         let non_admin_info = mock_info("non_admin", &[]);
         let res = execute(
@@ -1070,16 +1087,25 @@ mod tests {
             "Adding assets by non-admin should be unauthorized"
         );
 
+        env.block.time = env.block.time.plus_nanos(360);
+
+        // successful asset addition
         execute(deps.as_mut(), env.clone(), info, add_assets_msg).unwrap();
+
+        let reset_at = env.block.time;
+        let transmuter = Transmuter::new();
 
         // Reset change limiter states if new assets are added
         for denom in ["uosmo", "uion"] {
-            assert_clean_change_limiters_by_denom!(
+            assert_reset_change_limiters_by_denom!(
                 denom,
-                Transmuter::new().limiters,
+                reset_at,
+                transmuter,
                 deps.as_ref().storage
             );
         }
+
+        env.block.time = env.block.time.plus_nanos(360);
 
         // Check if the new assets were added
         let res = query(
@@ -1550,9 +1576,14 @@ mod tests {
             vec![]
         );
 
-        assert_clean_change_limiters_by_denom!("tbtc", Transmuter::new().limiters, &deps.storage);
-        assert_clean_change_limiters_by_denom!("nbtc", Transmuter::new().limiters, &deps.storage);
-        assert_clean_change_limiters_by_denom!("stbtc", Transmuter::new().limiters, &deps.storage);
+        for denom in ["tbtc", "nbtc", "stbtc"] {
+            assert_reset_change_limiters_by_denom!(
+                denom,
+                env.block.time,
+                Transmuter::new(),
+                deps.as_ref().storage
+            );
+        }
 
         // try unmark nbtc should fail
         let unmark_corrupted_assets_msg =
