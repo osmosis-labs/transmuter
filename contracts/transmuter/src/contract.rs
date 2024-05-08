@@ -1,4 +1,4 @@
-use std::iter;
+use std::{collections::BTreeMap, iter};
 
 use crate::{
     alloyed_asset::AlloyedAsset,
@@ -6,7 +6,7 @@ use crate::{
     ensure_admin_authority, ensure_moderator_authority,
     error::{non_empty_input_required, nonpayable, ContractError},
     limiter::{Limiter, LimiterParams, Limiters},
-    math::rescale,
+    math::{self, rescale},
     role::Role,
     swap::{BurnTarget, Entrypoint, SwapFromAlloyedConstraint, SwapToAlloyedConstraint, SWAP_FEE},
     transmuter_pool::TransmuterPool,
@@ -612,8 +612,8 @@ impl Transmuter<'_> {
     pub(crate) fn spot_price(
         &self,
         QueryCtx { deps, env: _ }: QueryCtx,
-        quote_asset_denom: String,
         base_asset_denom: String,
+        quote_asset_denom: String,
     ) -> Result<SpotPriceResponse, ContractError> {
         // ensure that it's not the same denom
         ensure!(
@@ -626,41 +626,39 @@ impl Transmuter<'_> {
         // ensure that qoute asset denom are in swappable assets
         let pool = self.pool.load(deps.storage)?;
         let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
-        let swappable_assets = pool
+        let alloyed_normalization_factor =
+            self.alloyed_asset.get_normalization_factor(deps.storage)?;
+        let swappable_asset_norm_factors = pool
             .pool_assets
             .iter()
-            .map(|c| c.denom().to_string())
-            .chain(vec![alloyed_denom])
-            .collect::<Vec<_>>();
+            .map(|c| (c.denom().to_string(), c.normalization_factor()))
+            .chain(vec![(alloyed_denom, alloyed_normalization_factor)])
+            .collect::<BTreeMap<String, Uint128>>();
 
-        ensure!(
-            swappable_assets
-                .iter()
-                .any(|denom| denom == quote_asset_denom.as_str()),
-            ContractError::SpotPriceQueryFailed {
-                reason: format!(
-                    "quote_asset_denom is not in swappable assets: must be one of {:?} but got {}",
-                    swappable_assets, quote_asset_denom
-                )
-            }
-        );
-
-        // ensure that base asset denom are in swappable assets
-        ensure!(
-            swappable_assets
-                .iter()
-                .any(|denom| denom == base_asset_denom.as_str()),
-            ContractError::SpotPriceQueryFailed {
+        let base_asset_norm_factor = swappable_asset_norm_factors
+            .get(&base_asset_denom)
+            .cloned()
+            .ok_or_else(|| ContractError::SpotPriceQueryFailed {
                 reason: format!(
                     "base_asset_denom is not in swappable assets: must be one of {:?} but got {}",
-                    swappable_assets, base_asset_denom
-                )
-            }
-        );
+                    swappable_asset_norm_factors.keys(),
+                    base_asset_denom
+                ),
+            })?;
 
-        // spot price is always one for both side
+        let quote_asset_norm_factor = swappable_asset_norm_factors
+            .get(&quote_asset_denom)
+            .cloned()
+            .ok_or_else(|| ContractError::SpotPriceQueryFailed {
+                reason: format!(
+                    "quote_asset_denom is not in swappable assets: must be one of {:?} but got {}",
+                    swappable_asset_norm_factors.keys(),
+                    quote_asset_denom
+                ),
+            })?;
+
         Ok(SpotPriceResponse {
-            spot_price: Decimal::one(),
+            spot_price: math::price(base_asset_norm_factor, quote_asset_norm_factor)?,
         })
     }
 
@@ -3058,7 +3056,7 @@ mod tests {
                 AssetConfig::from_denom_str("uion"),
             ],
             admin: Some(admin.to_string()),
-            alloyed_asset_subdenom: "usomoion".to_string(),
+            alloyed_asset_subdenom: "uosmoion".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             moderator: "moderator".to_string(),
         };
@@ -3069,7 +3067,7 @@ mod tests {
         instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
 
         // Manually reply
-        let alloyed_denom = "usomoion";
+        let alloyed_denom = "uosmoion";
 
         reply(
             deps.as_mut(),
@@ -3121,7 +3119,7 @@ mod tests {
         assert_eq!(
             err,
             ContractError::SpotPriceQueryFailed {
-                reason: "quote_asset_denom is not in swappable assets: must be one of [\"uosmo\", \"uion\", \"usomoion\"] but got uatom".to_string()
+                reason: "quote_asset_denom is not in swappable assets: must be one of [\"uion\", \"uosmo\", \"uosmoion\"] but got uatom".to_string()
             }
         );
 
@@ -3138,7 +3136,7 @@ mod tests {
         assert_eq!(
             err,
             ContractError::SpotPriceQueryFailed {
-                reason: "base_asset_denom is not in swappable assets: must be one of [\"uosmo\", \"uion\", \"usomoion\"] but got uatom".to_string()
+                reason: "base_asset_denom is not in swappable assets: must be one of [\"uion\", \"uosmo\", \"uosmoion\"] but got uatom".to_string()
             }
         );
 
@@ -3182,6 +3180,121 @@ mod tests {
 
         let spot_price: SpotPriceResponse = from_json(res).unwrap();
         assert_eq!(spot_price.spot_price, Decimal::one());
+    }
+
+    #[test]
+    fn test_spot_price_with_different_norm_factor() {
+        let mut deps = mock_dependencies();
+
+        // make denom has non-zero total supply
+        deps.querier
+            .update_balance("someone", vec![Coin::new(1, "tbtc"), Coin::new(1, "nbtc")]);
+
+        let admin = "admin";
+        let init_msg = InstantiateMsg {
+            pool_asset_configs: vec![
+                AssetConfig {
+                    denom: "tbtc".to_string(),
+                    normalization_factor: Uint128::from(1u128),
+                },
+                AssetConfig {
+                    denom: "nbtc".to_string(),
+                    normalization_factor: Uint128::from(100u128),
+                },
+            ],
+            admin: Some(admin.to_string()),
+            alloyed_asset_subdenom: "allbtc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::from(100u128),
+            moderator: "moderator".to_string(),
+        };
+        let env = mock_env();
+        let info = mock_info(admin, &[]);
+
+        // Instantiate the contract.
+        instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
+
+        // Manually reply
+        let alloyed_denom = "allbtc";
+
+        reply(
+            deps.as_mut(),
+            env.clone(),
+            Reply {
+                id: 1,
+                result: SubMsgResult::Ok(SubMsgResponse {
+                    events: vec![],
+                    data: Some(
+                        MsgCreateDenomResponse {
+                            new_token_denom: alloyed_denom.to_string(),
+                        }
+                        .into(),
+                    ),
+                }),
+            },
+        )
+        .unwrap();
+
+        // Test spot price with pool assets
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::SpotPrice {
+                base_asset_denom: "nbtc".to_string(),
+                quote_asset_denom: "tbtc".to_string(),
+            }),
+        )
+        .unwrap();
+
+        // tbtc/1 = nbtc/100
+        // tbtc = 1nbtc/100
+        let spot_price: SpotPriceResponse = from_json(res).unwrap();
+        assert_eq!(spot_price.spot_price, Decimal::from_ratio(1u128, 100u128));
+
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::SpotPrice {
+                base_asset_denom: "tbtc".to_string(),
+                quote_asset_denom: "nbtc".to_string(),
+            }),
+        )
+        .unwrap();
+
+        // nbtc/100 = tbtc/1
+        // nbtc = 100tbtc
+        let spot_price: SpotPriceResponse = from_json(res).unwrap();
+        assert_eq!(spot_price.spot_price, Decimal::from_ratio(100u128, 1u128));
+
+        // Test spot price with alloyed denom
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::SpotPrice {
+                quote_asset_denom: "nbtc".to_string(),
+                base_asset_denom: alloyed_denom.to_string(),
+            }),
+        )
+        .unwrap();
+
+        // nbtc/100 = allbtc/100
+        // nbtc = 1allbtc
+        let spot_price: SpotPriceResponse = from_json(res).unwrap();
+        assert_eq!(spot_price.spot_price, Decimal::one());
+
+        let res = query(
+            deps.as_ref(),
+            env,
+            ContractQueryMsg::Transmuter(QueryMsg::SpotPrice {
+                quote_asset_denom: alloyed_denom.to_string(),
+                base_asset_denom: "tbtc".to_string(),
+            }),
+        )
+        .unwrap();
+
+        // allbtc/100 = tbtc/1
+        // tbtc = 100allbtc
+        let spot_price: SpotPriceResponse = from_json(res).unwrap();
+        assert_eq!(spot_price.spot_price, Decimal::from_ratio(100u128, 1u128));
     }
 
     #[test]

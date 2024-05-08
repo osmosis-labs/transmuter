@@ -1,10 +1,15 @@
-use cosmwasm_std::{ensure, CheckedMultiplyRatioError, DivideByZeroError, Uint128};
+use cosmwasm_std::{
+    ensure, CheckedFromRatioError, CheckedMultiplyRatioError, Decimal, DivideByZeroError, Uint128,
+};
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq)]
 pub enum MathError {
     #[error("{0}")]
     CheckedMultiplyRatioError(#[from] CheckedMultiplyRatioError),
+
+    #[error("{0}")]
+    CheckedFromRatioError(#[from] CheckedFromRatioError),
 
     #[error("{0}")]
     DivideByZeroError(#[from] DivideByZeroError),
@@ -70,6 +75,23 @@ pub fn rescale(n: Uint128, numerator: Uint128, denominator: Uint128) -> MathResu
 
     n.checked_multiply_ratio(numerator, denominator)
         .map_err(Into::into)
+}
+
+/// Calculate the price of the base asset in terms of the quote asset based on the normalized factors
+///
+/// ```
+/// quote_amt / quote_norm_factor = base_amt / base_norm_factor
+/// quote_amt = base_amt * quote_norm_factor / base_norm_factor
+/// ```
+///
+/// spot price is how much of the quote asset is needed to buy one unit of the base asset
+/// therefore:
+///
+/// ```
+/// spot_price = 1 * quote_norm_factor / base_norm_factor
+/// ```
+pub fn price(base_norm_factor: Uint128, quote_norm_factor: Uint128) -> MathResult<Decimal> {
+    Decimal::checked_from_ratio(quote_norm_factor, base_norm_factor).map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -180,6 +202,40 @@ mod tests {
                 Uint128::from(denominator)
             ),
             expected.map(Uint128::from)
+        );
+    }
+
+    #[rstest]
+    #[case(1u128, 1u128, Ok(Decimal::one()))]
+    #[case(10u128, 20u128, Ok(Decimal::from_ratio(2u128, 1u128)))]
+    #[case(100u128, 200u128, Ok(Decimal::from_ratio(2u128, 1u128)))]
+    #[case(
+        10_000_000_000_000_000u128,
+        1_000_000_000_000_000_000u128,
+        Ok(Decimal::from_ratio(100u128, 1u128))
+    )]
+    #[case(
+        1_000_000_000_000_000_000u128,
+        10_000_000_000_000_000u128,
+        Ok(Decimal::from_ratio(1u128, 100u128))
+    )]
+    #[case(100u128, 0u128, Ok(Decimal::zero()))]
+    #[case(
+        0u128,
+        100u128,
+        Err(MathError::CheckedFromRatioError(CheckedFromRatioError::DivideByZero))
+    )]
+    fn test_price(
+        #[case] base_norm_factor: u128,
+        #[case] quote_norm_factor: u128,
+        #[case] expected: MathResult<Decimal>,
+    ) {
+        assert_eq!(
+            price(
+                Uint128::from(base_norm_factor),
+                Uint128::from(quote_norm_factor)
+            ),
+            expected
         );
     }
 }
