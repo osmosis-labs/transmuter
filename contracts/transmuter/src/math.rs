@@ -79,17 +79,13 @@ pub fn rescale(n: Uint128, numerator: Uint128, denominator: Uint128) -> MathResu
 
 /// Calculate the price of the base asset in terms of the quote asset based on the normalized factors
 ///
-/// ```
 /// quote_amt / quote_norm_factor = base_amt / base_norm_factor
 /// quote_amt = base_amt * quote_norm_factor / base_norm_factor
-/// ```
 ///
 /// spot price is how much of the quote asset is needed to buy one unit of the base asset
 /// therefore:
 ///
-/// ```
 /// spot_price = 1 * quote_norm_factor / base_norm_factor
-/// ```
 pub fn price(base_norm_factor: Uint128, quote_norm_factor: Uint128) -> MathResult<Decimal> {
     Decimal::checked_from_ratio(quote_norm_factor, base_norm_factor).map_err(Into::into)
 }
