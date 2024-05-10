@@ -1,7 +1,7 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
     ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env, Response,
-    StdError, Uint128,
+    StdError, Storage, Uint128,
 };
 use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
 use serde::Serialize;
@@ -132,6 +132,10 @@ impl Transmuter<'_> {
                 env.block.time,
             )?;
         }
+
+        // no need for cleaning up drained corrupted assets here
+        // since this function will only adding more underlying assets
+        // rather than removing any of them
 
         self.pool.save(deps.storage, &pool)?;
 
@@ -300,15 +304,7 @@ impl Transmuter<'_> {
             }
         }
 
-        // remove corrupted assets from the pool & deregister all limiters for that denom
-        // when each corrupted asset is all redeemed
-        for corrupted in pool.clone().corrupted_assets() {
-            if corrupted.amount().is_zero() {
-                pool.remove_corrupted_asset(corrupted.denom())?;
-                self.limiters
-                    .uncheck_deregister_all_for_denom(deps.storage, corrupted.denom())?;
-            }
-        }
+        self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
 
         self.pool.save(deps.storage, &pool)?;
 
@@ -342,7 +338,7 @@ impl Transmuter<'_> {
         deps: DepsMut,
         env: Env,
     ) -> Result<Response, ContractError> {
-        let (pool, actual_token_out) =
+        let (mut pool, actual_token_out) =
             self.out_amt_given_in(deps.as_ref(), token_in, token_out_denom)?;
 
         // ensure token_out amount is greater than or equal to token_out_min_amount
@@ -362,6 +358,8 @@ impl Transmuter<'_> {
                 env.block.time,
             )?;
         }
+
+        self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
 
         // save pool
         self.pool.save(deps.storage, &pool)?;
@@ -389,7 +387,7 @@ impl Transmuter<'_> {
         deps: DepsMut,
         env: Env,
     ) -> Result<Response, ContractError> {
-        let (pool, actual_token_in) =
+        let (mut pool, actual_token_in) =
             self.in_amt_given_out(deps.as_ref(), token_out.clone(), token_in_denom.to_string())?;
 
         ensure!(
@@ -408,6 +406,8 @@ impl Transmuter<'_> {
                 env.block.time,
             )?;
         }
+
+        self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
 
         // save pool
         self.pool.save(deps.storage, &pool)?;
@@ -561,6 +561,24 @@ impl Transmuter<'_> {
         );
         Ok(())
     }
+
+    /// remove corrupted assets from the pool & deregister all limiters for that denom
+    /// when each corrupted asset is all redeemed
+    fn clean_up_drained_corrupted_assets(
+        &self,
+        storage: &mut dyn Storage,
+        pool: &mut TransmuterPool,
+    ) -> Result<(), ContractError> {
+        for corrupted in pool.clone().corrupted_assets() {
+            if corrupted.amount().is_zero() {
+                pool.remove_corrupted_asset(corrupted.denom())?;
+                self.limiters
+                    .uncheck_deregister_all_for_denom(storage, corrupted.denom())?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Possible variants of swap, depending on the input and output tokens
@@ -650,7 +668,11 @@ mod tests {
     use crate::{asset::Asset, limiter::LimiterParams};
 
     use super::*;
-    use cosmwasm_std::testing::{mock_dependencies, mock_env, MOCK_CONTRACT_ADDR};
+    use cosmwasm_std::{
+        coin,
+        testing::{mock_dependencies, mock_env, MOCK_CONTRACT_ADDR},
+    };
+    use itertools::Itertools;
     use rstest::rstest;
 
     #[rstest]
@@ -1192,6 +1214,168 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_swap_non_alloyed_exact_amount_in_with_corrupted_assets() {
+        let mut deps = mock_dependencies();
+        let transmuter = Transmuter::new();
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_normalization_factor(&mut deps.storage, 100u128.into())
+            .unwrap();
+
+        let mut pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(), // 1000000000000 * 100
+                Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(), // 1000000000000 * 10
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 1u128).unwrap(), // 1000000000000 * 100
+            ],
+        };
+
+        let all_denoms = pool
+            .clone()
+            .pool_assets
+            .into_iter()
+            .map(|asset| asset.denom().to_string())
+            .collect::<Vec<_>>();
+
+        pool.mark_corrupted_assets(&["denom1".to_owned()]).unwrap();
+
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        for denom in all_denoms.clone() {
+            transmuter
+                .limiters
+                .register(
+                    &mut deps.storage,
+                    denom.as_str(),
+                    "static",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(100),
+                    },
+                )
+                .unwrap();
+        }
+
+        transmuter
+            .swap_non_alloyed_exact_amount_in(
+                coin(1000000000000, "denom3"),
+                "denom1",
+                1000000000000u128.into(),
+                deps.api.addr_make("sender"),
+                deps.as_mut(),
+                mock_env(),
+            )
+            .unwrap();
+
+        // all drained denoms that are corrupted should not be in the pool
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+
+        let denoms = pool
+            .pool_assets
+            .into_iter()
+            .map(|a| a.denom().to_string())
+            .collect_vec();
+
+        assert_eq!(denoms, vec!["denom2", "denom3"]);
+
+        let limiter_denoms = transmuter
+            .limiters
+            .list_limiters(&deps.storage)
+            .unwrap()
+            .into_iter()
+            .map(|((denom, _), _)| denom)
+            .unique()
+            .collect_vec();
+
+        assert_eq!(limiter_denoms, vec!["denom2", "denom3"]);
+    }
+
+    #[test]
+    fn test_swap_non_alloyed_exact_amount_out_with_corrupted_assets() {
+        let mut deps = mock_dependencies();
+        let transmuter = Transmuter::new();
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_normalization_factor(&mut deps.storage, 100u128.into())
+            .unwrap();
+
+        let mut pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(), // 1000000000000 * 100
+                Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(), // 1000000000000 * 10
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 1u128).unwrap(), // 1000000000000 * 100
+            ],
+        };
+
+        let all_denoms = pool
+            .clone()
+            .pool_assets
+            .into_iter()
+            .map(|asset| asset.denom().to_string())
+            .collect::<Vec<_>>();
+
+        pool.mark_corrupted_assets(&["denom1".to_owned()]).unwrap();
+
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        for denom in all_denoms.clone() {
+            transmuter
+                .limiters
+                .register(
+                    &mut deps.storage,
+                    denom.as_str(),
+                    "static",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(100),
+                    },
+                )
+                .unwrap();
+        }
+
+        transmuter
+            .swap_non_alloyed_exact_amount_out(
+                "denom3",
+                1000000000000u128.into(),
+                coin(1000000000000, "denom1"),
+                deps.api.addr_make("sender"),
+                deps.as_mut(),
+                mock_env(),
+            )
+            .unwrap();
+
+        // all drained denoms that are corrupted should not be in the pool
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+
+        let denoms = pool
+            .pool_assets
+            .into_iter()
+            .map(|a| a.denom().to_string())
+            .collect_vec();
+
+        assert_eq!(denoms, vec!["denom2", "denom3"]);
+
+        let limiter_denoms = transmuter
+            .limiters
+            .list_limiters(&deps.storage)
+            .unwrap()
+            .into_iter()
+            .map(|((denom, _), _)| denom)
+            .unique()
+            .collect_vec();
+
+        assert_eq!(limiter_denoms, vec!["denom2", "denom3"]);
     }
 
     #[rstest]
