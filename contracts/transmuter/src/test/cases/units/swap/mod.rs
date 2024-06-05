@@ -8,7 +8,7 @@ use osmosis_std::types::osmosis::poolmanager::v1beta1::{
 use osmosis_test_tube::{Account, Bank, Module, OsmosisTestApp};
 
 use crate::asset::{convert_amount, AssetConfig, Rounding};
-use crate::contract::sv::{ExecMsg, QueryMsg};
+use crate::contract::sv::QueryMsg;
 use crate::contract::{
     GetShareDenomResponse, GetTotalPoolLiquidityResponse, GetTotalSharesResponse,
     ListAssetConfigsResponse,
@@ -481,6 +481,7 @@ fn pool_with_single_lp(
     pool_assets: Vec<Coin>,
     asset_configs: Vec<AssetConfig>,
 ) -> TestEnv<'_> {
+    let cp = CosmwasmPool::new(app);
     let non_zero_pool_assets = pool_assets
         .clone()
         .into_iter()
@@ -515,14 +516,25 @@ fn pool_with_single_lp(
         })
         .build(app);
 
+    let GetShareDenomResponse { share_denom } =
+        t.contract.query(&QueryMsg::GetShareDenom {}).unwrap();
+
     if !non_zero_pool_assets.is_empty() {
-        t.contract
-            .execute(
-                &ExecMsg::JoinPool {},
-                &non_zero_pool_assets,
+        for token_in in non_zero_pool_assets {
+            cp.swap_exact_amount_in(
+                MsgSwapExactAmountIn {
+                    sender: t.accounts["provider"].address(),
+                    token_in: Some(token_in.into()),
+                    routes: vec![SwapAmountInRoute {
+                        pool_id: t.contract.pool_id,
+                        token_out_denom: share_denom.clone(),
+                    }],
+                    token_out_min_amount: Uint128::one().to_string(),
+                },
                 &t.accounts["provider"],
             )
             .unwrap();
+        }
     }
 
     t

@@ -8,7 +8,7 @@ use crate::{
     limiter::{Limiter, LimiterParams, Limiters},
     math::{self, rescale},
     role::Role,
-    swap::{BurnTarget, Entrypoint, SwapFromAlloyedConstraint, SwapToAlloyedConstraint, SWAP_FEE},
+    swap::{BurnTarget, Entrypoint, SwapFromAlloyedConstraint, SWAP_FEE},
     transmuter_pool::TransmuterPool,
 };
 use cosmwasm_schema::cw_serde;
@@ -470,26 +470,6 @@ impl Transmuter<'_> {
             })
     }
 
-    /// Join pool with tokens that exist in the pool.
-    /// Token used to join pool is sent to the contract via `funds` in `MsgExecuteContract`.
-    #[sv::msg(exec)]
-    pub fn join_pool(
-        &self,
-        ExecCtx { deps, env, info }: ExecCtx,
-    ) -> Result<Response, ContractError> {
-        self.swap_tokens_to_alloyed_asset(
-            Entrypoint::Exec,
-            SwapToAlloyedConstraint::ExactIn {
-                tokens_in: &info.funds,
-                token_out_min_amount: Uint128::zero(),
-            },
-            info.sender,
-            deps,
-            env,
-        )
-        .map(|res| res.add_attribute("method", "join_pool"))
-    }
-
     /// Exit pool with `tokens_out` amount of tokens.
     /// As long as the sender has enough shares, the contract will send `tokens_out` amount of tokens to the sender.
     /// The amount of shares will be deducted from the sender's shares.
@@ -889,10 +869,33 @@ mod tests {
     use crate::*;
 
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
-    use cosmwasm_std::{
-        attr, from_json, BankMsg, BlockInfo, Storage, SubMsgResponse, SubMsgResult, Uint64,
-    };
-    use osmosis_std::types::osmosis::tokenfactory::v1beta1::MsgBurn;
+    use cosmwasm_std::{attr, from_json, BlockInfo, Storage, SubMsgResponse, SubMsgResult, Uint64};
+
+    fn add_liquidity(
+        sender: &str,
+        funds: &[Coin],
+        mut deps: DepsMut,
+        env: Env,
+    ) -> Result<(), ContractError> {
+        let alloyed_denom = Transmuter::new()
+            .alloyed_asset
+            .get_alloyed_denom(deps.storage)
+            .unwrap();
+
+        for token_in in funds {
+            // swap for alloyed
+            let join = SudoMsg::SwapExactAmountIn {
+                sender: sender.to_string(),
+                token_in: token_in.to_owned(),
+                token_out_denom: alloyed_denom.clone(),
+                token_out_min_amount: Uint128::one(),
+                swap_fee: SWAP_FEE,
+            };
+            sudo(deps.branch(), env.clone(), join)?;
+        }
+
+        Ok(())
+    }
 
     #[test]
     fn test_add_new_assets() {
@@ -948,16 +951,16 @@ mod tests {
         )
         .unwrap();
 
-        // join pool
-        let info = mock_info(
+        add_liquidity(
             "someone",
             &[
                 Coin::new(1000000000, "uosmo"),
                 Coin::new(1000000000, "uion"),
             ],
-        );
-        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-        execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
+            deps.as_mut(),
+            env.clone(),
+        )
+        .unwrap();
 
         // set limiters
         let change_limiter_params = LimiterParams::ChangeLimiter {
@@ -1007,20 +1010,32 @@ mod tests {
         let mut env = env.clone();
         env.block.time = env.block.time.plus_nanos(360);
 
-        let info = mock_info(
+        add_liquidity(
             "someone",
-            &[Coin::new(550, "uosmo"), Coin::new(500, "uion")],
-        );
-        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-        execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
+            &[Coin::new(500, "uion")],
+            deps.as_mut(),
+            env.clone(),
+        )
+        .unwrap();
 
         env.block.time = env.block.time.plus_nanos(3000);
-        let info = mock_info(
+
+        add_liquidity(
+            "someone",
+            &[Coin::new(550, "uosmo")],
+            deps.as_mut(),
+            env.clone(),
+        )
+        .unwrap();
+
+        env.block.time = env.block.time.plus_nanos(3000);
+        add_liquidity(
             "someone",
             &[Coin::new(450, "uosmo"), Coin::new(500, "uion")],
-        );
-        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-        execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
+            deps.as_mut(),
+            env.clone(),
+        )
+        .unwrap();
 
         for denom in ["uosmo", "uion"] {
             assert_dirty_change_limiters_by_denom!(
@@ -1256,11 +1271,7 @@ mod tests {
             Coin::new(1_000_000_000_000, "stbtc"),
         ];
         deps.querier.update_balance("someone", liquidity.clone());
-
-        let info = mock_info("someone", &liquidity);
-        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-
-        execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
+        add_liquidity("someone", &liquidity, deps.as_mut(), env.clone()).unwrap();
 
         // set limiters
         for denom in ["wbtc", "tbtc", "nbtc", "stbtc"] {
@@ -1388,17 +1399,6 @@ mod tests {
             let expected_err = ContractError::CorruptedAssetRelativelyIncreased {
                 denom: denom.clone(),
             };
-
-            // join with corrupted denom should fail
-            let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-            let err = execute(
-                deps.as_mut(),
-                env.clone(),
-                mock_info("user", &[Coin::new(1000, denom.clone())]),
-                join_pool_msg,
-            )
-            .unwrap_err();
-            assert_eq!(expected_err, err);
 
             // swap exact in with corrupted denom as token in should fail
             let swap_msg = SudoMsg::SwapExactAmountIn {
@@ -1782,17 +1782,6 @@ mod tests {
         let err = execute(deps.as_mut(), env.clone(), mock_info(moderator, &[]), msg).unwrap_err();
         assert_eq!(err, ContractError::UnchangedActiveStatus { status: false });
 
-        // Test that JoinPool is blocked when active status is false
-        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-        let err = execute(
-            deps.as_mut(),
-            env.clone(),
-            mock_info("user", &[Coin::new(1000, "uion"), Coin::new(1000, "uosmo")]),
-            join_pool_msg,
-        )
-        .unwrap_err();
-        assert_eq!(err, ContractError::InactivePool {});
-
         // Test that SwapExactAmountIn is blocked when active status is false
         let swap_exact_amount_in_msg = SudoMsg::SwapExactAmountIn {
             token_in: Coin::new(1000, "uion"),
@@ -1841,16 +1830,6 @@ mod tests {
         .unwrap();
         let active_status: IsActiveResponse = from_json(res).unwrap();
         assert!(active_status.is_active);
-
-        // Test that JoinPool is active when active status is true
-        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-        let res = execute(
-            deps.as_mut(),
-            env.clone(),
-            mock_info("user", &[Coin::new(1000, "uion"), Coin::new(1000, "uosmo")]),
-            join_pool_msg,
-        );
-        assert!(res.is_ok());
 
         // Test that SwapExactAmountIn is active when active status is true
         let swap_exact_amount_in_msg = SudoMsg::SwapExactAmountIn {
@@ -2644,207 +2623,6 @@ mod tests {
     }
 
     #[test]
-    fn test_join_pool() {
-        let mut deps = mock_dependencies();
-
-        // make denom has non-zero total supply
-        deps.querier
-            .update_balance("someone", vec![Coin::new(1, "uosmo"), Coin::new(1, "uion")]);
-
-        let admin = "admin";
-        let user = "user";
-        let init_msg = InstantiateMsg {
-            pool_asset_configs: vec![
-                AssetConfig::from_denom_str("uosmo"),
-                AssetConfig::from_denom_str("uion"),
-            ],
-            admin: Some(admin.to_string()),
-            alloyed_asset_subdenom: "usomoion".to_string(),
-            alloyed_asset_normalization_factor: Uint128::one(),
-            moderator: "moderator".to_string(),
-        };
-        let env = mock_env();
-        let info = mock_info(admin, &[]);
-
-        // Instantiate the contract.
-        instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
-
-        // Manually reply
-        let alloyed_denom = "usomoion";
-
-        reply(
-            deps.as_mut(),
-            env.clone(),
-            Reply {
-                id: 1,
-                result: SubMsgResult::Ok(SubMsgResponse {
-                    events: vec![],
-                    data: Some(
-                        MsgCreateDenomResponse {
-                            new_token_denom: alloyed_denom.to_string(),
-                        }
-                        .into(),
-                    ),
-                }),
-            },
-        )
-        .unwrap();
-
-        // join pool with amount 0 coin should error
-        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-        let info = mock_info(user, &[Coin::new(1000, "uion"), Coin::new(0, "uosmo")]);
-        let err = execute(deps.as_mut(), env.clone(), info, join_pool_msg).unwrap_err();
-
-        assert_eq!(err, ContractError::ZeroValueOperation {});
-
-        // join pool properly works
-        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-        let info = mock_info(user, &[Coin::new(1000, "uion"), Coin::new(1000, "uosmo")]);
-        execute(deps.as_mut(), env.clone(), info, join_pool_msg).unwrap();
-
-        // Check pool asset
-        let GetTotalPoolLiquidityResponse {
-            total_pool_liquidity,
-        } = from_json(
-            query(
-                deps.as_ref(),
-                env,
-                ContractQueryMsg::Transmuter(QueryMsg::GetTotalPoolLiquidity {}),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            total_pool_liquidity,
-            vec![Coin::new(1000, "uosmo"), Coin::new(1000, "uion")]
-        );
-    }
-
-    #[test]
-    fn test_exit_pool() {
-        let mut deps = mock_dependencies();
-
-        // make denom has non-zero total supply
-        deps.querier
-            .update_balance("someone", vec![Coin::new(1, "uosmo"), Coin::new(1, "uion")]);
-
-        let admin = "admin";
-        let user = "user";
-        let init_msg = InstantiateMsg {
-            pool_asset_configs: vec![
-                AssetConfig::from_denom_str("uosmo"),
-                AssetConfig::from_denom_str("uion"),
-            ],
-            admin: Some(admin.to_string()),
-            alloyed_asset_subdenom: "usomoion".to_string(),
-            alloyed_asset_normalization_factor: Uint128::one(),
-            moderator: "moderator".to_string(),
-        };
-        let env = mock_env();
-        let info = mock_info(admin, &[]);
-
-        // Instantiate the contract.
-        instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
-
-        // Manually reply
-        let alloyed_denom = "usomoion";
-
-        reply(
-            deps.as_mut(),
-            env.clone(),
-            Reply {
-                id: 1,
-                result: SubMsgResult::Ok(SubMsgResponse {
-                    events: vec![],
-                    data: Some(
-                        MsgCreateDenomResponse {
-                            new_token_denom: alloyed_denom.to_string(),
-                        }
-                        .into(),
-                    ),
-                }),
-            },
-        )
-        .unwrap();
-
-        // join pool by others for sufficient amount
-        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-        let info = mock_info(admin, &[Coin::new(1000, "uion"), Coin::new(1000, "uosmo")]);
-        execute(deps.as_mut(), env.clone(), info, join_pool_msg).unwrap();
-
-        // User tries to exit pool
-        let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
-            tokens_out: vec![Coin::new(1000, "uion"), Coin::new(1000, "uosmo")],
-        });
-        let err = execute(
-            deps.as_mut(),
-            env.clone(),
-            mock_info(user, &[]),
-            exit_pool_msg,
-        )
-        .unwrap_err();
-
-        assert_eq!(
-            err,
-            ContractError::InsufficientShares {
-                required: 2000u128.into(),
-                available: Uint128::zero()
-            }
-        );
-        // User tries to join pool
-        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-        let res = execute(
-            deps.as_mut(),
-            env.clone(),
-            mock_info(user, &[Coin::new(1000, "uion"), Coin::new(1000, "uosmo")]),
-            join_pool_msg,
-        );
-        assert!(res.is_ok());
-
-        deps.querier
-            .update_balance(user, vec![Coin::new(2000, alloyed_denom)]);
-
-        // User tries to exit pool with zero amount
-        let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
-            tokens_out: vec![Coin::new(0, "uion"), Coin::new(1, "uosmo")],
-        });
-        let err = execute(
-            deps.as_mut(),
-            env.clone(),
-            mock_info(user, &[]),
-            exit_pool_msg,
-        )
-        .unwrap_err();
-        assert_eq!(err, ContractError::ZeroValueOperation {});
-
-        // User tries to exit pool again
-        let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
-            tokens_out: vec![Coin::new(1000, "uion"), Coin::new(1000, "uosmo")],
-        });
-        let res = execute(
-            deps.as_mut(),
-            env.clone(),
-            mock_info(user, &[]),
-            exit_pool_msg,
-        )
-        .unwrap();
-
-        let expected = Response::new()
-            .add_attribute("method", "exit_pool")
-            .add_message(MsgBurn {
-                sender: env.contract.address.to_string(),
-                amount: Some(Coin::new(2000u128, alloyed_denom).into()),
-                burn_from_address: user.to_string(),
-            })
-            .add_message(BankMsg::Send {
-                to_address: user.to_string(),
-                amount: vec![Coin::new(1000, "uion"), Coin::new(1000, "uosmo")],
-            });
-
-        assert_eq!(res, expected);
-    }
-
-    #[test]
     fn test_shares_and_liquidity() {
         let mut deps = mock_dependencies();
 
@@ -2892,13 +2670,11 @@ mod tests {
         )
         .unwrap();
 
-        // Join pool
-        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-        execute(
+        add_liquidity(
+            user_1,
+            &[Coin::new(1000, "uion"), Coin::new(1000, "uosmo")],
             deps.as_mut(),
             env.clone(),
-            mock_info(user_1, &[Coin::new(1000, "uion"), Coin::new(1000, "uosmo")]),
-            join_pool_msg,
         )
         .unwrap();
 
@@ -2941,13 +2717,12 @@ mod tests {
             vec![Coin::new(1000, "uosmo"), Coin::new(1000, "uion")]
         );
 
-        // Join pool
-        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-        execute(
+        // Add liquidity
+        add_liquidity(
+            user_2,
+            &[Coin::new(1000, "uion")],
             deps.as_mut(),
             env.clone(),
-            mock_info(user_2, &[Coin::new(1000, "uion")]),
-            join_pool_msg,
         )
         .unwrap();
 
@@ -3345,16 +3120,11 @@ mod tests {
         )
         .unwrap();
 
-        // join pool
-        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-        execute(
+        add_liquidity(
+            admin,
+            &[Coin::new(1000, "axlusdc"), Coin::new(2000, "whusdc")],
             deps.as_mut(),
             env.clone(),
-            mock_info(
-                admin,
-                &[Coin::new(1000, "axlusdc"), Coin::new(2000, "whusdc")],
-            ),
-            join_pool_msg,
         )
         .unwrap();
 
@@ -3559,16 +3329,11 @@ mod tests {
         )
         .unwrap();
 
-        // join pool
-        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-        execute(
+        add_liquidity(
+            admin,
+            &[Coin::new(1000, "axlusdc"), Coin::new(2000, "whusdc")],
             deps.as_mut(),
             env.clone(),
-            mock_info(
-                admin,
-                &[Coin::new(1000, "axlusdc"), Coin::new(2000, "whusdc")],
-            ),
-            join_pool_msg,
         )
         .unwrap();
 

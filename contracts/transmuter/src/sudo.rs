@@ -171,9 +171,9 @@ mod tests {
     use super::*;
     use crate::{
         asset::AssetConfig,
-        contract::sv::{ContractExecMsg, ExecMsg, InstantiateMsg},
-        execute, instantiate, reply, sudo,
-        swap::{SwapExactAmountInResponseData, SwapExactAmountOutResponseData},
+        contract::sv::InstantiateMsg,
+        instantiate, reply, sudo,
+        swap::{SwapExactAmountInResponseData, SwapExactAmountOutResponseData, SWAP_FEE},
     };
     use cosmwasm_std::{
         testing::{mock_dependencies, mock_env, mock_info, MOCK_CONTRACT_ADDR},
@@ -182,6 +182,32 @@ mod tests {
     use osmosis_std::types::osmosis::tokenfactory::v1beta1::{
         MsgBurn, MsgCreateDenomResponse, MsgMint,
     };
+
+    fn add_liquidity(
+        sender: &str,
+        funds: &[Coin],
+        mut deps: DepsMut,
+        env: Env,
+    ) -> Result<(), ContractError> {
+        let alloyed_denom = Transmuter::new()
+            .alloyed_asset
+            .get_alloyed_denom(deps.storage)
+            .unwrap();
+
+        for token_in in funds {
+            // swap for alloyed
+            let join = SudoMsg::SwapExactAmountIn {
+                sender: sender.to_string(),
+                token_in: token_in.to_owned(),
+                token_out_denom: alloyed_denom.clone(),
+                token_out_min_amount: Uint128::one(),
+                swap_fee: SWAP_FEE,
+            };
+            sudo(deps.branch(), env.clone(), join)?;
+        }
+
+        Ok(())
+    }
 
     #[test]
     fn test_swap_exact_amount_in() {
@@ -232,18 +258,14 @@ mod tests {
         )
         .unwrap();
 
-        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-        execute(
+        add_liquidity(
+            user,
+            &[
+                Coin::new(1_000_000_000_000, "axlusdc"),
+                Coin::new(1_000_000_000_000, "whusdc"),
+            ],
             deps.as_mut(),
             env.clone(),
-            mock_info(
-                user,
-                &[
-                    Coin::new(1_000_000_000_000, "axlusdc"),
-                    Coin::new(1_000_000_000_000, "whusdc"),
-                ],
-            ),
-            join_pool_msg,
         )
         .unwrap();
 
@@ -452,18 +474,14 @@ mod tests {
         )
         .unwrap();
 
-        let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
-        execute(
+        add_liquidity(
+            user,
+            &[
+                Coin::new(1_000_000_000_000, "axlusdc"),
+                Coin::new(1_000_000_000_000, "whusdc"),
+            ],
             deps.as_mut(),
             env.clone(),
-            mock_info(
-                user,
-                &[
-                    Coin::new(1_000_000_000_000, "axlusdc"),
-                    Coin::new(1_000_000_000_000, "whusdc"),
-                ],
-            ),
-            join_pool_msg,
         )
         .unwrap();
 

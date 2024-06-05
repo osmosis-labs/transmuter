@@ -34,174 +34,6 @@ const AXL_ETH: &str = "ibc/AXLETH";
 const WH_ETH: &str = "ibc/WHETH";
 
 #[test]
-fn test_join_pool() {
-    let app = OsmosisTestApp::new();
-    let t = TestEnvBuilder::new()
-        .with_account(
-            "provider_1",
-            vec![
-                Coin::new(2_000, COSMOS_USDC),
-                Coin::new(2_000, AXL_USDC),
-                Coin::new(2_000, "urandom"),
-            ],
-        )
-        .with_account(
-            "provider_2",
-            vec![Coin::new(2_000, COSMOS_USDC), Coin::new(2_000, AXL_USDC)],
-        )
-        .with_account("moderator", vec![])
-        .with_instantiate_msg(InstantiateMsg {
-            pool_asset_configs: vec![
-                AssetConfig::from_denom_str(AXL_USDC),
-                AssetConfig::from_denom_str(COSMOS_USDC),
-            ],
-            alloyed_asset_subdenom: "usdc".to_string(),
-            alloyed_asset_normalization_factor: Uint128::one(),
-            admin: None,
-            moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
-        })
-        .build(&app);
-
-    // failed to join pool with 0 denom
-    let err = t
-        .contract
-        .execute(&ExecMsg::JoinPool {}, &[], &t.accounts["provider_1"])
-        .unwrap_err();
-
-    assert_contract_err(ContractError::AtLeastSingleTokenExpected {}, err);
-
-    // fail to join pool with denom that is not in the pool
-    let tokens_in = vec![Coin::new(1_000, "urandom")];
-    let err = t
-        .contract
-        .execute(&ExecMsg::JoinPool {}, &tokens_in, &t.accounts["provider_1"])
-        .unwrap_err();
-
-    assert_contract_err(
-        ContractError::InvalidTransmuteDenom {
-            denom: "urandom".to_string(),
-            expected_denom: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
-        },
-        err,
-    );
-
-    // join pool with correct pool's denom should added to the contract's balance and update state
-    let tokens_in = vec![Coin::new(1_000, COSMOS_USDC)];
-
-    t.contract
-        .execute(&ExecMsg::JoinPool {}, &tokens_in, &t.accounts["provider_1"])
-        .unwrap();
-
-    // check contract balances
-    t.assert_contract_balances(&tokens_in);
-
-    // check pool balance
-    let GetTotalPoolLiquidityResponse {
-        total_pool_liquidity,
-    } = t
-        .contract
-        .query(&QueryMsg::GetTotalPoolLiquidity {})
-        .unwrap();
-
-    assert_eq!(
-        total_pool_liquidity,
-        vec![Coin::new(0, AXL_USDC), tokens_in[0].clone()]
-    );
-
-    // check shares
-    let GetSharesResponse { shares } = t
-        .contract
-        .query(&QueryMsg::GetShares {
-            address: t.accounts["provider_1"].address(),
-        })
-        .unwrap();
-
-    assert_eq!(shares, tokens_in[0].amount);
-
-    // check total shares
-    let GetTotalSharesResponse { total_shares } =
-        t.contract.query(&QueryMsg::GetTotalShares {}).unwrap();
-
-    assert_eq!(total_shares, tokens_in[0].amount);
-
-    // join pool with multiple correct pool's denom should added to the contract's balance and update state
-    let tokens_in = vec![Coin::new(1_000, AXL_USDC), Coin::new(1_000, COSMOS_USDC)];
-    t.contract
-        .execute(&ExecMsg::JoinPool {}, &tokens_in, &t.accounts["provider_1"])
-        .unwrap();
-
-    // check contract balances
-    t.assert_contract_balances(&[Coin::new(1_000, AXL_USDC), Coin::new(2_000, COSMOS_USDC)]);
-
-    // check pool balance
-    let GetTotalPoolLiquidityResponse {
-        total_pool_liquidity,
-    } = t
-        .contract
-        .query(&QueryMsg::GetTotalPoolLiquidity {})
-        .unwrap();
-
-    assert_eq!(
-        total_pool_liquidity,
-        vec![Coin::new(1_000, AXL_USDC), Coin::new(2_000, COSMOS_USDC)]
-    );
-
-    // check shares
-    let GetSharesResponse { shares } = t
-        .contract
-        .query(&QueryMsg::GetShares {
-            address: t.accounts["provider_1"].address(),
-        })
-        .unwrap();
-
-    assert_eq!(shares, Uint128::new(3000));
-
-    // check total shares
-    let GetTotalSharesResponse { total_shares } =
-        t.contract.query(&QueryMsg::GetTotalShares {}).unwrap();
-
-    assert_eq!(total_shares, Uint128::new(3000));
-
-    // join pool with another provider with multiple correct pool's denom should added to the contract's balance and update state
-    let tokens_in = vec![Coin::new(2_000, AXL_USDC), Coin::new(2_000, COSMOS_USDC)];
-    t.contract
-        .execute(&ExecMsg::JoinPool {}, &tokens_in, &t.accounts["provider_2"])
-        .unwrap();
-
-    // check contract balances
-    t.assert_contract_balances(&[Coin::new(3_000, AXL_USDC), Coin::new(4_000, COSMOS_USDC)]);
-
-    // check pool balance
-    let GetTotalPoolLiquidityResponse {
-        total_pool_liquidity,
-    } = t
-        .contract
-        .query(&QueryMsg::GetTotalPoolLiquidity {})
-        .unwrap();
-
-    assert_eq!(
-        total_pool_liquidity,
-        vec![Coin::new(3_000, AXL_USDC), Coin::new(4_000, COSMOS_USDC)]
-    );
-
-    // check shares
-    let GetSharesResponse { shares } = t
-        .contract
-        .query(&QueryMsg::GetShares {
-            address: t.accounts["provider_2"].address(),
-        })
-        .unwrap();
-
-    assert_eq!(shares, Uint128::new(4000));
-
-    // check total shares
-    let GetTotalSharesResponse { total_shares } =
-        t.contract.query(&QueryMsg::GetTotalShares {}).unwrap();
-
-    assert_eq!(total_shares, Uint128::new(7000));
-}
-
-#[test]
 fn test_swap() {
     let app = OsmosisTestApp::new();
     let bank = Bank::new(&app);
@@ -267,10 +99,24 @@ fn test_swap() {
         err,
     );
 
-    // join pool properly
-    t.contract
-        .execute(&ExecMsg::JoinPool {}, &tokens_in, &t.accounts["provider"])
+    let GetShareDenomResponse { share_denom } =
+        t.contract.query(&QueryMsg::GetShareDenom {}).unwrap();
+
+    for token_in in tokens_in {
+        cp.swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["provider"].address(),
+                token_in: Some(token_in.into()),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: share_denom.clone(),
+                }],
+                token_out_min_amount: Uint128::one().to_string(),
+            },
+            &t.accounts["provider"],
+        )
         .unwrap();
+    }
 
     // transmute with incorrect funds should still fail
     let err = cp
@@ -493,21 +339,36 @@ fn test_exit_pool() {
         .build(&app);
 
     // join pool
-    t.contract
-        .execute(
-            &ExecMsg::JoinPool {},
-            &[Coin::new(100_000, COSMOS_USDC)],
-            &t.accounts["provider_1"],
-        )
-        .unwrap();
+    let GetShareDenomResponse { share_denom } =
+        t.contract.query(&QueryMsg::GetShareDenom {}).unwrap();
 
-    t.contract
-        .execute(
-            &ExecMsg::JoinPool {},
-            &[Coin::new(100_000, COSMOS_USDC)],
-            &t.accounts["provider_2"],
-        )
-        .unwrap();
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["provider_1"].address(),
+            token_in: Some(Coin::new(100_000, COSMOS_USDC).into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: share_denom.clone(),
+            }],
+            token_out_min_amount: Uint128::one().to_string(),
+        },
+        &t.accounts["provider_1"],
+    )
+    .unwrap();
+
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["provider_2"].address(),
+            token_in: Some(Coin::new(100_000, COSMOS_USDC).into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: share_denom.clone(),
+            }],
+            token_out_min_amount: Uint128::one().to_string(),
+        },
+        &t.accounts["provider_2"],
+    )
+    .unwrap();
 
     // swap to build up token_in
     let token_in = Coin::new(1_500, AXL_USDC);
@@ -707,13 +568,19 @@ fn test_3_pool_swap() {
         t.contract.query(&QueryMsg::GetShareDenom {}).unwrap();
 
     // join pool
-    t.contract
-        .execute(
-            &ExecMsg::JoinPool {},
-            &[Coin::new(100_000, COSMOS_USDC)],
-            &t.accounts["provider"],
-        )
-        .unwrap();
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["provider"].address(),
+            token_in: Some(Coin::new(100_000, COSMOS_USDC).into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: share_denom.clone(),
+            }],
+            token_out_min_amount: Uint128::one().to_string(),
+        },
+        &t.accounts["provider"],
+    )
+    .unwrap();
 
     // check shares
     let GetSharesResponse { shares } = t
@@ -1099,18 +966,42 @@ fn test_limiters() {
     );
 
     // join pool - weight = 50:50
-    t.contract
-        .execute(
-            &ExecMsg::JoinPool {},
-            &[
-                Coin::new(500_000, AXL_USDC),
-                Coin::new(500_000, COSMOS_USDC),
-            ],
-            &t.accounts["provider"],
-        )
-        .unwrap();
+    // pool share denom
+    let GetShareDenomResponse { share_denom } =
+        t.contract.query(&QueryMsg::GetShareDenom {}).unwrap();
 
-    app.increase_time(60 * 60); // -> + 60 mins
+    // join pool
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["provider"].address(),
+            token_in: Some(Coin::new(500_000, AXL_USDC).into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: share_denom.clone(),
+            }],
+            token_out_min_amount: Uint128::one().to_string(),
+        },
+        &t.accounts["provider"],
+    )
+    .unwrap();
+
+    app.increase_time(5); // -> + secs
+
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["provider"].address(),
+            token_in: Some(Coin::new(500_000, COSMOS_USDC).into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: share_denom.clone(),
+            }],
+            token_out_min_amount: Uint128::one().to_string(),
+        },
+        &t.accounts["provider"],
+    )
+    .unwrap();
+
+    app.increase_time(60 * 60 - 5); // -> + 60 mins - 5 secs
 
     // swap 100_001 AXL_USDC to COSMOS_USDC
     let err = cp
@@ -1201,11 +1092,17 @@ fn test_limiters() {
     );
 
     // join pool 200_000 AXL_USDC
-    let err = t
-        .contract
-        .execute(
-            &ExecMsg::JoinPool {},
-            &[Coin::new(200_000, AXL_USDC)],
+    let err = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["provider"].address(),
+                token_in: Some(Coin::new(200_000, AXL_USDC).into()),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: share_denom.clone(),
+                }],
+                token_out_min_amount: Uint128::one().to_string(),
+            },
             &t.accounts["provider"],
         )
         .unwrap_err();

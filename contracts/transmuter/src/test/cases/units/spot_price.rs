@@ -2,7 +2,7 @@ use cosmwasm_std::{
     testing::{mock_dependencies, mock_env, mock_info},
     Coin, Decimal, Uint128,
 };
-use sylvia::types::{ExecCtx, InstantiateCtx, QueryCtx};
+use sylvia::types::{InstantiateCtx, QueryCtx};
 
 use crate::{asset::AssetConfig, contract::Transmuter, ContractError};
 
@@ -55,10 +55,10 @@ fn test_spot_price(liquidity: &[Coin]) {
         .unwrap();
 
     transmuter
-        .join_pool(ExecCtx {
-            deps: deps.as_mut(),
-            env: mock_env(),
-            info: mock_info("creator", liquidity),
+        .pool
+        .update(&mut deps.storage, |mut pool| -> Result<_, ContractError> {
+            pool.join_pool(liquidity)?;
+            Ok(pool)
         })
         .unwrap();
 
