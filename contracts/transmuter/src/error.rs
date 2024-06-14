@@ -26,6 +26,9 @@ pub enum ContractError {
     #[error("Denom has no supply, it might be an invalid denom: {denom}")]
     DenomHasNoSupply { denom: String },
 
+    #[error("Subdenom must not contain extra parts (separated by '/'): {subdenom}")]
+    SubDenomExtraPartsNotAllowed { subdenom: String },
+
     #[error("Unable to join pool with denom: {denom}: expected one of: {expected_denom:?}")]
     InvalidJoinPoolDenom {
         denom: String,

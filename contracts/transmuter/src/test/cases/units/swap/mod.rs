@@ -508,7 +508,7 @@ fn pool_with_single_lp(
                         .unwrap_or_else(|| AssetConfig::from_denom_str(c.denom.as_str()))
                 })
                 .collect(),
-            alloyed_asset_subdenom: "transmuter/poolshare".to_string(),
+            alloyed_asset_subdenom: "all".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: None,
             moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),

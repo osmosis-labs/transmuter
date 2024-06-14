@@ -112,6 +112,14 @@ impl Transmuter<'_> {
         // set active status to true
         self.active_status.save(deps.storage, &true)?;
 
+        // subdenom must not contain extra parts
+        ensure!(
+            !alloyed_asset_subdenom.contains('/'),
+            ContractError::SubDenomExtraPartsNotAllowed {
+                subdenom: alloyed_asset_subdenom
+            }
+        );
+
         // create alloyed denom
         let msg_create_alloyed_denom = SubMsg::reply_on_success(
             MsgCreateDenom {
@@ -893,6 +901,40 @@ mod tests {
         attr, from_json, BankMsg, BlockInfo, Storage, SubMsgResponse, SubMsgResult, Uint64,
     };
     use osmosis_std::types::osmosis::tokenfactory::v1beta1::MsgBurn;
+
+    #[test]
+    fn test_invalid_subdenom() {
+        let mut deps = mock_dependencies();
+
+        // make denom has non-zero total supply
+        deps.querier
+            .update_balance("someone", vec![Coin::new(1, "tbtc"), Coin::new(1, "nbtc")]);
+
+        let admin = "admin";
+        let moderator = "moderator";
+        let init_msg = InstantiateMsg {
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("tbtc"),
+                AssetConfig::from_denom_str("nbtc"),
+            ],
+            alloyed_asset_subdenom: "all/btc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
+            admin: Some(admin.to_string()),
+            moderator: moderator.to_string(),
+        };
+        let env = mock_env();
+        let info = mock_info(admin, &[]);
+
+        // Instantiate the contract.
+        let err = instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::SubDenomExtraPartsNotAllowed {
+                subdenom: "all/btc".to_string()
+            }
+        )
+    }
 
     #[test]
     fn test_add_new_assets() {
