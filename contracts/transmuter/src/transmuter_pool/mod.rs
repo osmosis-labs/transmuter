@@ -15,10 +15,9 @@ use crate::{asset::Asset, ContractError};
 
 pub use transmute::AmountConstraint;
 
-/// Minimum number of pool assets. This is required since if the
-/// number of pool assets is less than 2, then the contract will
-/// not function as a pool.
-const MIN_POOL_ASSET_DENOMS: Uint64 = Uint64::new(2u64);
+/// Minimum number of pool assets.
+/// If the pool asset count is `1` it can still be transmuted to alloyed asset.
+const MIN_POOL_ASSET_DENOMS: Uint64 = Uint64::new(1u64);
 
 /// Maximum number of pool assets. This is required in order to
 /// prevent the contract from running out of gas when iterating
@@ -124,13 +123,21 @@ mod tests {
 
     #[test]
     fn test_denom_count_within_range() {
-        // 1 denom
+        // 0 denom
         assert_eq!(
-            TransmuterPool::new(Asset::unchecked_equal_assets(&["a"])).unwrap_err(),
+            TransmuterPool::new(Asset::unchecked_equal_assets(&[])).unwrap_err(),
             ContractError::PoolAssetDenomCountOutOfRange {
                 min: MIN_POOL_ASSET_DENOMS,
                 max: MAX_POOL_ASSET_DENOMS,
-                actual: Uint64::new(1),
+                actual: Uint64::new(0),
+            }
+        );
+
+        // 1 denoms
+        assert_eq!(
+            TransmuterPool::new(Asset::unchecked_equal_assets(&["a"])).unwrap(),
+            TransmuterPool {
+                pool_assets: Asset::unchecked_equal_assets(&["a"]),
             }
         );
 
