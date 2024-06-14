@@ -99,10 +99,10 @@ mod entry_points {
     #[entry_point]
     pub fn migrate(
         deps: DepsMut,
-        env: Env,
-        msg: migrations::v3_0_0::MigrateMsg,
+        _env: Env,
+        _msg: migrations::v3_1_0::MigrateMsg,
     ) -> Result<Response, ContractError> {
-        migrations::v3_0_0::execute_migration(deps, env, msg)
+        migrations::v3_1_0::execute_migration(deps)
     }
 }
 
