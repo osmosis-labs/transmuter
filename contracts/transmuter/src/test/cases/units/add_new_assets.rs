@@ -26,10 +26,7 @@ fn test_add_new_assets() {
         .with_account("admin", vec![])
         .with_account("non_admin", vec![])
         .with_instantiate_msg(InstantiateMsg {
-            pool_asset_configs: vec![
-                AssetConfig::from_denom_str("denom1"),
-                AssetConfig::from_denom_str("denom2"),
-            ],
+            pool_asset_configs: vec![AssetConfig::from_denom_str("denom1")],
             admin: None, // override by admin account set above
             alloyed_asset_subdenom: "denomx".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
@@ -38,7 +35,11 @@ fn test_add_new_assets() {
         .build(&app);
 
     // add new asset
-    let denoms = vec!["denom3".to_string(), "denom4".to_string()];
+    let denoms = vec![
+        "denom2".to_string(),
+        "denom3".to_string(),
+        "denom4".to_string(),
+    ];
 
     let err = t
         .contract
