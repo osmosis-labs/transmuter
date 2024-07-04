@@ -273,7 +273,7 @@ Admin can `add_new_assets`
 ```json
 {
   "add_new_assets": {
-    "assets": [
+    "asset_configs": [
       { "denom": "ibc/a..", "normalization_factor": "1000000" },
       { "denom": "ibc/b..", "normalization_factor": "1" }
     ]
