@@ -1,6 +1,7 @@
 import streamlit as st
 import streamlit as st
 import plotly.graph_objects as go
+import plotly.express as px
 import numpy as np
 
 r'''
@@ -77,8 +78,8 @@ def project_point(m):
     return m_p
 
 # Create sliders for user to manually change the values of m
-m_x = st.slider('m_x', min_value=0.0, max_value=1.0, step=0.01, value=0.5)
-m_y = st.slider('m_y', min_value=0.0, max_value=1.0, step=0.01, value=0.5)
+m_x = st.slider('m_x', min_value=0.0, max_value=1.0, step=0.01, value=0.75)
+m_y = st.slider('m_y', min_value=0.0, max_value=1.0, step=0.01, value=0.75)
 
 # Create the vector m and project it
 m = np.array([m_x, m_y])
@@ -106,7 +107,7 @@ fig.add_trace(go.Scatter(x=[m[0], m_p[0]], y=[m[1], m_p[1]], mode='lines', name=
 fig.update_layout(title='Midpoint Projection',
                   xaxis_title='x',
                   yaxis_title='y',
-                  xaxis=dict(range=[0, 1]),
+                  xaxis=dict(range=[0, 1], constrain="domain"),
                   yaxis=dict(range=[0, 1], scaleanchor="x", scaleratio=1),
                   showlegend=True)
 
@@ -159,12 +160,58 @@ $$
 
 For practical purpose, the fee taken is scaled by parameter $\lambda$. To put into perspective, if $\lambda$ is 1, $\hat{d'} = 1$ (max) and $\hat{d} = 0$ (min) then this whole swap is taken as fee, no token out.
 
-![image](https://hackmd.io/_uploads/H1yrzHvt0.png)
-
-
 Using higher $𝑘$ values will result in larger penalties for moves away from the midpoint.
-Lower $k$ values provide a more gradual and linear impact, leading to a more moderate fee structure.
+Lower $𝑘$ values provide a more gradual and linear impact, leading to a more moderate fee structure.
+'''
 
+# TODO: observation, the more d (= starting point further from midpoint) with the same change in d, the less fee is taken? 
+# we want the opposite, the further away from midpoint, it scales up the fee.
+# Potentially, Fee / (1-d)??????
+
+# Inputs for d and k
+d = st.slider("d", min_value=0.0, max_value=1.0, value=0.0)
+k_values = st.multiselect("k", options=list(range(1, 6)), default=[1,2,3,4])
+
+# Inputs for lambda and delta b
+lambda_value = st.slider("λ", min_value=0.0, max_value=1.0, value=0.5)
+delta_b = st.number_input("Change in balance (Δb)", min_value=0.0, value=100.0)
+
+# Create the figure for the final fee result
+fee_fig = go.Figure()
+
+# Add a dotted line for delta b
+fee_fig.add_trace(go.Scatter(
+    x=[0, 1],
+    y=[delta_b, delta_b],
+    mode='lines',
+    name='Δb',
+    line=dict(dash='dot', color='white')
+))
+
+
+# Generate values for d and calculate d^k and d'^k - d^k for each k
+d_prime_values = np.linspace(0, 1, 100)
+colors = px.colors.qualitative.Plotly 
+
+
+# Generate values for d and calculate the fee for each k
+for i, k in enumerate(k_values):
+    fee_values = lambda_value * delta_b * (d_prime_values**k - d**k)
+    fee_values = np.maximum(fee_values, 0)  # Ensure fee values are non-negative
+    
+    # Add the data to the figure
+    fee_fig.add_trace(go.Scatter(x=d_prime_values, y=fee_values, mode='lines', name=f"Fee (k={k})", line=dict(color=colors[i % len(colors)])))
+
+# Update the layout to make x auto scale, y height equal to x, and bound the graph to 0-1 range for both axes
+fee_fig.update_layout(
+    xaxis_title="d'",
+    yaxis_title="Fee",
+)
+
+st.plotly_chart(fee_fig)
+
+
+r'''
 Fees are accumulated in an incentive pool $p$.
 
 For distributing incentives from the said pool:
