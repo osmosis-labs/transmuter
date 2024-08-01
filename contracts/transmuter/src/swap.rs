@@ -344,11 +344,11 @@ impl Transmuter<'_> {
         deps: DepsMut,
         env: Env,
     ) -> Result<Response, ContractError> {
-        // TODO: load pool twice is not efficient, need to improve
-        let prev_weights = self.pool.load(deps.storage)?.weights_map()?;
+        let pool = self.pool.load(deps.storage)?;
+        let prev_weights = pool.weights_map()?;
 
         let (mut pool, actual_token_out) =
-            self.out_amt_given_in(deps.as_ref(), token_in, token_out_denom)?;
+            self.out_amt_given_in(deps.as_ref(), pool, token_in, token_out_denom)?;
 
         // ensure token_out amount is greater than or equal to token_out_min_amount
         ensure!(
@@ -396,11 +396,15 @@ impl Transmuter<'_> {
         deps: DepsMut,
         env: Env,
     ) -> Result<Response, ContractError> {
-        // TODO: load pool twice is not efficient, need to improve
-        let prev_weights = self.pool.load(deps.storage)?.weights_map()?;
+        let pool = self.pool.load(deps.storage)?;
+        let prev_weights = pool.weights_map()?;
 
-        let (mut pool, actual_token_in) =
-            self.in_amt_given_out(deps.as_ref(), token_out.clone(), token_in_denom.to_string())?;
+        let (mut pool, actual_token_in) = self.in_amt_given_out(
+            deps.as_ref(),
+            pool,
+            token_out.clone(),
+            token_in_denom.to_string(),
+        )?;
 
         ensure!(
             actual_token_in.amount <= token_in_max_amount,
@@ -441,11 +445,11 @@ impl Transmuter<'_> {
     pub fn in_amt_given_out(
         &self,
         deps: Deps,
+        mut pool: TransmuterPool,
         token_out: Coin,
         token_in_denom: String,
     ) -> Result<(TransmuterPool, Coin), ContractError> {
         let swap_variant = self.swap_variant(&token_in_denom, &token_out.denom, deps)?;
-        let mut pool = self.pool.load(deps.storage)?;
 
         Ok(match swap_variant {
             SwapVariant::TokenToAlloyed => {
@@ -502,10 +506,10 @@ impl Transmuter<'_> {
     pub fn out_amt_given_in(
         &self,
         deps: Deps,
+        mut pool: TransmuterPool,
         token_in: Coin,
         token_out_denom: &str,
     ) -> Result<(TransmuterPool, Coin), ContractError> {
-        let mut pool = self.pool.load(deps.storage)?;
         let swap_variant = self.swap_variant(&token_in.denom, token_out_denom, deps)?;
 
         Ok(match swap_variant {
