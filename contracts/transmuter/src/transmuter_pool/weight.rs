@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use cosmwasm_std::{Decimal, Uint128};
 
 use crate::{
@@ -47,6 +49,10 @@ impl TransmuterPool {
             .collect::<Result<_, ContractError>>()?;
 
         Ok(Some(ratios))
+    }
+
+    pub fn weights_map(&self) -> Result<BTreeMap<String, Decimal>, ContractError> {
+        Ok(self.weights()?.unwrap_or_default().into_iter().collect())
     }
 
     fn normalized_asset_values(

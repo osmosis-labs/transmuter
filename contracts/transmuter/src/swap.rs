@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
     ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env, Response,
@@ -122,13 +124,15 @@ impl Transmuter<'_> {
             ContractError::ZeroValueOperation {}
         );
 
+        let prev_weights = pool.weights_map()?;
+
         pool.join_pool(&tokens_in)?;
 
         // check and update limiters only if pool assets are not zero
-        if let Some(denom_weight_pairs) = pool.weights()? {
+        if let Some(updated_weights) = pool.weights()? {
             self.limiters.check_limits_and_update(
                 deps.storage,
-                denom_weight_pairs,
+                pair_weights_by_denom(prev_weights, updated_weights),
                 env.block.time,
             )?;
         }
@@ -292,13 +296,15 @@ impl Transmuter<'_> {
                 pool.weights()?.unwrap_or_default(),
             )?;
         } else {
+            let prev_weights = pool.weights_map()?;
+
             pool.exit_pool(&tokens_out)?;
 
             // check and update limiters only if pool assets are not zero
-            if let Some(denom_weight_pairs) = pool.weights()? {
+            if let Some(updated_weights) = pool.weights()? {
                 self.limiters.check_limits_and_update(
                     deps.storage,
-                    denom_weight_pairs,
+                    pair_weights_by_denom(prev_weights, updated_weights),
                     env.block.time,
                 )?;
             }
@@ -338,6 +344,9 @@ impl Transmuter<'_> {
         deps: DepsMut,
         env: Env,
     ) -> Result<Response, ContractError> {
+        // TODO: load pool twice is not efficient, need to improve
+        let prev_weights = self.pool.load(deps.storage)?.weights_map()?;
+
         let (mut pool, actual_token_out) =
             self.out_amt_given_in(deps.as_ref(), token_in, token_out_denom)?;
 
@@ -351,10 +360,10 @@ impl Transmuter<'_> {
         );
 
         // check and update limiters only if pool assets are not zero
-        if let Some(denom_weight_pairs) = pool.weights()? {
+        if let Some(updated_weights) = pool.weights()? {
             self.limiters.check_limits_and_update(
                 deps.storage,
-                denom_weight_pairs,
+                pair_weights_by_denom(prev_weights, updated_weights),
                 env.block.time,
             )?;
         }
@@ -387,6 +396,9 @@ impl Transmuter<'_> {
         deps: DepsMut,
         env: Env,
     ) -> Result<Response, ContractError> {
+        // TODO: load pool twice is not efficient, need to improve
+        let prev_weights = self.pool.load(deps.storage)?.weights_map()?;
+
         let (mut pool, actual_token_in) =
             self.in_amt_given_out(deps.as_ref(), token_out.clone(), token_in_denom.to_string())?;
 
@@ -399,10 +411,10 @@ impl Transmuter<'_> {
         );
 
         // check and update limiters only if pool assets are not zero
-        if let Some(denom_weight_pairs) = pool.weights()? {
+        if let Some(updated_weights) = pool.weights()? {
             self.limiters.check_limits_and_update(
                 deps.storage,
-                denom_weight_pairs,
+                pair_weights_by_denom(prev_weights, updated_weights),
                 env.block.time,
             )?;
         }
@@ -579,6 +591,20 @@ impl Transmuter<'_> {
 
         Ok(())
     }
+}
+
+fn pair_weights_by_denom(
+    prev_weights: BTreeMap<String, Decimal>,
+    updated_weights: Vec<(String, Decimal)>,
+) -> Vec<(String, (Decimal, Decimal))> {
+    let mut denom_weight_pairs = Vec::new();
+
+    for (denom, weight) in updated_weights {
+        let prev_weight = prev_weights.get(denom.as_str()).unwrap_or(&weight);
+        denom_weight_pairs.push((denom, (*prev_weight, weight)));
+    }
+
+    denom_weight_pairs
 }
 
 /// Possible variants of swap, depending on the input and output tokens

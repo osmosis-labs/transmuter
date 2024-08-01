@@ -521,24 +521,33 @@ impl<'a> Limiters<'a> {
     pub fn check_limits_and_update(
         &self,
         storage: &mut dyn Storage,
-        denom_value_pairs: Vec<(String, Decimal)>,
+        denom_value_pairs: Vec<(String, (Decimal, Decimal))>,
         block_time: Timestamp,
     ) -> Result<(), ContractError> {
-        for (denom, value) in denom_value_pairs {
+        for (denom, (prev_value, value)) in denom_value_pairs {
             let limiters = self.list_limiters_by_denom(storage, denom.as_str())?;
+            let is_value_increasing = value > prev_value;
 
             for (label, limiter) in limiters {
-                // match limiter type
-
+                // Enforce limiter only if value is increasing, because if the value is decreasing from the previous value,
+                // for the specific denom, it is a balancing act to move away from the limit.
                 let limiter = match limiter {
-                    Limiter::ChangeLimiter(limiter) => Limiter::ChangeLimiter(
-                        limiter
-                            .ensure_upper_limit(block_time, denom.as_str(), value)?
-                            .update(block_time, value)?,
-                    ),
-                    Limiter::StaticLimiter(limiter) => {
-                        Limiter::StaticLimiter(limiter.ensure_upper_limit(denom.as_str(), value)?)
-                    }
+                    Limiter::ChangeLimiter(limiter) => Limiter::ChangeLimiter({
+                        if is_value_increasing {
+                            limiter
+                                .ensure_upper_limit(block_time, denom.as_str(), value)?
+                                .update(block_time, value)?
+                        } else {
+                            limiter.update(block_time, value)?
+                        }
+                    }),
+                    Limiter::StaticLimiter(limiter) => Limiter::StaticLimiter({
+                        if is_value_increasing {
+                            limiter.ensure_upper_limit(denom.as_str(), value)?
+                        } else {
+                            limiter
+                        }
+                    }),
                 };
 
                 // save updated limiter
@@ -647,6 +656,8 @@ mod tests {
     use cosmwasm_std::testing::mock_dependencies;
 
     use super::*;
+
+    const EPSILON: Decimal = Decimal::raw(1);
 
     mod registration {
         use super::*;
@@ -1897,7 +1908,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), value)],
+                    vec![("denoma".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
@@ -1915,7 +1926,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), value)],
+                    vec![("denoma".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
@@ -1931,7 +1942,7 @@ mod tests {
             let err = limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), value)],
+                    vec![("denoma".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap_err();
@@ -1957,7 +1968,7 @@ mod tests {
             let err = limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), value)],
+                    vec![("denoma".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap_err();
@@ -1980,7 +1991,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), value)],
+                    vec![("denoma".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
@@ -1996,7 +2007,7 @@ mod tests {
             let err = limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), value)],
+                    vec![("denoma".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap_err();
@@ -2017,7 +2028,7 @@ mod tests {
             let err = limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), value)],
+                    vec![("denoma".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap_err();
@@ -2040,7 +2051,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), value)],
+                    vec![("denoma".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
@@ -2086,7 +2097,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), value)],
+                    vec![("denomb".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
@@ -2101,7 +2112,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), value)],
+                    vec![("denomb".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
@@ -2116,7 +2127,7 @@ mod tests {
             let err = limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), value)],
+                    vec![("denomb".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap_err();
@@ -2139,7 +2150,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), value)],
+                    vec![("denomb".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
@@ -2155,7 +2166,7 @@ mod tests {
             let err = limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), value)],
+                    vec![("denomb".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap_err();
@@ -2180,7 +2191,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), value)],
+                    vec![("denomb".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
@@ -2236,7 +2247,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), value)],
+                    vec![("denomb".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
@@ -2246,7 +2257,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), value)],
+                    vec![("denomb".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
@@ -2256,7 +2267,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), value)],
+                    vec![("denomb".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
@@ -2267,7 +2278,7 @@ mod tests {
             let err = limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), value)],
+                    vec![("denomb".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap_err();
@@ -2317,8 +2328,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), value_a),
-                        ("denomb".to_string(), value_b),
+                        ("denoma".to_string(), (value_a, value_a)),
+                        ("denomb".to_string(), (value_b, value_b)),
                     ],
                     block_time,
                 )
@@ -2331,8 +2342,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), value_a),
-                        ("denomb".to_string(), value_b),
+                        ("denoma".to_string(), (value_a - EPSILON, value_a)),
+                        ("denomb".to_string(), (value_b + EPSILON, value_b)),
                     ],
                     block_time,
                 )
@@ -2354,8 +2365,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), value_a),
-                        ("denomb".to_string(), value_b),
+                        ("denoma".to_string(), (value_a + EPSILON, value_a)),
+                        ("denomb".to_string(), (value_b - EPSILON, value_b)),
                     ],
                     block_time,
                 )
@@ -2377,8 +2388,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), value_a),
-                        ("denomb".to_string(), value_b),
+                        ("denoma".to_string(), (value_a - EPSILON, value_a)),
+                        ("denomb".to_string(), (value_b + EPSILON, value_b)),
                     ],
                     block_time,
                 )
@@ -2391,8 +2402,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), value_a),
-                        ("denomb".to_string(), value_b),
+                        ("denoma".to_string(), (value_a - EPSILON, value_a)),
+                        ("denomb".to_string(), (value_b + EPSILON, value_b)),
                     ],
                     block_time,
                 )
@@ -2481,8 +2492,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), value_a),
-                        ("denomb".to_string(), value_b),
+                        ("denoma".to_string(), (value_a, value_a)),
+                        ("denomb".to_string(), (value_b, value_b)),
                     ],
                     block_time,
                 )
@@ -2495,8 +2506,11 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), value),
-                        ("denomb".to_string(), Decimal::one() - value),
+                        ("denoma".to_string(), (value - EPSILON, value)),
+                        (
+                            "denomb".to_string(),
+                            (Decimal::one() - value + EPSILON, Decimal::one() - value),
+                        ),
                     ],
                     block_time,
                 )
@@ -2518,8 +2532,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), value_a),
-                        ("denomb".to_string(), value_b),
+                        ("denoma".to_string(), (value_a + EPSILON, value_a)),
+                        ("denomb".to_string(), (value_b - EPSILON, value_b)),
                     ],
                     block_time,
                 )
@@ -2541,8 +2555,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), value_a),
-                        ("denomb".to_string(), value_b),
+                        ("denoma".to_string(), (value_a, value_a)),
+                        ("denomb".to_string(), (value_b, value_b)),
                     ],
                     block_time,
                 )
@@ -2558,8 +2572,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), value_a),
-                        ("denomb".to_string(), value_b),
+                        ("denoma".to_string(), (value_a - EPSILON, value_a)),
+                        ("denomb".to_string(), (value_b + EPSILON, value_b)),
                     ],
                     block_time,
                 )
@@ -2581,8 +2595,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), value_a),
-                        ("denomb".to_string(), value_b),
+                        ("denoma".to_string(), (value_a - EPSILON, value_a)),
+                        ("denomb".to_string(), (value_b + EPSILON, value_b)),
                     ],
                     block_time,
                 )
@@ -2802,7 +2816,7 @@ mod tests {
             limiters
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), value)],
+                    vec![("denoma".to_string(), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
