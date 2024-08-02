@@ -526,14 +526,14 @@ impl<'a> Limiters<'a> {
     ) -> Result<(), ContractError> {
         for (denom, (prev_value, value)) in denom_value_pairs {
             let limiters = self.list_limiters_by_denom(storage, denom.as_str())?;
-            let is_value_increasing = value > prev_value;
+            let is_not_decreasing = value >= prev_value;
 
             for (label, limiter) in limiters {
                 // Enforce limiter only if value is increasing, because if the value is decreasing from the previous value,
                 // for the specific denom, it is a balancing act to move away from the limit.
                 let limiter = match limiter {
                     Limiter::ChangeLimiter(limiter) => Limiter::ChangeLimiter({
-                        if is_value_increasing {
+                        if is_not_decreasing {
                             limiter
                                 .ensure_upper_limit(block_time, denom.as_str(), value)?
                                 .update(block_time, value)?
@@ -542,7 +542,7 @@ impl<'a> Limiters<'a> {
                         }
                     }),
                     Limiter::StaticLimiter(limiter) => Limiter::StaticLimiter({
-                        if is_value_increasing {
+                        if is_not_decreasing {
                             limiter.ensure_upper_limit(denom.as_str(), value)?
                         } else {
                             limiter

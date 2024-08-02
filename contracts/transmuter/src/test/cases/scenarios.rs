@@ -1275,3 +1275,191 @@ fn test_limiters() {
         err,
     );
 }
+
+#[test]
+fn test_register_limiter_after_having_liquidity() {
+    let app = OsmosisTestApp::new();
+    let cp = CosmwasmPool::new(&app);
+
+    let admin = app
+        .init_account(&[Coin::new(100_000u128, "uosmo")])
+        .unwrap();
+
+    let t = TestEnvBuilder::new()
+        .with_account(
+            "alice",
+            vec![
+                Coin::new(1_000_000, AXL_USDC),
+                Coin::new(1_000_000, COSMOS_USDC),
+            ],
+        )
+        .with_account(
+            "bob",
+            vec![
+                Coin::new(1_000_000, AXL_USDC),
+                Coin::new(1_000_000, COSMOS_USDC),
+            ],
+        )
+        .with_account("admin", vec![])
+        .with_account(
+            "provider",
+            vec![
+                Coin::new(1_000_000, AXL_USDC),
+                Coin::new(1_000_000, COSMOS_USDC),
+            ],
+        )
+        .with_instantiate_msg(InstantiateMsg {
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str(AXL_USDC),
+                AssetConfig::from_denom_str(COSMOS_USDC),
+            ],
+            alloyed_asset_subdenom: "usdc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
+            admin: Some(admin.address()),
+            moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
+        })
+        .build(&app);
+
+    // query share denom
+    let GetShareDenomResponse { share_denom } =
+        t.contract.query(&QueryMsg::GetShareDenom {}).unwrap();
+
+    let alloyed_denom = share_denom;
+
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["provider"].address(),
+            token_in: Some(Coin::new(200_000, COSMOS_USDC).into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: alloyed_denom.clone(),
+            }],
+            token_out_min_amount: Uint128::from(200_000u128).to_string(),
+        },
+        &t.accounts["provider"],
+    )
+    .unwrap();
+
+    t.contract
+        .execute(
+            &ExecMsg::RegisterLimiter {
+                denom: COSMOS_USDC.to_string(),
+                label: "static".to_string(),
+                limiter_params: LimiterParams::StaticLimiter {
+                    upper_limit: Decimal::percent(60),
+                },
+            },
+            &[],
+            &t.accounts["admin"],
+        )
+        .unwrap();
+
+    let err = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["provider"].address(),
+                token_in: Some(Coin::new(1, COSMOS_USDC).into()),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: alloyed_denom.clone(),
+                }],
+                token_out_min_amount: Uint128::from(1u128).to_string(),
+            },
+            &t.accounts["provider"],
+        )
+        .unwrap_err();
+
+    assert_contract_err(
+        ContractError::UpperLimitExceeded {
+            denom: COSMOS_USDC.to_string(),
+            upper_limit: Decimal::from_str("0.6").unwrap(),
+            value: Decimal::from_str("1").unwrap(),
+        },
+        err,
+    );
+
+    // Swap AXL USDC to alloyed asset should be successful
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["provider"].address(),
+            token_in: Some(Coin::new(1, AXL_USDC).into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: alloyed_denom.clone(),
+            }],
+            token_out_min_amount: Uint128::from(1u128).to_string(),
+        },
+        &t.accounts["provider"],
+    )
+    .unwrap();
+
+    // Swap alloyed asset to COSMOS USDC should be successful
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["provider"].address(),
+            token_in: Some(Coin::new(1, &alloyed_denom).into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: COSMOS_USDC.to_string(),
+            }],
+            token_out_min_amount: Uint128::from(1u128).to_string(),
+        },
+        &t.accounts["provider"],
+    )
+    .unwrap();
+
+    // Swap AXL USDC to COSMOS USDC should be successful and reduce COSMOS USDC composition
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["provider"].address(),
+            token_in: Some(Coin::new(1, AXL_USDC).into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: COSMOS_USDC.to_string(),
+            }],
+            token_out_min_amount: Uint128::from(1u128).to_string(),
+        },
+        &t.accounts["provider"],
+    )
+    .unwrap();
+
+    // Swap the other way around should fail
+    let err = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["provider"].address(),
+                token_in: Some(Coin::new(1, COSMOS_USDC).into()),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: AXL_USDC.to_string(),
+                }],
+                token_out_min_amount: Uint128::from(1u128).to_string(),
+            },
+            &t.accounts["provider"],
+        )
+        .unwrap_err();
+
+    assert_contract_err(
+        ContractError::UpperLimitExceeded {
+            denom: COSMOS_USDC.to_string(),
+            upper_limit: Decimal::from_str("0.6").unwrap(),
+            value: Decimal::from_str("0.999995").unwrap(),
+        },
+        err,
+    );
+
+    // Swap alloyed asset to COSMOS USDC should be successful
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["provider"].address(),
+            token_in: Some(Coin::new(1, alloyed_denom).into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: COSMOS_USDC.to_string(),
+            }],
+            token_out_min_amount: Uint128::from(1u128).to_string(),
+        },
+        &t.accounts["provider"],
+    )
+    .unwrap();
+}
