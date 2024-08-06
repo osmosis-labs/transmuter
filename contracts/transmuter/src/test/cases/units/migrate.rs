@@ -6,7 +6,7 @@ use crate::{
         sv::{InstantiateMsg, QueryMsg},
         GetModeratorResponse, ListAssetConfigsResponse,
     },
-    migrations::v3_1_0::MigrateMsg,
+    migrations::v3_2_0::MigrateMsg,
     test::{modules::cosmwasm_pool::CosmwasmPool, test_env::TransmuterContract},
 };
 use cosmwasm_schema::cw_serde;
@@ -19,6 +19,7 @@ use osmosis_std::types::{
     },
 };
 use osmosis_test_tube::{Account, GovWithAppAccess, Module, OsmosisTestApp, Runner};
+use rstest::rstest;
 
 #[cw_serde]
 struct InstantiateMsgV2 {
@@ -145,8 +146,10 @@ fn test_migrate_v2_to_v3() {
     assert_eq!(moderator, migrate_msg.moderator.unwrap());
 }
 
-#[test]
-fn test_migrate_v3_to_v3_1() {
+#[rstest]
+#[case("v3")]
+#[case("v3_1")]
+fn test_migrate_v3(#[case] from_version: &str) {
     // --- setup account ---
     let app = OsmosisTestApp::new();
     let signer = app
@@ -166,7 +169,7 @@ fn test_migrate_v3_to_v3_1() {
         UploadCosmWasmPoolCodeAndWhiteListProposal {
             title: String::from("store test cosmwasm pool code"),
             description: String::from("test"),
-            wasm_byte_code: get_prev_version_of_wasm_byte_code("v3"),
+            wasm_byte_code: get_prev_version_of_wasm_byte_code(from_version),
         },
         signer.address(),
         &signer,
@@ -265,7 +268,7 @@ fn test_migrate_v3_to_v3_1() {
         version,
         cw2::ContractVersion {
             contract: "crates.io:transmuter".to_string(),
-            version: "3.1.0".to_string()
+            version: "3.2.0".to_string()
         }
     );
 }
