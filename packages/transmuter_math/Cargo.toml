@@ -1,0 +1,13 @@
+[package]
+description = "Math utilities for Transmuter"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+name = "transmuter_math"
+version = "1.0.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+cosmwasm-schema = {workspace = true}
+cosmwasm-std = {workspace = true}
+thiserror = "1.0.63"
