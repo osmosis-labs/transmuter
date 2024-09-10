@@ -200,6 +200,9 @@ pub enum ContractError {
     #[error("{0}")]
     MathError(#[from] MathError),
 
+    #[error("{0}")]
+    TrasnmuterMathError(#[from] transmuter_math::TransmuterMathError),
+
     /// This error should never occur
     #[error("")]
     Never,

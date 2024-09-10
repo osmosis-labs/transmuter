@@ -59,7 +59,7 @@ pub mod key {
 #[sv::error(ContractError)]
 impl Transmuter<'_> {
     /// Create a Transmuter instance.
-    pub const fn new() -> Self {
+    pub const fn default() -> Self {
         Self {
             active_status: Item::new(key::ACTIVE_STATUS),
             pool: Item::new(key::POOL),
@@ -1069,7 +1069,7 @@ mod tests {
         for denom in ["uosmo", "uion"] {
             assert_dirty_change_limiters_by_denom!(
                 denom,
-                Transmuter::new().limiters,
+                Transmuter::default().limiters,
                 deps.as_ref().storage
             );
         }
@@ -1135,7 +1135,7 @@ mod tests {
         execute(deps.as_mut(), env.clone(), info, add_assets_msg).unwrap();
 
         let reset_at = env.block.time;
-        let transmuter = Transmuter::new();
+        let transmuter = Transmuter::default();
 
         // Reset change limiter states if new assets are added
         for denom in ["uosmo", "uion"] {
@@ -1611,7 +1611,7 @@ mod tests {
         );
 
         assert_eq!(
-            Transmuter::new()
+            Transmuter::default()
                 .limiters
                 .list_limiters_by_denom(&deps.storage, "wbtc")
                 .unwrap(),
@@ -1622,7 +1622,7 @@ mod tests {
             assert_reset_change_limiters_by_denom!(
                 denom,
                 env.block.time,
-                Transmuter::new(),
+                Transmuter::default(),
                 deps.as_ref().storage
             );
         }
@@ -1717,7 +1717,7 @@ mod tests {
 
         // still has all the limiters
         assert_eq!(
-            Transmuter::new()
+            Transmuter::default()
                 .limiters
                 .list_limiters_by_denom(&deps.storage, "tbtc")
                 .unwrap()
@@ -1739,7 +1739,7 @@ mod tests {
     }
 
     fn total_liquidity_of(denom: &str, storage: &dyn Storage) -> Coin {
-        Transmuter::new()
+        Transmuter::default()
             .pool
             .load(storage)
             .unwrap()
@@ -1779,7 +1779,7 @@ mod tests {
         // Manually set alloyed denom
         let alloyed_denom = "uosmo".to_string();
 
-        let transmuter = Transmuter::new();
+        let transmuter = Transmuter::default();
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &alloyed_denom)

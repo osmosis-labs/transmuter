@@ -722,7 +722,7 @@ mod tests {
         #[case] res: Result<SwapVariant, ContractError>,
     ) {
         let mut deps = cosmwasm_std::testing::mock_dependencies();
-        let transmuter = Transmuter::new();
+        let transmuter = Transmuter::default();
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -803,7 +803,7 @@ mod tests {
         #[case] expected_res: Result<Response, ContractError>,
     ) {
         let mut deps = mock_dependencies();
-        let transmuter = Transmuter::new();
+        let transmuter = Transmuter::default();
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -940,7 +940,7 @@ mod tests {
             &[Coin::new(110000000000000u128, "alloyed")],
         )]);
 
-        let transmuter = Transmuter::new();
+        let transmuter = Transmuter::default();
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -1142,7 +1142,7 @@ mod tests {
             &[Coin::new(210000000000000u128, "alloyed")],
         )]);
 
-        let transmuter = Transmuter::new();
+        let transmuter = Transmuter::default();
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -1249,7 +1249,7 @@ mod tests {
     #[test]
     fn test_swap_non_alloyed_exact_amount_in_with_corrupted_assets() {
         let mut deps = mock_dependencies();
-        let transmuter = Transmuter::new();
+        let transmuter = Transmuter::default();
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -1330,7 +1330,7 @@ mod tests {
     #[test]
     fn test_swap_non_alloyed_exact_amount_out_with_corrupted_assets() {
         let mut deps = mock_dependencies();
-        let transmuter = Transmuter::new();
+        let transmuter = Transmuter::default();
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -1469,7 +1469,7 @@ mod tests {
             &[Coin::new(2000000000000u128, "alloyed")],
         )]);
 
-        let transmuter = Transmuter::new();
+        let transmuter = Transmuter::default();
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -1566,7 +1566,7 @@ mod tests {
             &[Coin::new(2000000000000u128, "alloyed")],
         )]);
 
-        let transmuter = Transmuter::new();
+        let transmuter = Transmuter::default();
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())

@@ -453,7 +453,7 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
         assert_eq!(
             burn_attrs,
             vec![
-                attr("burn_from_address", &t.accounts["addr1"].address()),
+                attr("burn_from_address", t.accounts["addr1"].address()),
                 attr("amount", format!("{}{}", exit_amount, share_denom)),
             ]
         );

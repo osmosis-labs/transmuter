@@ -1,12 +1,10 @@
 use std::collections::HashMap;
 
+use crate::ContractError;
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{ensure, Decimal, StdError, Storage, Timestamp, Uint64};
 use cw_storage_plus::Map;
-
-use crate::ContractError;
-
-use super::division::Division;
+use transmuter_math::Division;
 
 /// Maximum number of divisions allowed in a window.
 /// This limited so that the contract can't be abused by setting a large division count,
@@ -617,7 +615,7 @@ macro_rules! assert_reset_change_limiters_by_denom {
                 let value = *weights.get($denom).unwrap();
                 assert_eq!(
                     limiter.divisions(),
-                    &[$crate::limiter::Division::new($reset_at, $reset_at, value, value).unwrap()]
+                    &[transmuter_math::Division::new($reset_at, $reset_at, value, value).unwrap()]
                 )
             };
         }

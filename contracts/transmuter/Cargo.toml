@@ -52,6 +52,7 @@ schemars = "0.8.12"
 serde = {version = "1.0.183", default-features = false, features = ["derive"]}
 sylvia = "0.10.1"
 thiserror = {version = "1.0.44"}
+transmuter_math = {version = "1.0.0", path = "../../packages/transmuter_math"}
 
 [dev-dependencies]
 itertools = "0.12.0"

@@ -19,7 +19,7 @@ fn test_spot_price_on_unbalanced_liquidity_must_be_one() {
 }
 
 fn test_spot_price(liquidity: &[Coin]) {
-    let transmuter = Transmuter::new();
+    let transmuter = Transmuter::default();
     let mut deps = mock_dependencies();
 
     // make denom has non-zero total supply
