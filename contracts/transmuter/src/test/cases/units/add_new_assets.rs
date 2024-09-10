@@ -35,7 +35,7 @@ fn test_add_new_assets() {
         .build(&app);
 
     // add new asset
-    let denoms = vec![
+    let denoms = [
         "denom2".to_string(),
         "denom3".to_string(),
         "denom4".to_string(),

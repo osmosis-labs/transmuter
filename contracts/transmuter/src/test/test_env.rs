@@ -28,6 +28,7 @@ use super::modules::cosmwasm_pool::CosmwasmPool;
 
 pub struct TestEnv<'a> {
     pub app: &'a OsmosisTestApp,
+    #[allow(dead_code)]
     pub creator: SigningAccount,
     pub contract: TransmuterContract<'a>,
     pub accounts: HashMap<String, SigningAccount>,
@@ -137,6 +138,7 @@ impl TestEnvBuilder {
 
 pub struct TransmuterContract<'a> {
     app: &'a OsmosisTestApp,
+    #[allow(dead_code)]
     pub code_id: u64,
     pub pool_id: u64,
     pub contract_addr: String,

@@ -1,5 +1,4 @@
 use cosmwasm_std::{CheckedFromRatioError, DivideByZeroError, OverflowError};
-use thiserror;
 
 #[derive(thiserror::Error, Debug, PartialEq)]
 pub enum TransmuterMathError {
