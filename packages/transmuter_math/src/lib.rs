@@ -1,7 +1,8 @@
 mod division;
 mod errors;
 mod helpers;
-mod rebalancing_incentive;
+
+pub mod rebalancing_incentive;
 
 pub use cosmwasm_std::{Decimal, Timestamp, Uint64};
 pub use division::Division;
