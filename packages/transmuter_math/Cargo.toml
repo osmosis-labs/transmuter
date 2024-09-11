@@ -10,4 +10,5 @@ version = "1.0.0"
 [dependencies]
 cosmwasm-schema = {workspace = true}
 cosmwasm-std = {workspace = true}
+rstest = "0.22.0"
 thiserror = "1.0.63"
