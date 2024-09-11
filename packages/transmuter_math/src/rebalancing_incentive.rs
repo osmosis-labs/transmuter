@@ -45,6 +45,9 @@ pub fn calculate_cumulative_impact_factor_component(
     } else if normalized_balance > ideal_balance_upper_bound {
         normalized_balance // b
             .checked_sub(ideal_balance_upper_bound)? // - phi_u
+            // delta - phi_u will never be 0 as this case requires b > phi_u,
+            // delta - phi_u = 0 then delta = phi_u
+            // since b > delta is restricted by limiter, and delta <= phi_u, this will never happen
             .checked_div(upper_limit.checked_sub(ideal_balance_upper_bound)?)? // / delta - phi_u
             .pow(2) // ^2
     } else {
@@ -108,7 +111,7 @@ impl ImpactFactorParamGroup {
     }
 }
 
-pub enum ReblancingResponse {
+pub enum PayoffType {
     Incentive,
     Fee,
 }
@@ -123,7 +126,7 @@ pub enum ReblancingResponse {
 /// The reason why it needs to include all dimensions is because the case that swapping with alloyed asset, which will effect overall composition rather than just 2 assets.
 pub fn calculate_impact_factor(
     impact_factor_param_groups: &[ImpactFactorParamGroup],
-) -> Result<(ReblancingResponse, Decimal256), TransmuterMathError> {
+) -> Result<(PayoffType, Decimal256), TransmuterMathError> {
     let mut cumulative_impact_factor_sqaure = Decimal256::zero();
     let mut impact_factor_component_sum = SignedDecimal256::zero();
 
@@ -145,15 +148,15 @@ pub fn calculate_impact_factor(
             cumulative_impact_factor_sqaure.checked_add(impact_factor_component_square)?;
     }
 
-    let reaction = if impact_factor_component_sum.is_negative() {
-        ReblancingResponse::Incentive
+    let payoff_type = if impact_factor_component_sum.is_negative() {
+        PayoffType::Incentive
     } else {
-        ReblancingResponse::Fee
+        PayoffType::Fee
     };
 
     let impact_factor = cumulative_impact_factor_sqaure.checked_div(n)?.sqrt();
 
-    Ok((reaction, impact_factor))
+    Ok((payoff_type, impact_factor))
 }
 
 /// Calculate the rebalancing fee
@@ -244,6 +247,8 @@ mod tests {
     use proptest::prelude::*;
     use rstest::rstest;
 
+    const ONE_DEC_RAW: u128 = 1_000_000_000_000_000_000;
+
     #[rstest]
     #[case(
         Decimal::percent(100),
@@ -288,8 +293,8 @@ mod tests {
     proptest! {
         #[test]
         fn test_rebalancing_fee_must_never_exceed_amount_in(
-            lambda in 0u128..=1_000_000_000_000_000_000, // -> 0.0..1.0
-            impact_factor in 0u128..=1_000_000_000_000_000_000, // 0.0 -> 1.0
+            lambda in 0u128..=ONE_DEC_RAW,
+            impact_factor in 0u128..=ONE_DEC_RAW,
             amount_in in 0..=u128::MAX,
         ) {
             let lambda = Decimal::raw(lambda);
@@ -339,7 +344,7 @@ mod tests {
     proptest! {
         #[test]
         fn test_rebalancing_incentive_must_less_than_or_equal_to_incentive_pool(
-            impact in 0u128..=1_000_000_000_000_000_000,
+            impact in 0u128..=ONE_DEC_RAW,
             incentive_pool in 0u128..=u128::MAX,
         ) {
             let impact = Decimal::raw(impact);
@@ -348,5 +353,85 @@ mod tests {
             let actual = calculate_rebalancing_incentive(impact, incentive_pool).unwrap();
             assert!(actual <= Decimal256::from_atomics(incentive_pool, 0).unwrap());
         }
+    }
+
+    #[rstest]
+    #[case(
+        Decimal::zero(),
+        Decimal::percent(40),
+        Decimal::percent(50),
+        Decimal::percent(60),
+        Ok(Decimal::one())
+    )]
+    #[case(
+        Decimal::percent(39),
+        Decimal::percent(40),
+        Decimal::percent(50),
+        Decimal::percent(60),
+        Ok(Decimal::from_str("0.000625").unwrap())
+    )]
+    #[case(
+        Decimal::percent(40),
+        Decimal::percent(40),
+        Decimal::percent(50),
+        Decimal::percent(60),
+        Ok(Decimal::zero())
+    )]
+    #[case(
+        Decimal::percent(50),
+        Decimal::percent(40),
+        Decimal::percent(50),
+        Decimal::percent(60),
+        Ok(Decimal::zero())
+    )]
+    #[case(
+        Decimal::percent(51),
+        Decimal::percent(40),
+        Decimal::percent(50),
+        Decimal::percent(60),
+        Ok(Decimal::percent(1))
+    )]
+    #[case(
+        Decimal::percent(60),
+        Decimal::percent(40),
+        Decimal::percent(50),
+        Decimal::percent(60),
+        Ok(Decimal::one())
+    )]
+    #[case(
+        Decimal::percent(50),
+        Decimal::percent(40),
+        Decimal::percent(60),
+        Decimal::percent(50),
+        Ok(Decimal::zero())
+    )]
+    #[case(
+        Decimal::percent(30),
+        Decimal::percent(40),
+        Decimal::percent(60),
+        Decimal::percent(30),
+        Ok(Decimal::zero())
+    )]
+    #[case(
+        Decimal::percent(30),
+        Decimal::percent(40),
+        Decimal::percent(30),
+        Decimal::percent(50),
+        Ok(Decimal::zero())
+    )]
+    fn test_calculate_impact_factor_component(
+        #[case] normalized_balance: Decimal,
+        #[case] ideal_balance_lower_bound: Decimal,
+        #[case] ideal_balance_upper_bound: Decimal,
+        #[case] upper_limit: Decimal,
+        #[case] expected: Result<Decimal, TransmuterMathError>,
+    ) {
+        let actual = calculate_cumulative_impact_factor_component(
+            normalized_balance,
+            ideal_balance_lower_bound,
+            ideal_balance_upper_bound,
+            upper_limit,
+        );
+        assert_eq!(expected, actual);
     }
 }
