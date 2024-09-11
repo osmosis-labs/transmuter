@@ -241,7 +241,7 @@ pub fn calculate_rebalancing_incentive(
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use std::{cmp::min, str::FromStr};
 
     use super::*;
     use cosmwasm_std::Uint256;
@@ -435,4 +435,122 @@ mod tests {
         );
         assert_eq!(expected, actual);
     }
+
+    proptest! {
+        #[test]
+        fn test_calculate_impact_factor_component_must_be_within_0_and_1(
+            normalized_balance in 0u128..=ONE_DEC_RAW,
+            ideal_balance_lower_bound in 0u128..=ONE_DEC_RAW,
+            ideal_balance_upper_bound in 0u128..=ONE_DEC_RAW,
+            upper_limit in 0u128..=ONE_DEC_RAW,
+        ) {
+            prop_assume!(normalized_balance <= upper_limit);
+
+            let normalized_balance = Decimal::raw(normalized_balance);
+            let ideal_balance_lower_bound = Decimal::raw(ideal_balance_lower_bound);
+            let ideal_balance_upper_bound = Decimal::raw(ideal_balance_upper_bound);
+            let upper_limit = Decimal::raw(upper_limit);
+
+            match calculate_cumulative_impact_factor_component(
+                normalized_balance,
+                ideal_balance_lower_bound,
+                ideal_balance_upper_bound,
+                upper_limit,
+            ) {
+              Ok(actual) => assert!(actual <= Decimal::one()),
+              Err(e) => panic!("Failed to calculate impact factor component: {:?}", e),
+            }
+        }
+
+        #[test]
+        fn test_calculate_impact_factor_component_with_normalized_balance_in_ideal_balance_bound_must_be_zero(
+            normalized_balance in 0u128..=ONE_DEC_RAW,
+            ideal_balance_lower_bound_from_normalized_balance in 0u128..=ONE_DEC_RAW,
+            ideal_balance_upper_bound_from_normalized_balance in 0u128..=ONE_DEC_RAW,
+        ) {
+            let ideal_balance_upper_bound = Decimal::raw(min(ONE_DEC_RAW, normalized_balance + ideal_balance_upper_bound_from_normalized_balance));
+            let ideal_balance_lower_bound = Decimal::raw(normalized_balance.saturating_sub(ideal_balance_lower_bound_from_normalized_balance));
+            let normalized_balance = Decimal::raw(normalized_balance);
+            let upper_limit = ideal_balance_upper_bound;
+            let actual = calculate_cumulative_impact_factor_component(
+                normalized_balance,
+                ideal_balance_lower_bound,
+                ideal_balance_upper_bound,
+                upper_limit,
+            ).unwrap();
+
+            assert_eq!(Decimal::zero(), actual);
+        }
+
+        #[test]
+        fn test_calculate_impact_factor_component_with_normalized_balance_decreasing_while_less_than_ideal_balance_lower_bound_must_be_increasing(
+            normalized_balance in 1u128..=ONE_DEC_RAW,
+            ideal_balance_lower_bound in 0u128..=ONE_DEC_RAW,
+        ) {
+            prop_assume!(normalized_balance < ideal_balance_lower_bound);
+
+            let ideal_balance_upper_bound = ideal_balance_lower_bound + 1;
+            let upper_limit = ideal_balance_upper_bound + 1;
+
+            let normalized_balance = Decimal::raw(normalized_balance);
+            let ideal_balance_lower_bound = Decimal::raw(ideal_balance_lower_bound);
+            let ideal_balance_upper_bound = Decimal::raw(ideal_balance_upper_bound);
+            let upper_limit = Decimal::raw(upper_limit);
+            let epsilon = Decimal::raw(1000u128);
+
+            let c1 = calculate_cumulative_impact_factor_component(
+                normalized_balance - epsilon,
+                ideal_balance_lower_bound,
+                ideal_balance_upper_bound,
+                upper_limit,
+            ).unwrap();
+
+            let c2 = calculate_cumulative_impact_factor_component(
+                normalized_balance,
+                ideal_balance_lower_bound,
+                ideal_balance_upper_bound,
+                upper_limit,
+            ).unwrap();
+
+            assert!(c1 > c2, "c1: {c1}, c2: {c2}");
+        }
+
+        #[test]
+        fn test_calculate_impact_factor_component_with_normalized_balance_increasing_while_greater_than_ideal_balance_upper_bound_must_be_increasing(
+            normalized_balance in 0u128..=ONE_DEC_RAW-1,
+            ideal_balance_upper_bound in 0u128..=ONE_DEC_RAW,
+            upper_limit in 0u128..=ONE_DEC_RAW,
+        ) {
+            prop_assume!(normalized_balance > ideal_balance_upper_bound);
+            prop_assume!(upper_limit > ideal_balance_upper_bound);
+
+            let ideal_balance_lower_bound = ideal_balance_upper_bound - 1;
+
+            let normalized_balance = Decimal::raw(normalized_balance);
+            let ideal_balance_lower_bound = Decimal::raw(ideal_balance_lower_bound);
+            let ideal_balance_upper_bound = Decimal::raw(ideal_balance_upper_bound);
+            let upper_limit = Decimal::raw(upper_limit);
+            let epsilon = Decimal::raw(1000u128);
+
+            let c1 = calculate_cumulative_impact_factor_component(
+                normalized_balance - epsilon,
+                ideal_balance_lower_bound,
+                ideal_balance_upper_bound,
+                upper_limit,
+            ).unwrap();
+
+            let c2 = calculate_cumulative_impact_factor_component(
+                normalized_balance,
+                ideal_balance_lower_bound,
+                ideal_balance_upper_bound,
+                upper_limit,
+            ).unwrap();
+
+            assert!(c1 < c2, "c1: {c1}, c2: {c2}");
+        }
+    }
+
+    // TODO: tests
+    // - ImpactFactorParamGroup
+    // - calculate_impact_factor
 }
