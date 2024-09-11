@@ -215,6 +215,7 @@ pub fn calculate_rebalancing_incentive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use rstest::rstest;
 
     #[rstest]
@@ -256,5 +257,21 @@ mod tests {
     ) {
         let actual = calculate_rebalancing_fee(lambda, impact_factor, amount_in);
         assert_eq!(expected, actual);
+    }
+
+    proptest! {
+        #[test]
+        fn test_rebalancing_fee_must_never_exceed_amount_in(
+            lambda in 0u128..=1000000000000000000,
+            impact_factor in 0u128..=1000000000000000000,
+            amount_in in 0..=u128::MAX,
+        ) {
+            let lambda = Decimal::raw(lambda);
+            let impact_factor = Decimal::raw(impact_factor);
+            let amount_in = Uint128::new(amount_in);
+
+            let actual = calculate_rebalancing_fee(lambda, impact_factor, amount_in).unwrap();
+            assert!(actual <= Decimal256::from_atomics(amount_in, 0).unwrap());
+        }
     }
 }
