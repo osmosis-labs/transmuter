@@ -41,7 +41,7 @@ pub fn calculate_cumulative_impact_factor_component(
         ideal_balance_lower_bound // phi_l
             .checked_sub(normalized_balance)? // - b
             .checked_div(ideal_balance_lower_bound)? // / phi_l
-            .pow(2) // ^2
+            .checked_pow(2)? // ^2
     } else if normalized_balance > ideal_balance_upper_bound {
         normalized_balance // b
             .checked_sub(ideal_balance_upper_bound)? // - phi_u
@@ -49,7 +49,7 @@ pub fn calculate_cumulative_impact_factor_component(
             // delta - phi_u = 0 then delta = phi_u
             // since b > delta is restricted by limiter, and delta <= phi_u, this will never happen
             .checked_div(upper_limit.checked_sub(ideal_balance_upper_bound)?)? // / delta - phi_u
-            .pow(2) // ^2
+            .checked_pow(2)? // ^2
     } else {
         // within ideal balance
         Decimal::zero()
@@ -74,6 +74,7 @@ impl ImpactFactorParamGroup {
         ideal_balance_upper_bound: Decimal,
         upper_limit: Decimal,
     ) -> Self {
+        // TODO: restrict this
         Self {
             prev_normalized_balance,
             update_normalized_balance,
