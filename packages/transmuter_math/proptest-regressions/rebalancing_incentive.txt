@@ -5,3 +5,8 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 562a32f0f5c0872580ed28523b29332acb431e7009dee0c7aba7b67a58523c3e # shrinks to lambda = 1000000000000000001, impact_factor = 0, amount_in = 0
+cc b152caa95a33e588b05bf0c6d3c53b91808d83e0a5f6a8176d35ce59771ac8df # shrinks to normalized_balance = 269526351641570518, ideal_balance_lower_bound = 0, ideal_balance_upper_bound = 0, upper_limit = 0
+cc 05667d509ee73bc4dc7059dabfd936ca1b83e0858079419ef4ec85d3134e545d # shrinks to normalized_balance = 269724147998904283, ideal_balance_lower_bound = 296075781682198385, ideal_balance_upper_bound = 0, upper_limit = 269724147998904283
+cc b254ff7ece5fb165f9e4d53746fc7222427cff1d17afbcd15cb8e3b3a7282cfc # shrinks to normalized_balance = 0, ideal_balance_lower_bound = 1, ideal_balance_upper_bound = 0, upper_limit = 0
+cc 6bbf8d95569b53ec005ed88b282ebcb88f2a327770cf267800b744274aeaf323 # shrinks to normalized_balance = 340640889074348996, ideal_balance_lower_bound = 340640889074348997, ideal_balance_upper_bound = 340640889074348998, upper_limit = 340640889074348998
+cc 4c6ad67ab30e522b8de8314e2219263f2e0dff53070517988a192b64099320ee # shrinks to normalized_balance = 866170838754561023, ideal_balance_lower_bound = 0, ideal_balance_range = 0
