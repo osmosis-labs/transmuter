@@ -2,6 +2,9 @@ use cosmwasm_std::{ensure, Decimal, Decimal256, SignedDecimal256, Uint128};
 
 use crate::TransmuterMathError;
 
+
+
+
 /// Calculating impact factor component
 ///
 /// Considering change of balance of asset $i$, fee/incentive impact factor component $\gamma_i$ is
@@ -24,7 +27,9 @@ use crate::TransmuterMathError;
 ///       \left(\frac{b - \phi_u}{\delta - \phi_u}\right)^2 & \text{if } \phi_u \lt b \leq \delta
 ///    \end{cases}
 /// $$
-pub fn calculate_cumulative_impact_factor_component(
+///
+/// This function returns √C(b) to delay precision loss handling
+pub fn calculate_sqrt_cumulative_impact_factor_component(
     normalized_balance: Decimal,
     ideal_balance_lower_bound: Decimal,
     ideal_balance_upper_bound: Decimal,
@@ -41,7 +46,6 @@ pub fn calculate_cumulative_impact_factor_component(
         ideal_balance_lower_bound // phi_l
             .checked_sub(normalized_balance)? // - b
             .checked_div(ideal_balance_lower_bound)? // / phi_l
-            .checked_pow(2)? // ^2
     } else if normalized_balance > ideal_balance_upper_bound {
         normalized_balance // b
             .checked_sub(ideal_balance_upper_bound)? // - phi_u
@@ -49,7 +53,6 @@ pub fn calculate_cumulative_impact_factor_component(
             // delta - phi_u = 0 then delta = phi_u
             // since b > delta is restricted by limiter, and delta <= phi_u, this will never happen
             .checked_div(upper_limit.checked_sub(ideal_balance_upper_bound)?)? // / delta - phi_u
-            .checked_pow(2)? // ^2
     } else {
         // within ideal balance
         Decimal::zero()
@@ -120,26 +123,39 @@ impl ImpactFactorParamGroup {
     }
 
     fn calculate_impact_factor_component(&self) -> Result<SignedDecimal256, TransmuterMathError> {
-        // C(b)
-        let c_b = SignedDecimal256::from(calculate_cumulative_impact_factor_component(
+        // √C(b)
+        let sqrt_c_b = SignedDecimal256::from(calculate_sqrt_cumulative_impact_factor_component(
             self.prev_normalized_balance,
             self.ideal_balance_lower_bound,
             self.ideal_balance_upper_bound,
             self.upper_limit,
         )?);
 
-        // C(b')
-        let c_b_prime = SignedDecimal256::from(calculate_cumulative_impact_factor_component(
+        // √C(b')
+        let sqrt_c_b_prime = SignedDecimal256::from(calculate_sqrt_cumulative_impact_factor_component(
             self.update_normalized_balance,
             self.ideal_balance_lower_bound,
             self.ideal_balance_upper_bound,
             self.upper_limit,
         )?);
 
+
         // \gamma_i = C(b') - C(b)
-        c_b_prime
-            .checked_sub(c_b)
-            .map_err(TransmuterMathError::OverflowError)
+        let c_b_prime = sqrt_c_b_prime.checked_pow(2)?;
+        let c_b = sqrt_c_b.checked_pow(2)?;
+        let gamma_i = c_b_prime.checked_sub(c_b)?;
+
+        // gamma_i = 0 might be due to precision loss after squaring
+        // if C(b') - C(b) > 0  is counted as fee factor
+        // round to most precise positive number representable in SignedDecimal256
+        //
+        // C(b') - C(b) < 0 case is not handled here, as it will be counted as incentive factor
+        // keep it as 0 to prevent overincentive
+        if gamma_i.is_zero() && sqrt_c_b_prime > sqrt_c_b {
+            return Ok(SignedDecimal256::raw(1));
+        }
+
+        Ok(gamma_i)
     }
 }
 
@@ -460,12 +476,12 @@ mod tests {
         #[case] upper_limit: Decimal,
         #[case] expected: Result<Decimal, TransmuterMathError>,
     ) {
-        let actual = calculate_cumulative_impact_factor_component(
+        let actual = calculate_sqrt_cumulative_impact_factor_component(
             normalized_balance,
             ideal_balance_lower_bound,
             ideal_balance_upper_bound,
             upper_limit,
-        );
+        ).map(|x| x.pow(2));
         assert_eq!(expected, actual);
     }
 
@@ -484,7 +500,7 @@ mod tests {
             let ideal_balance_upper_bound = Decimal::raw(ideal_balance_upper_bound);
             let upper_limit = Decimal::raw(upper_limit);
 
-            match calculate_cumulative_impact_factor_component(
+            match calculate_sqrt_cumulative_impact_factor_component(
                 normalized_balance,
                 ideal_balance_lower_bound,
                 ideal_balance_upper_bound,
@@ -505,7 +521,7 @@ mod tests {
             let ideal_balance_lower_bound = Decimal::raw(normalized_balance.saturating_sub(ideal_balance_lower_bound_from_normalized_balance));
             let normalized_balance = Decimal::raw(normalized_balance);
             let upper_limit = ideal_balance_upper_bound;
-            let actual = calculate_cumulative_impact_factor_component(
+            let actual = calculate_sqrt_cumulative_impact_factor_component(
                 normalized_balance,
                 ideal_balance_lower_bound,
                 ideal_balance_upper_bound,
@@ -531,14 +547,14 @@ mod tests {
             let upper_limit = Decimal::raw(upper_limit);
             let epsilon = Decimal::raw(1000u128);
 
-            let c1 = calculate_cumulative_impact_factor_component(
+            let c1 = calculate_sqrt_cumulative_impact_factor_component(
                 normalized_balance - epsilon,
                 ideal_balance_lower_bound,
                 ideal_balance_upper_bound,
                 upper_limit,
             ).unwrap();
 
-            let c2 = calculate_cumulative_impact_factor_component(
+            let c2 = calculate_sqrt_cumulative_impact_factor_component(
                 normalized_balance,
                 ideal_balance_lower_bound,
                 ideal_balance_upper_bound,
@@ -565,14 +581,14 @@ mod tests {
             let upper_limit = Decimal::raw(upper_limit);
             let epsilon = Decimal::raw(1000u128);
 
-            let c1 = calculate_cumulative_impact_factor_component(
+            let c1 = calculate_sqrt_cumulative_impact_factor_component(
                 normalized_balance - epsilon,
                 ideal_balance_lower_bound,
                 ideal_balance_upper_bound,
                 upper_limit,
             ).unwrap();
 
-            let c2 = calculate_cumulative_impact_factor_component(
+            let c2 = calculate_sqrt_cumulative_impact_factor_component(
                 normalized_balance,
                 ideal_balance_lower_bound,
                 ideal_balance_upper_bound,
@@ -729,14 +745,40 @@ mod tests {
         Decimal::one(),
         Ok(SignedDecimal256::from_str("0.078125").unwrap())
     )]
-    // #[case::precision_issue(
-    //     Decimal::from_str("0.600000000000000001").unwrap(), 
-    //     Decimal::from_str("0.600000000000000002").unwrap(),  
-    //     Decimal::percent(40),                               
-    //     Decimal::percent(60),
-    //     Decimal::one(),
-    //     Ok(SignedDecimal256::from_str("-0.000000000000000001").unwrap())
-    // )]
+    // precision loss for fee impact factor >> 0.000000000000000001
+    #[case::precision_loss_positive_impact(
+        Decimal::from_str("0.600000000000000001").unwrap(), 
+        Decimal::from_str("0.600000000000000002").unwrap(),  
+        Decimal::percent(40),                               
+        Decimal::percent(60),
+        Decimal::one(),
+        Ok(SignedDecimal256::from_str("0.000000000000000001").unwrap())
+    )]
+    #[case::precision_loss_positive_impact(
+        Decimal::from_str("0.499999999999999999").unwrap(), 
+        Decimal::from_str("0.600000000000000001").unwrap(),  
+        Decimal::percent(40),                               
+        Decimal::percent(60),
+        Decimal::one(),
+        Ok(SignedDecimal256::from_str("0.000000000000000001").unwrap())
+    )]
+    // precision loss for incentive impact factor >> 0
+    #[case::precision_loss_negative_impact(
+        Decimal::from_str("0.600000000000000002").unwrap(), 
+        Decimal::from_str("0.600000000000000001").unwrap(),  
+        Decimal::percent(40),                               
+        Decimal::percent(60),
+        Decimal::one(),
+        Ok(SignedDecimal256::zero())
+    )]
+    #[case::precision_loss_negative_impact(
+        Decimal::from_str("0.600000000000000001").unwrap(),  
+        Decimal::from_str("0.499999999999999999").unwrap(),
+        Decimal::percent(40),                               
+        Decimal::percent(60),
+        Decimal::one(),
+        Ok(SignedDecimal256::zero())
+    )]
     fn test_calculate_impact_factor_component(
         #[case] prev_normalized_balance: Decimal,
         #[case] update_normalized_balance: Decimal,
