@@ -18,6 +18,9 @@ pub enum TransmuterMathError {
     #[error("`{var_name}` must be within normalized range [0, 1]")]
     OutOfNormalizedRange { var_name: String },
 
+    #[error("Normalized balance exceeds upper limit")]
+    NormalizedBalanceExceedsUpperLimit,
+
     #[error("{0}")]
     DecimalRangeExceeded(#[from] DecimalRangeExceeded),
 
