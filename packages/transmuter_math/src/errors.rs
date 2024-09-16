@@ -15,8 +15,8 @@ pub enum TransmuterMathError {
     #[error("Missing data points to calculate moving average")]
     MissingDataPoints,
 
-    #[error("Value is not normalized: {var_name}")]
-    NotNormalized { var_name: String },
+    #[error("`{var_name}` must be within normalized range [0, 1]")]
+    OutOfNormalizedRange { var_name: String },
 
     #[error("{0}")]
     DecimalRangeExceeded(#[from] DecimalRangeExceeded),
