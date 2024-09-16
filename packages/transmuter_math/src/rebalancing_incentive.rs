@@ -453,7 +453,7 @@ mod tests {
         Decimal::percent(50),
         Ok(Decimal::zero())
     )]
-    fn test_calculate_impact_factor_component(
+    fn test_calculate_cumulative_impact_factor_component(
         #[case] normalized_balance: Decimal,
         #[case] ideal_balance_lower_bound: Decimal,
         #[case] ideal_balance_upper_bound: Decimal,
@@ -680,6 +680,81 @@ mod tests {
         }
     }
 
-    // TODO: tests
-    // - calculate_impact_factor
+    #[rstest]
+    #[case::no_change_in_balance(
+        Decimal::percent(50),
+        Decimal::percent(50),
+        Decimal::percent(40),
+        Decimal::percent(60),
+        Decimal::one(),
+        Ok(SignedDecimal256::zero())
+    )]
+    #[case::move_within_ideal_range(
+        Decimal::percent(45),
+        Decimal::percent(55),
+        Decimal::percent(40),
+        Decimal::percent(60),
+        Decimal::one(),
+        Ok(SignedDecimal256::zero())
+    )]
+    #[case::move_away_from_ideal_range(
+        Decimal::percent(55),
+        Decimal::percent(65),
+        Decimal::percent(40),
+        Decimal::percent(60),
+        Decimal::one(),
+        Ok(SignedDecimal256::from_str("0.015625").unwrap())
+    )]
+    #[case::move_towards_ideal_range(
+        Decimal::percent(55),
+        Decimal::percent(45),
+        Decimal::percent(40),
+        Decimal::percent(50),
+        Decimal::one(),
+        Ok(SignedDecimal256::from_str("-0.01").unwrap())
+    )]
+    #[case::cross_ideal_range_negative(
+        Decimal::percent(30),
+        Decimal::percent(65),
+        Decimal::percent(40),
+        Decimal::percent(60),
+        Decimal::one(),
+        Ok(SignedDecimal256::from_str("-0.046875").unwrap())
+    )]
+    #[case::cross_ideal_range_positive(
+        Decimal::percent(70), 
+        Decimal::percent(25),   
+        Decimal::percent(40),   
+        Decimal::percent(60),
+        Decimal::one(),
+        Ok(SignedDecimal256::from_str("0.078125").unwrap())
+    )]
+    // #[case::precision_issue(
+    //     Decimal::from_str("0.600000000000000001").unwrap(), 
+    //     Decimal::from_str("0.600000000000000002").unwrap(),  
+    //     Decimal::percent(40),                               
+    //     Decimal::percent(60),
+    //     Decimal::one(),
+    //     Ok(SignedDecimal256::from_str("-0.000000000000000001").unwrap())
+    // )]
+    fn test_calculate_impact_factor_component(
+        #[case] prev_normalized_balance: Decimal,
+        #[case] update_normalized_balance: Decimal,
+        #[case] ideal_balance_lower_bound: Decimal,
+        #[case] ideal_balance_upper_bound: Decimal,
+        #[case] upper_limit: Decimal,
+        #[case] expected: Result<SignedDecimal256, TransmuterMathError>,
+    ) {
+        let group = ImpactFactorParamGroup::new(
+            prev_normalized_balance,
+            update_normalized_balance,
+            ideal_balance_lower_bound,
+            ideal_balance_upper_bound,
+            upper_limit,
+        )
+        .unwrap();
+
+        let result = group.calculate_impact_factor_component();
+        assert_eq!(result, expected);
+    }
 }
