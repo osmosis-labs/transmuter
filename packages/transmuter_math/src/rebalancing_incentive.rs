@@ -642,6 +642,44 @@ mod tests {
         assert_eq!(result, expected_result);
     }
 
+    proptest! {
+        #[test]
+        fn test_has_no_change_in_balance(
+            normalized_balance in 0..=ONE_DEC_RAW,
+            update_normalized_balance in 0..=ONE_DEC_RAW,
+        ) {
+            prop_assume!(normalized_balance != update_normalized_balance);
+            let normalized_balance = Decimal::raw(normalized_balance);
+            let update_normalized_balance = Decimal::raw(update_normalized_balance);
+
+            // all bounds are set to 100% as it's unrelevant to the test
+            let ideal_balance_lower_bound = Decimal::percent(100);
+            let ideal_balance_upper_bound = Decimal::percent(100);
+            let upper_limit = Decimal::percent(100);
+
+
+            if let Ok(group) = ImpactFactorParamGroup::new(
+                normalized_balance,
+                normalized_balance,
+                ideal_balance_lower_bound,
+                ideal_balance_upper_bound,
+                upper_limit,
+            ) {
+                assert!(group.has_no_change_in_balance());
+            }
+
+            if let Ok(group) = ImpactFactorParamGroup::new(
+                normalized_balance,
+                update_normalized_balance,
+                ideal_balance_lower_bound,
+                ideal_balance_upper_bound,
+                upper_limit,
+            ) {
+                assert!(!group.has_no_change_in_balance());
+            }
+        }
+    }
+
     // TODO: tests
     // - calculate_impact_factor
 }
