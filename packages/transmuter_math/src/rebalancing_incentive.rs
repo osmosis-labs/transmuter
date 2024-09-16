@@ -1,4 +1,4 @@
-use cosmwasm_std::{Decimal, Decimal256, SignedDecimal256, Uint128};
+use cosmwasm_std::{ensure, Decimal, Decimal256, SignedDecimal256, Uint128};
 
 use crate::TransmuterMathError;
 
@@ -74,7 +74,17 @@ impl ImpactFactorParamGroup {
         ideal_balance_upper_bound: Decimal,
         upper_limit: Decimal,
     ) -> Self {
-        // TODO: restrict this
+        // // Check if the input parameters are within the valid range [0, 1]
+        // if ideal_balance_lower_bound <= Decimal::one() {
+        //     panic!("ideal_balance_lower_bound must be between 0 and 1");
+        // }
+        // if ideal_balance_upper_bound <= Decimal::one() {
+        //     panic!("ideal_balance_upper_bound must be between 0 and 1");
+        // }
+        // if upper_limit <= Decimal::one() {
+        //     panic!("upper_limit must be between 0 and 1");
+        // }
+
         Self {
             prev_normalized_balance,
             update_normalized_balance,
@@ -171,17 +181,19 @@ pub fn calculate_rebalancing_fee(
     impact_factor: Decimal,
     amount_in: Uint128,
 ) -> Result<Decimal256, TransmuterMathError> {
-    if lambda > Decimal::one() {
-        return Err(TransmuterMathError::NotNormalized {
+    ensure!(
+        lambda <= Decimal::one(),
+        TransmuterMathError::OutOfNormalizedRange {
             var_name: "lambda".to_string(),
-        });
-    }
+        }
+    );
 
-    if impact_factor > Decimal::one() {
-        return Err(TransmuterMathError::NotNormalized {
+    ensure!(
+        impact_factor <= Decimal::one(),
+        TransmuterMathError::OutOfNormalizedRange {
             var_name: "impact_factor".to_string(),
-        });
-    }
+        }
+    );
 
     let lambda = Decimal256::from(lambda);
     let impact_factor = Decimal256::from(impact_factor);
@@ -224,7 +236,7 @@ pub fn calculate_rebalancing_incentive(
     incentive_pool: Uint128,
 ) -> Result<Decimal256, TransmuterMathError> {
     if impact > Decimal::one() {
-        return Err(TransmuterMathError::NotNormalized {
+        return Err(TransmuterMathError::OutOfNormalizedRange {
             var_name: "impact".to_string(),
         });
     }
@@ -273,13 +285,13 @@ mod tests {
         Decimal::percent(101),
         Decimal::percent(100),
         Uint128::MAX,
-        Err(TransmuterMathError::NotNormalized { var_name: "lambda".to_string() })
+        Err(TransmuterMathError::OutOfNormalizedRange { var_name: "lambda".to_string() })
     )]
     #[case(
         Decimal::percent(100),
         Decimal::percent(101),
         Uint128::MAX,
-        Err(TransmuterMathError::NotNormalized { var_name: "impact_factor".to_string() })
+        Err(TransmuterMathError::OutOfNormalizedRange { var_name: "impact_factor".to_string() })
     )]
     fn test_calculate_rebalancing_fee(
         #[case] lambda: Decimal,
@@ -332,7 +344,7 @@ mod tests {
     #[case(Decimal::one(), Uint128::zero(), Ok(Decimal256::zero()))]
     #[case(Decimal::percent(50), Uint128::new(1000), Ok(Decimal256::from_str("0.499750124937531234").unwrap()))]
     #[case(Decimal::percent(100), Uint128::new(1000), Ok(Decimal256::from_str("0.999000999000999").unwrap()))]
-    #[case(Decimal::percent(101), Uint128::new(1000), Err(TransmuterMathError::NotNormalized { var_name: "impact".to_string() }))]
+    #[case(Decimal::percent(101), Uint128::new(1000), Err(TransmuterMathError::OutOfNormalizedRange { var_name: "impact".to_string() }))]
     fn test_calculate_rebalancing_incentive(
         #[case] impact: Decimal,
         #[case] incentive_pool: Uint128,
@@ -463,7 +475,7 @@ mod tests {
         }
 
         #[test]
-        fn test_calculate_impact_factor_component_with_normalized_balance_in_ideal_balance_bound_must_be_zero(
+        fn test_impact_factor_zero_within_ideal_bounds(
             normalized_balance in 0u128..=ONE_DEC_RAW,
             ideal_balance_lower_bound_from_normalized_balance in 0u128..=ONE_DEC_RAW,
             ideal_balance_upper_bound_from_normalized_balance in 0u128..=ONE_DEC_RAW,
@@ -483,7 +495,7 @@ mod tests {
         }
 
         #[test]
-        fn test_calculate_impact_factor_component_with_normalized_balance_decreasing_while_less_than_ideal_balance_lower_bound_must_be_increasing(
+        fn test_impact_factor_increases_as_balance_decreases_below_lower_bound(
             normalized_balance in 1u128..=ONE_DEC_RAW,
             ideal_balance_lower_bound in 0u128..=ONE_DEC_RAW,
         ) {
@@ -516,7 +528,7 @@ mod tests {
         }
 
         #[test]
-        fn test_calculate_impact_factor_component_with_normalized_balance_increasing_while_greater_than_ideal_balance_upper_bound_must_be_increasing(
+        fn test_impact_factor_increases_above_upper_bound(
             normalized_balance in 0u128..=ONE_DEC_RAW-1,
             ideal_balance_upper_bound in 0u128..=ONE_DEC_RAW,
             upper_limit in 0u128..=ONE_DEC_RAW,
