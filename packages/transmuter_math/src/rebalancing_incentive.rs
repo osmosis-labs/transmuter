@@ -2,8 +2,81 @@ use cosmwasm_std::{ensure, Decimal, Decimal256, SignedDecimal256, Uint128};
 
 use crate::TransmuterMathError;
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum ImpactFactor {
+    Incentive(Decimal256),
+    Fee(Decimal256),
+    None,
+}
 
+/// combine all the impact factor components
+///
+/// $$
+/// f = \frac{\Vert\vec{\gamma}\Vert}{\sqrt{n}}
+/// $$
+///
+/// That gives a normalized magnitude of the vector of $n$ dimension into $[0,1]$.
+/// The reason why it needs to include all dimensions is because the case that swapping with alloyed asset, which will effect overall composition rather than just 2 assets.
+pub fn calculate_impact_factor(
+    impact_factor_param_groups: &[ImpactFactorParamGroup],
+) -> Result<ImpactFactor, TransmuterMathError> {
+    if impact_factor_param_groups.is_empty() {
+        return Ok(ImpactFactor::None);
+    }
 
+    let mut cumulative_impact_factor_sqaure = Decimal256::zero();
+    let mut impact_factor_component_sum = SignedDecimal256::zero();
+
+    // accumulated impact_factor_component_square rounded to smallest possible Decimal256
+    // when impact_factor_component is smaller then 10^-9 to prevent fee exploitation
+    let mut lost_rounded_impact_factor_component_square_sum = Decimal256::zero();
+
+    let n = Decimal256::from_atomics(impact_factor_param_groups.len() as u64, 0)?;
+
+    for impact_factor_params in impact_factor_param_groups {
+        // optimiztion: if there is no change in balance, the result will be 0 anyway, accumulating 0 has no effect
+        if impact_factor_params.has_no_change_in_balance() {
+            continue;
+        }
+        
+        let impact_factor_component = impact_factor_params.calculate_impact_factor_component()?;        
+
+        // when impact_factor_component<= 10^-9, the result after squaring will be 0, then
+        // - if total is counted as incentive, there will be no incentive and it's fine 
+        //   since it's neglectible and will not overincentivize and drain incentive pool
+        // - if total is counted as fee, it could be exploited by 
+        //   making swap with small impact_factor_component over and over again to avoid being counted as fee
+        let impact_factor_component_dec = impact_factor_component.abs_diff(SignedDecimal256::zero());
+        if impact_factor_component_dec <= Decimal256::raw(1_000_000_000u128) {
+            lost_rounded_impact_factor_component_square_sum = lost_rounded_impact_factor_component_square_sum.checked_add(Decimal256::raw(1u128))?;
+        }
+        
+        let impact_factor_component_square = impact_factor_component_dec.checked_pow(2)?;
+
+        impact_factor_component_sum =
+            impact_factor_component_sum.checked_add(impact_factor_component)?;
+        cumulative_impact_factor_sqaure =
+            cumulative_impact_factor_sqaure.checked_add(impact_factor_component_square)?;
+    }
+
+    if impact_factor_component_sum.is_zero() {
+        Ok(ImpactFactor::None)
+    } else if impact_factor_component_sum.is_negative() {
+        Ok(ImpactFactor::Incentive(
+            cumulative_impact_factor_sqaure
+                .checked_div(n)?
+                .sqrt()
+        ))
+    } else {
+        // add back lost impact_factor_component_square_sum before normalizing
+        Ok(ImpactFactor::Fee(
+            cumulative_impact_factor_sqaure
+                .checked_add(lost_rounded_impact_factor_component_square_sum)?
+                .checked_div(n)?
+                .sqrt()
+        ))
+    }
+}
 
 /// Calculating impact factor component
 ///
@@ -159,53 +232,6 @@ impl ImpactFactorParamGroup {
     }
 }
 
-pub enum PayoffType {
-    Incentive,
-    Fee,
-}
-
-/// combine all the impact factor components
-///
-/// $$
-/// f = \frac{\Vert\vec{\gamma}\Vert}{\sqrt{n}}
-/// $$
-///
-/// That gives a normalized magnitude of the vector of $n$ dimension into $[0,1]$.
-/// The reason why it needs to include all dimensions is because the case that swapping with alloyed asset, which will effect overall composition rather than just 2 assets.
-pub fn calculate_impact_factor(
-    impact_factor_param_groups: &[ImpactFactorParamGroup],
-) -> Result<(PayoffType, Decimal256), TransmuterMathError> {
-    let mut cumulative_impact_factor_sqaure = Decimal256::zero();
-    let mut impact_factor_component_sum = SignedDecimal256::zero();
-
-    let n = Decimal256::from_atomics(impact_factor_param_groups.len() as u64, 0)?;
-
-    for impact_factor_params in impact_factor_param_groups {
-        // optimiztion: if there is no change in balance, the result will be 0 anyway, accumulating 0 has no effect
-        if impact_factor_params.has_no_change_in_balance() {
-            continue;
-        }
-
-        let impact_factor_component = impact_factor_params.calculate_impact_factor_component()?;
-        let impact_factor_component_square =
-            Decimal256::try_from(impact_factor_component.checked_pow(2)?)?;
-
-        impact_factor_component_sum =
-            impact_factor_component_sum.checked_add(impact_factor_component)?;
-        cumulative_impact_factor_sqaure =
-            cumulative_impact_factor_sqaure.checked_add(impact_factor_component_square)?;
-    }
-
-    let payoff_type = if impact_factor_component_sum.is_negative() {
-        PayoffType::Incentive
-    } else {
-        PayoffType::Fee
-    };
-
-    let impact_factor = cumulative_impact_factor_sqaure.checked_div(n)?.sqrt();
-
-    Ok((payoff_type, impact_factor))
-}
 
 /// Calculate the rebalancing fee
 ///
@@ -797,6 +823,149 @@ mod tests {
         .unwrap();
 
         let result = group.calculate_impact_factor_component();
+        assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    #[case::empty_input(Vec::new(), Ok(ImpactFactor::None))]
+    #[case::all_no_change(
+        vec![
+            ImpactFactorParamGroup {
+                prev_normalized_balance: Decimal::percent(50),
+                update_normalized_balance: Decimal::percent(50),
+                ideal_balance_lower_bound: Decimal::percent(40),
+                ideal_balance_upper_bound: Decimal::percent(60),
+                upper_limit: Decimal::percent(100),
+            },
+            ImpactFactorParamGroup {
+                prev_normalized_balance: Decimal::percent(70),
+                update_normalized_balance: Decimal::percent(70),
+                ideal_balance_lower_bound: Decimal::percent(40),
+                ideal_balance_upper_bound: Decimal::percent(60),
+                upper_limit: Decimal::percent(100),
+            }            
+        ],
+        Ok(ImpactFactor::None)
+    )]
+    #[case::all_positive_resulted_in_fee(
+        vec![
+            ImpactFactorParamGroup {
+                prev_normalized_balance: Decimal::percent(70),
+                update_normalized_balance: Decimal::percent(80),
+                ideal_balance_lower_bound: Decimal::percent(40),
+                ideal_balance_upper_bound: Decimal::percent(60),
+                upper_limit: Decimal::percent(100),
+            },
+            ImpactFactorParamGroup {
+                prev_normalized_balance: Decimal::percent(65),
+                update_normalized_balance: Decimal::percent(75),
+                ideal_balance_lower_bound: Decimal::percent(40),
+                ideal_balance_upper_bound: Decimal::percent(60),
+                upper_limit: Decimal::percent(100),
+            },
+        ],
+        Ok(ImpactFactor::Fee(Decimal256::from_str("0.159344359799774525").unwrap()))
+    )]
+    #[case::all_negative_resulted_in_incentive(
+        vec![
+            ImpactFactorParamGroup {
+                prev_normalized_balance: Decimal::percent(70),
+                update_normalized_balance: Decimal::percent(60),
+                ideal_balance_lower_bound: Decimal::percent(40),
+                ideal_balance_upper_bound: Decimal::percent(60),
+                upper_limit: Decimal::percent(100),
+            },
+            ImpactFactorParamGroup {
+                prev_normalized_balance: Decimal::percent(35),
+                update_normalized_balance: Decimal::percent(45),
+                ideal_balance_lower_bound: Decimal::percent(40),
+                ideal_balance_upper_bound: Decimal::percent(60),
+                upper_limit: Decimal::percent(100),
+            },
+        ],
+        Ok(ImpactFactor::Incentive(Decimal256::from_str("0.045554311678478909").unwrap())))
+    ]
+    #[case::mixed_positive_and_negative_resulted_in_fee(
+        vec![
+            ImpactFactorParamGroup {
+                prev_normalized_balance: Decimal::percent(70),
+                update_normalized_balance: Decimal::percent(80),
+                ideal_balance_lower_bound: Decimal::percent(40),
+                ideal_balance_upper_bound: Decimal::percent(60),
+                upper_limit: Decimal::percent(100),
+            },
+            ImpactFactorParamGroup {
+                prev_normalized_balance: Decimal::percent(35),
+                update_normalized_balance: Decimal::percent(45),
+                ideal_balance_lower_bound: Decimal::percent(40),
+                ideal_balance_upper_bound: Decimal::percent(60),
+                upper_limit: Decimal::percent(100),
+            },
+        ],
+        Ok(ImpactFactor::Fee(Decimal256::from_str("0.133042080983800009").unwrap()))
+    )]
+    #[case::mixed_positive_and_negative_resulted_in_incentive(
+        vec![
+            ImpactFactorParamGroup {
+                prev_normalized_balance: Decimal::percent(70),
+                update_normalized_balance: Decimal::percent(60),
+                ideal_balance_lower_bound: Decimal::percent(40),
+                ideal_balance_upper_bound: Decimal::percent(60),
+                upper_limit: Decimal::percent(100),
+            },
+            ImpactFactorParamGroup {
+                prev_normalized_balance: Decimal::percent(35),
+                update_normalized_balance: Decimal::percent(30),
+                ideal_balance_lower_bound: Decimal::percent(40),
+                ideal_balance_upper_bound: Decimal::percent(60),
+                upper_limit: Decimal::percent(100),
+            },
+        ],
+        Ok(ImpactFactor::Incentive(Decimal256::from_str("0.055242717280199025").unwrap()))
+    )]
+    #[case::loss_rounding_fee(
+        vec![
+            ImpactFactorParamGroup {
+                prev_normalized_balance: Decimal::percent(60),
+                update_normalized_balance: Decimal::from_atomics(600_000_000_000_000_001u128, 18).unwrap(),
+                ideal_balance_lower_bound: Decimal::percent(40),
+                ideal_balance_upper_bound: Decimal::percent(60),
+                upper_limit: Decimal::percent(100),
+            },
+            ImpactFactorParamGroup {
+                prev_normalized_balance: Decimal::percent(60),
+                update_normalized_balance: Decimal::from_atomics(600_000_000_000_000_001u128, 18).unwrap(),
+                ideal_balance_lower_bound: Decimal::percent(40),
+                ideal_balance_upper_bound: Decimal::percent(60),
+                upper_limit: Decimal::percent(100),
+            },
+        ],
+        Ok(ImpactFactor::Fee(Decimal256::from_str("0.000000001").unwrap()))    
+    )]
+    #[case::no_loss_rounding_incentive(
+        vec![
+            ImpactFactorParamGroup {
+                prev_normalized_balance: Decimal::from_atomics(600_000_000_000_000_001u128, 18).unwrap(),
+                update_normalized_balance: Decimal::percent(60),
+                ideal_balance_lower_bound: Decimal::percent(40),
+                ideal_balance_upper_bound: Decimal::percent(60),
+                upper_limit: Decimal::percent(100),
+            },
+            ImpactFactorParamGroup {
+                prev_normalized_balance: Decimal::from_atomics(600_000_000_000_000_001u128, 18).unwrap(),
+                update_normalized_balance: Decimal::percent(60),
+                ideal_balance_lower_bound: Decimal::percent(40),
+                ideal_balance_upper_bound: Decimal::percent(60),
+                upper_limit: Decimal::percent(100),
+            },
+        ],
+        Ok(ImpactFactor::None)
+    )]
+    fn test_calculate_impact_factor(
+    #[case] input_param_groups: Vec<ImpactFactorParamGroup>,
+    #[case] expected: Result<ImpactFactor, TransmuterMathError>,
+    ) {
+        let result = calculate_impact_factor(&input_param_groups);
         assert_eq!(result, expected);
     }
 }
