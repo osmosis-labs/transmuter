@@ -4,6 +4,7 @@ use std::{fmt::Display, str::FromStr};
 /// Scope for configuring limiters & rebalacing incentive for
 #[cw_serde]
 #[serde(tag = "type", content = "value")]
+#[derive(Eq, Hash)]
 pub enum Scope {
     Denom(String),
     AssetGroup(String),

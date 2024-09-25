@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env, Response,
-    StdError, Storage, Uint128,
+    ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env, Order,
+    Response, StdError, Storage, Uint128,
 };
 use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
 use serde::Serialize;
@@ -131,9 +131,15 @@ impl Transmuter<'_> {
 
         // check and update limiters only if pool assets are not zero
         if let Some(updated_weights) = pool.weights()? {
+            let scope_value_pairs = construct_scope_value_pairs(
+                prev_weights,
+                updated_weights,
+                self.get_asset_group(deps.storage)?,
+            )?;
+
             self.limiters.check_limits_and_update(
                 deps.storage,
-                pair_weights_by_denom(prev_weights, updated_weights),
+                scope_value_pairs,
                 env.block.time,
             )?;
         }
@@ -307,9 +313,15 @@ impl Transmuter<'_> {
 
             // check and update limiters only if pool assets are not zero
             if let Some(updated_weights) = pool.weights()? {
+                let scope_value_pairs = construct_scope_value_pairs(
+                    prev_weights,
+                    updated_weights,
+                    self.get_asset_group(deps.storage)?,
+                )?;
+
                 self.limiters.check_limits_and_update(
                     deps.storage,
-                    pair_weights_by_denom(prev_weights, updated_weights),
+                    scope_value_pairs,
                     env.block.time,
                 )?;
             }
@@ -366,9 +378,15 @@ impl Transmuter<'_> {
 
         // check and update limiters only if pool assets are not zero
         if let Some(updated_weights) = pool.weights()? {
+            let scope_value_pairs = construct_scope_value_pairs(
+                prev_weights,
+                updated_weights,
+                self.get_asset_group(deps.storage)?,
+            )?;
+
             self.limiters.check_limits_and_update(
                 deps.storage,
-                pair_weights_by_denom(prev_weights, updated_weights),
+                scope_value_pairs,
                 env.block.time,
             )?;
         }
@@ -421,9 +439,14 @@ impl Transmuter<'_> {
 
         // check and update limiters only if pool assets are not zero
         if let Some(updated_weights) = pool.weights()? {
+            let scope_value_pairs = construct_scope_value_pairs(
+                prev_weights,
+                updated_weights,
+                self.get_asset_group(deps.storage)?,
+            )?;
             self.limiters.check_limits_and_update(
                 deps.storage,
-                pair_weights_by_denom(prev_weights, updated_weights),
+                scope_value_pairs,
                 env.block.time,
             )?;
         }
@@ -604,21 +627,62 @@ impl Transmuter<'_> {
 
         Ok(())
     }
+
+    /// get asset group mapping from storage
+    fn get_asset_group(
+        &self,
+        storage: &dyn Storage,
+    ) -> Result<HashMap<String, Vec<String>>, StdError> {
+        self.asset_group
+            .range(storage, None, None, Order::Ascending)
+            .collect::<Result<HashMap<String, Vec<String>>, _>>()
+    }
 }
 
-// TODO: compute weight pairs by target > denom
-fn pair_weights_by_denom(
+fn construct_scope_value_pairs(
     prev_weights: BTreeMap<String, Decimal>,
     updated_weights: Vec<(String, Decimal)>,
-) -> Vec<(Scope, (Decimal, Decimal))> {
-    let mut denom_weight_pairs = Vec::new();
+    asset_group: HashMap<String, Vec<String>>,
+) -> Result<Vec<(Scope, (Decimal, Decimal))>, StdError> {
+    let mut denom_weight_pairs: HashMap<Scope, (Decimal, Decimal)> = HashMap::new();
+    let mut asset_group_weight_pairs: HashMap<Scope, (Decimal, Decimal)> = HashMap::new();
 
-    for (denom, weight) in updated_weights {
-        let prev_weight = prev_weights.get(denom.as_str()).unwrap_or(&weight);
-        denom_weight_pairs.push((Scope::denom(&denom), (*prev_weight, weight)));
+    // Reverse index the asset groups
+    // TODO: handle cases where asset group contains denom that does not exist
+    let mut asset_groups_of_denom = HashMap::new();
+    for (group, denoms) in asset_group {
+        for denom in denoms {
+            asset_groups_of_denom
+                .entry(denom)
+                .or_insert_with(Vec::new)
+                .push(group.clone());
+        }
     }
 
-    denom_weight_pairs
+    for (denom, weight) in &updated_weights {
+        let prev_weight = prev_weights.get(denom.as_str()).unwrap_or(weight);
+        denom_weight_pairs.insert(Scope::denom(denom), (*prev_weight, *weight));
+
+        for group in asset_groups_of_denom.get(denom.as_str()).unwrap_or(&vec![]) {
+            match asset_group_weight_pairs.get_mut(&Scope::asset_group(group)) {
+                Some((prev, curr)) => {
+                    *prev = prev.checked_add(*prev_weight)?;
+                    *curr = curr.checked_add(*weight)?;
+                }
+                None => {
+                    asset_group_weight_pairs
+                        .insert(Scope::asset_group(group), (*prev_weight, *weight));
+                }
+            }
+
+            // TODO: check for invalid cases like total weight is not 1, proptest it
+        }
+    }
+
+    Ok(denom_weight_pairs
+        .into_iter()
+        .chain(asset_group_weight_pairs.into_iter())
+        .collect())
 }
 
 /// Possible variants of swap, depending on the input and output tokens
@@ -1616,5 +1680,83 @@ mod tests {
         );
 
         assert_eq!(res, expected_res);
+    }
+
+    #[rstest]
+    #[case::empty(
+        HashMap::from([]),
+        vec![],
+        vec![],
+    )]
+    #[case::no_asset_group(
+        HashMap::from([]),
+        vec![
+            ("eth.axl", (Decimal::percent(20), Decimal::percent(40))),
+            ("eth.wh", (Decimal::percent(60), Decimal::percent(40))),
+            ("wsteth.axl", (Decimal::percent(20), Decimal::percent(20))),
+        ],
+        vec![],
+    )]
+    #[case(
+        HashMap::from([
+            ("axelar", vec!["eth.axl", "wsteth.axl"]),
+            ("wormhole", vec!["eth.wh"]),
+        ]),
+        vec![
+            ("eth.axl", (Decimal::percent(20), Decimal::percent(40))),
+            ("wsteth.axl", (Decimal::percent(20), Decimal::percent(20))),
+            ("eth.wh", (Decimal::percent(60), Decimal::percent(40))),
+        ],
+        vec![
+            (Scope::asset_group("axelar"), (Decimal::percent(40), Decimal::percent(60))),
+            (Scope::asset_group("wormhole"), (Decimal::percent(60), Decimal::percent(40))),
+        ],
+    )]
+    fn test_construct_scope_value_pairs(
+        #[case] asset_groups: HashMap<&str, Vec<&str>>,
+        #[case] denom_weights: Vec<(&str, (Decimal, Decimal))>,
+        #[case] expected_asset_group_scopes: Vec<(Scope, (Decimal, Decimal))>,
+    ) {
+        let asset_groups = asset_groups
+            .into_iter()
+            .map(|(label, asset_group)| {
+                (
+                    label.to_string(),
+                    asset_group
+                        .into_iter()
+                        .map(|asset| asset.to_string())
+                        .collect_vec(),
+                )
+            })
+            .collect();
+
+        let prev_weights = denom_weights
+            .clone()
+            .into_iter()
+            .map(|(denom, (prev_weight, _))| (denom.to_string(), prev_weight))
+            .collect();
+
+        let updated_weights = denom_weights
+            .clone()
+            .into_iter()
+            .map(|(denom, (_, updated_weight))| (denom.to_string(), updated_weight))
+            .collect_vec();
+
+        let mut scope_value_pairs =
+            construct_scope_value_pairs(prev_weights, updated_weights, asset_groups).unwrap();
+
+        let scope_denom_value_pairs = denom_weights
+            .into_iter()
+            .map(|(denom, weight_transition)| (Scope::denom(denom), weight_transition))
+            .collect_vec();
+
+        let mut expected_scope_value_pairs =
+            vec![scope_denom_value_pairs, expected_asset_group_scopes].concat();
+
+        // assert by disregrard order
+        scope_value_pairs.sort_by_key(|(scope, _)| scope.key());
+        expected_scope_value_pairs.sort_by_key(|(scope, _)| scope.key());
+
+        assert_eq!(scope_value_pairs, expected_scope_value_pairs);
     }
 }
