@@ -6,6 +6,7 @@ mod limiter;
 mod math;
 mod migrations;
 mod role;
+mod scope;
 mod sudo;
 mod swap;
 mod transmuter_pool;

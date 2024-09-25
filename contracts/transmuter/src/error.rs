@@ -4,7 +4,7 @@ use cosmwasm_std::{
 };
 use thiserror::Error;
 
-use crate::math::MathError;
+use crate::{math::MathError, scope::Scope};
 
 #[derive(Error, Debug, PartialEq)]
 pub enum ContractError {
@@ -114,11 +114,11 @@ pub enum ContractError {
     #[error("Admin transferring state is inoperable for the requested operation")]
     InoperableAdminTransferringState {},
 
-    #[error("Limiter count for {denom} exceed maximum per denom: {max}")]
-    MaxLimiterCountPerDenomExceeded { denom: String, max: Uint64 },
+    #[error("Limiter count for {scope} exceed maximum per denom: {max}")]
+    MaxLimiterCountPerDenomExceeded { scope: Scope, max: Uint64 },
 
-    #[error("Denom: {denom} cannot have an empty limiter after it has been registered")]
-    EmptyLimiterNotAllowed { denom: String },
+    #[error("Denom: {scope} cannot have an empty limiter after it has been registered")]
+    EmptyLimiterNotAllowed { scope: Scope },
 
     #[error("Limiter label must not be empty")]
     EmptyLimiterLabel {},
@@ -158,17 +158,17 @@ pub enum ContractError {
         ended_at: Timestamp,
     },
 
-    #[error("Limiter does not exist for denom: {denom}, label: {label}")]
-    LimiterDoesNotExist { denom: String, label: String },
+    #[error("Limiter does not exist for scope: {scope}, label: {label}")]
+    LimiterDoesNotExist { scope: Scope, label: String },
 
-    #[error("Limiter already exists for denom: {denom}, label: {label}")]
-    LimiterAlreadyExists { denom: String, label: String },
+    #[error("Limiter already exists for scope: {scope}, label: {label}")]
+    LimiterAlreadyExists { scope: Scope, label: String },
 
     #[error(
-        "Upper limit exceeded for `{denom}`, upper limit is {upper_limit}, but the resulted weight is {value}"
+        "Upper limit exceeded for `{scope}`, upper limit is {upper_limit}, but the resulted weight is {value}"
     )]
     UpperLimitExceeded {
-        denom: String,
+        scope: Scope,
         upper_limit: Decimal,
         value: Decimal,
     },
@@ -180,7 +180,13 @@ pub enum ContractError {
     NormalizationFactorMustBePositive {},
 
     #[error("Corrupted asset: {denom} must not increase in amount or weight")]
-    CorruptedAssetRelativelyIncreased { denom: String },
+    CorruptedAssetRelativelyIncreased { denom: String }, // TODO: change this to threshold scope as well
+
+    #[error("Asset group {label} not found")]
+    AssetGroupNotFound { label: String },
+
+    #[error("Asset group {label} already exists")]
+    AssetGroupAlreadyExists { label: String },
 
     #[error("{0}")]
     OverflowError(#[from] OverflowError),

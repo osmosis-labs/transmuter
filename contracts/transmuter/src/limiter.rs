@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::ContractError;
+use crate::{scope::Scope, ContractError};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{ensure, Decimal, StdError, Storage, Timestamp, Uint64};
 use cw_storage_plus::Map;
@@ -136,7 +136,7 @@ impl ChangeLimiter {
     fn ensure_upper_limit(
         self,
         block_time: Timestamp,
-        denom: &str,
+        scope: &Scope,
         value: Decimal,
     ) -> Result<Self, ContractError> {
         let (latest_removed_division, updated_limiter) =
@@ -161,7 +161,7 @@ impl ChangeLimiter {
             ensure!(
                 value <= upper_limit,
                 ContractError::UpperLimitExceeded {
-                    denom: denom.to_string(),
+                    scope: scope.clone(),
                     upper_limit,
                     value,
                 }
@@ -285,11 +285,11 @@ impl StaticLimiter {
         Ok(self)
     }
 
-    fn ensure_upper_limit(self, denom: &str, value: Decimal) -> Result<Self, ContractError> {
+    fn ensure_upper_limit(self, scope: &Scope, value: Decimal) -> Result<Self, ContractError> {
         ensure!(
             value <= self.upper_limit,
             ContractError::UpperLimitExceeded {
-                denom: denom.to_string(),
+                scope: scope.clone(),
                 upper_limit: self.upper_limit,
                 value,
             }
@@ -321,7 +321,7 @@ pub enum LimiterParams {
 }
 
 pub struct Limiters<'a> {
-    /// Map of (denom, label) -> Limiter
+    /// Map of (scope, label) -> Limiter
     limiters: Map<'a, (&'a str, &'a str), Limiter>,
 }
 
@@ -335,19 +335,21 @@ impl<'a> Limiters<'a> {
     pub fn register(
         &self,
         storage: &mut dyn Storage,
-        denom: &str,
+        scope: Scope,
         label: &str,
         limiter_params: LimiterParams,
     ) -> Result<(), ContractError> {
-        let is_registering_limiter_exists =
-            self.limiters.may_load(storage, (denom, label))?.is_some();
+        let is_registering_limiter_exists = self
+            .limiters
+            .may_load(storage, (&scope.key(), label))?
+            .is_some();
 
         ensure!(!label.is_empty(), ContractError::EmptyLimiterLabel {});
 
         ensure!(
             !is_registering_limiter_exists,
             ContractError::LimiterAlreadyExists {
-                denom: denom.to_string(),
+                scope,
                 label: label.to_string()
             }
         );
@@ -363,31 +365,31 @@ impl<'a> Limiters<'a> {
         };
 
         // ensure limiters for the denom has not yet reached the maximum
-        let limiter_count_for_denom = self.list_limiters_by_denom(storage, denom)?.len() as u64;
+        let limiter_count_for_denom = self.list_limiters_by_scope(storage, &scope)?.len() as u64;
         ensure!(
             limiter_count_for_denom < MAX_LIMITER_COUNT_PER_DENOM.u64(),
             ContractError::MaxLimiterCountPerDenomExceeded {
-                denom: denom.to_string(),
+                scope,
                 max: MAX_LIMITER_COUNT_PER_DENOM
             }
         );
 
         self.limiters
-            .save(storage, (denom, label), &limiter)
+            .save(storage, (&scope.key(), label), &limiter)
             .map_err(Into::into)
     }
 
     /// Deregsiter all limiters for the denom without checking if it will be empty.
     /// This is useful when the asset is being removed, so that limiters for the asset are no longer needed.
-    pub fn uncheck_deregister_all_for_denom(
+    pub fn uncheck_deregister_all_for_scope(
         &self,
         storage: &mut dyn Storage,
-        denom: &str,
+        scope: Scope,
     ) -> Result<(), ContractError> {
-        let limiters = self.list_limiters_by_denom(storage, denom)?;
+        let limiters = self.list_limiters_by_scope(storage, &scope)?;
 
         for (label, _) in limiters {
-            self.limiters.remove(storage, (denom, &label));
+            self.limiters.remove(storage, (&scope.key(), &label));
         }
 
         Ok(())
@@ -396,26 +398,25 @@ impl<'a> Limiters<'a> {
     pub fn deregister(
         &self,
         storage: &mut dyn Storage,
-        denom: &str,
+        scope: Scope,
         label: &str,
     ) -> Result<Limiter, ContractError> {
-        match self.limiters.may_load(storage, (denom, label))? {
+        let scope_key = scope.key();
+        match self.limiters.may_load(storage, (&scope_key, label))? {
             Some(limiter) => {
                 let limiter_for_denom_will_not_be_empty =
-                    self.list_limiters_by_denom(storage, denom)?.len() >= 2;
+                    self.list_limiters_by_scope(storage, &scope)?.len() >= 2;
 
                 ensure!(
                     limiter_for_denom_will_not_be_empty,
-                    ContractError::EmptyLimiterNotAllowed {
-                        denom: denom.to_string()
-                    }
+                    ContractError::EmptyLimiterNotAllowed { scope }
                 );
 
-                self.limiters.remove(storage, (denom, label));
+                self.limiters.remove(storage, (&scope_key, label));
                 Ok(limiter)
             }
             None => Err(ContractError::LimiterDoesNotExist {
-                denom: denom.to_string(),
+                scope,
                 label: label.to_string(),
             }),
         }
@@ -425,16 +426,16 @@ impl<'a> Limiters<'a> {
     pub fn set_change_limiter_boundary_offset(
         &self,
         storage: &mut dyn Storage,
-        denom: &str,
+        scope: Scope,
         label: &str,
         boundary_offset: Decimal,
     ) -> Result<(), ContractError> {
         self.limiters.update(
             storage,
-            (denom, label),
+            (&scope.key(), label),
             |limiter: Option<Limiter>| -> Result<Limiter, ContractError> {
                 let limiter = limiter.ok_or(ContractError::LimiterDoesNotExist {
-                    denom: denom.to_string(),
+                    scope,
                     label: label.to_string(),
                 })?;
 
@@ -463,16 +464,16 @@ impl<'a> Limiters<'a> {
     pub fn set_static_limiter_upper_limit(
         &self,
         storage: &mut dyn Storage,
-        denom: &str,
+        scope: Scope,
         label: &str,
         upper_limit: Decimal,
     ) -> Result<(), ContractError> {
         self.limiters.update(
             storage,
-            (denom, label),
+            (&scope.key(), label),
             |limiter: Option<Limiter>| -> Result<Limiter, ContractError> {
                 let limiter = limiter.ok_or(ContractError::LimiterDoesNotExist {
-                    denom: denom.to_string(),
+                    scope,
                     label: label.to_string(),
                 })?;
 
@@ -491,14 +492,14 @@ impl<'a> Limiters<'a> {
         Ok(())
     }
 
-    pub fn list_limiters_by_denom(
+    pub fn list_limiters_by_scope(
         &self,
         storage: &dyn Storage,
-        denom: &str,
+        scope: &Scope,
     ) -> Result<Vec<(String, Limiter)>, ContractError> {
         // there is no need to limit, since the number of limiters is expected to be small
         self.limiters
-            .prefix(denom)
+            .prefix(&scope.key())
             .range(storage, None, None, cosmwasm_std::Order::Ascending)
             .collect::<Result<Vec<_>, _>>()
             .map_err(Into::into)
@@ -519,21 +520,21 @@ impl<'a> Limiters<'a> {
     pub fn check_limits_and_update(
         &self,
         storage: &mut dyn Storage,
-        denom_value_pairs: Vec<(String, (Decimal, Decimal))>,
+        scope_value_pairs: Vec<(Scope, (Decimal, Decimal))>,
         block_time: Timestamp,
     ) -> Result<(), ContractError> {
-        for (denom, (prev_value, value)) in denom_value_pairs {
-            let limiters = self.list_limiters_by_denom(storage, denom.as_str())?;
+        for (scope, (prev_value, value)) in scope_value_pairs {
+            let limiters = self.list_limiters_by_scope(storage, &scope)?;
             let is_not_decreasing = value >= prev_value;
 
             for (label, limiter) in limiters {
                 // Enforce limiter only if value is increasing, because if the value is decreasing from the previous value,
-                // for the specific denom, it is a balancing act to move away from the limit.
+                // for the specific scope, it is a balancing act to move away from the limit.
                 let limiter = match limiter {
                     Limiter::ChangeLimiter(limiter) => Limiter::ChangeLimiter({
                         if is_not_decreasing {
                             limiter
-                                .ensure_upper_limit(block_time, denom.as_str(), value)?
+                                .ensure_upper_limit(block_time, &scope, value)?
                                 .update(block_time, value)?
                         } else {
                             limiter.update(block_time, value)?
@@ -541,7 +542,7 @@ impl<'a> Limiters<'a> {
                     }),
                     Limiter::StaticLimiter(limiter) => Limiter::StaticLimiter({
                         if is_not_decreasing {
-                            limiter.ensure_upper_limit(denom.as_str(), value)?
+                            limiter.ensure_upper_limit(&scope, value)?
                         } else {
                             limiter
                         }
@@ -550,7 +551,7 @@ impl<'a> Limiters<'a> {
 
                 // save updated limiter
                 self.limiters
-                    .save(storage, (denom.as_str(), &label), &limiter)?;
+                    .save(storage, (&scope.key(), &label), &limiter)?;
             }
         }
 
@@ -573,13 +574,13 @@ impl<'a> Limiters<'a> {
         let limiters = self.list_limiters(storage)?;
         let weights: HashMap<String, Decimal> = weights.into_iter().collect();
 
-        for ((denom, label), limiter) in limiters {
+        for ((scope, label), limiter) in limiters {
             match limiter {
                 Limiter::ChangeLimiter(limiter) => {
                     self.limiters
-                        .save(storage, (denom.as_str(), label.as_str()), {
-                            let value = weights.get(denom.as_str()).copied().ok_or_else(|| {
-                                StdError::not_found(format!("weight for {}", denom))
+                        .save(storage, (scope.as_str(), label.as_str()), {
+                            let value = weights.get(scope.as_str()).copied().ok_or_else(|| {
+                                StdError::not_found(format!("weight for {}", scope))
                             })?;
                             &Limiter::ChangeLimiter(limiter.reset().update(block_time, value)?)
                         })?
@@ -595,8 +596,8 @@ impl<'a> Limiters<'a> {
 /// This is used for testing if all change limiters has been newly created or reset.
 #[cfg(test)]
 #[macro_export]
-macro_rules! assert_reset_change_limiters_by_denom {
-    ($denom:expr, $reset_at:expr, $transmuter:expr, $storage:expr) => {
+macro_rules! assert_reset_change_limiters_by_scope {
+    ($scope:expr, $reset_at:expr, $transmuter:expr, $storage:expr) => {
         let pool = $transmuter.pool.load($storage).unwrap();
         let weights = pool
             .weights()
@@ -607,12 +608,15 @@ macro_rules! assert_reset_change_limiters_by_denom {
 
         let limiters = $transmuter
             .limiters
-            .list_limiters_by_denom($storage, $denom)
+            .list_limiters_by_scope($storage, $scope)
             .expect("failed to list limiters");
 
         for (_label, limiter) in limiters {
             if let $crate::limiter::Limiter::ChangeLimiter(limiter) = limiter {
-                let value = *weights.get($denom).unwrap();
+                let value = match $scope {
+                    Scope::Denom(denom) => *weights.get(denom.as_str()).unwrap(),
+                    _ => unimplemented!("asset group weight is not supported yet"),
+                };
                 assert_eq!(
                     limiter.divisions(),
                     &[transmuter_math::Division::new($reset_at, $reset_at, value, value).unwrap()]
@@ -625,10 +629,10 @@ macro_rules! assert_reset_change_limiters_by_denom {
 /// This is used for testing if a change limiters for denom has been updated
 #[cfg(test)]
 #[macro_export]
-macro_rules! assert_dirty_change_limiters_by_denom {
-    ($denom:expr, $lim:expr, $storage:expr) => {
+macro_rules! assert_dirty_change_limiters_by_scope {
+    ($scope:expr, $lim:expr, $storage:expr) => {
         let limiters = $lim
-            .list_limiters_by_denom($storage, $denom)
+            .list_limiters_by_scope($storage, $scope)
             .expect("failed to list limiters");
 
         for (label, limiter) in limiters {
@@ -639,7 +643,7 @@ macro_rules! assert_dirty_change_limiters_by_denom {
                         limiter,
                         limiter.clone().reset(),
                         "Change Limiter `{}/{}` is clean but expect dirty",
-                        $denom,
+                        $scope,
                         label
                     );
                 }
@@ -668,7 +672,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "1m",
                     LimiterParams::ChangeLimiter {
                         window_config: WindowConfig {
@@ -683,7 +687,7 @@ mod tests {
             assert_eq!(
                 limiter.list_limiters(&deps.storage).unwrap(),
                 vec![(
-                    ("denoma".to_string(), "1m".to_string()),
+                    (Scope::denom("denoma").key(), "1m".to_string()),
                     Limiter::ChangeLimiter(ChangeLimiter {
                         divisions: vec![],
                         latest_value: Decimal::zero(),
@@ -699,7 +703,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "1h",
                     LimiterParams::ChangeLimiter {
                         window_config: WindowConfig {
@@ -715,7 +719,7 @@ mod tests {
                 limiter.list_limiters(&deps.storage).unwrap(),
                 vec![
                     (
-                        ("denoma".to_string(), "1h".to_string()),
+                        (Scope::denom("denoma").key(), "1h".to_string()),
                         Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
@@ -727,7 +731,7 @@ mod tests {
                         })
                     ),
                     (
-                        ("denoma".to_string(), "1m".to_string()),
+                        (Scope::denom("denoma").key(), "1m".to_string()),
                         Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
@@ -744,7 +748,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denomb",
+                    Scope::denom("denomb"),
                     "1m",
                     LimiterParams::ChangeLimiter {
                         window_config: WindowConfig {
@@ -760,7 +764,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "static",
                     LimiterParams::StaticLimiter {
                         upper_limit: Decimal::percent(10),
@@ -772,7 +776,7 @@ mod tests {
                 limiter.list_limiters(&deps.storage).unwrap(),
                 vec![
                     (
-                        ("denoma".to_string(), "1h".to_string()),
+                        (Scope::denom("denoma").key(), "1h".to_string()),
                         Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
@@ -784,7 +788,7 @@ mod tests {
                         })
                     ),
                     (
-                        ("denoma".to_string(), "1m".to_string()),
+                        (Scope::denom("denoma").key(), "1m".to_string()),
                         Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
@@ -796,13 +800,13 @@ mod tests {
                         })
                     ),
                     (
-                        ("denoma".to_string(), "static".to_string()),
+                        (Scope::denom("denoma").key(), "static".to_string()),
                         Limiter::StaticLimiter(StaticLimiter {
                             upper_limit: Decimal::percent(10)
                         })
                     ),
                     (
-                        ("denomb".to_string(), "1m".to_string()),
+                        (Scope::denom("denomb").key(), "1m".to_string()),
                         Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
@@ -819,7 +823,7 @@ mod tests {
             // list limiters by denom
             assert_eq!(
                 limiter
-                    .list_limiters_by_denom(&deps.storage, "denoma")
+                    .list_limiters_by_scope(&deps.storage, &Scope::denom("denoma"))
                     .unwrap(),
                 vec![
                     (
@@ -857,7 +861,7 @@ mod tests {
 
             assert_eq!(
                 limiter
-                    .list_limiters_by_denom(&deps.storage, "denomb")
+                    .list_limiters_by_scope(&deps.storage, &Scope::denom("denomb"))
                     .unwrap(),
                 vec![(
                     "1m".to_string(),
@@ -882,7 +886,7 @@ mod tests {
             let err = limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "",
                     LimiterParams::ChangeLimiter {
                         window_config: WindowConfig {
@@ -905,7 +909,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "1m",
                     LimiterParams::ChangeLimiter {
                         window_config: WindowConfig {
@@ -920,7 +924,7 @@ mod tests {
             let err = limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "1m",
                     LimiterParams::ChangeLimiter {
                         window_config: WindowConfig {
@@ -935,7 +939,7 @@ mod tests {
             assert_eq!(
                 err,
                 ContractError::LimiterAlreadyExists {
-                    denom: "denoma".to_string(),
+                    scope: Scope::denom("denoma"),
                     label: "1m".to_string()
                 }
             );
@@ -950,7 +954,7 @@ mod tests {
                 let label = format!("{}h", h);
                 let result = limiter.register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     &label,
                     LimiterParams::ChangeLimiter {
                         window_config: WindowConfig {
@@ -967,7 +971,7 @@ mod tests {
                     assert_eq!(
                         result.unwrap_err(),
                         ContractError::MaxLimiterCountPerDenomExceeded {
-                            denom: "denoma".to_string(),
+                            scope: Scope::denom("denoma"),
                             max: MAX_LIMITER_COUNT_PER_DENOM
                         }
                     );
@@ -976,14 +980,14 @@ mod tests {
 
             // deregister to register should work
             limiter
-                .deregister(&mut deps.storage, "denoma", "1h")
+                .deregister(&mut deps.storage, Scope::denom("denoma"), "1h")
                 .unwrap();
 
             // register static limiter
             limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "static",
                     LimiterParams::StaticLimiter {
                         upper_limit: Decimal::percent(10),
@@ -995,7 +999,7 @@ mod tests {
             let err = limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "static2",
                     LimiterParams::StaticLimiter {
                         upper_limit: Decimal::percent(9),
@@ -1006,7 +1010,7 @@ mod tests {
             assert_eq!(
                 err,
                 ContractError::MaxLimiterCountPerDenomExceeded {
-                    denom: "denoma".to_string(),
+                    scope: Scope::denom("denoma"),
                     max: MAX_LIMITER_COUNT_PER_DENOM
                 }
             );
@@ -1020,7 +1024,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "1m",
                     LimiterParams::ChangeLimiter {
                         window_config: WindowConfig {
@@ -1035,7 +1039,7 @@ mod tests {
             assert_eq!(
                 limiter.list_limiters(&deps.storage).unwrap(),
                 vec![(
-                    ("denoma".to_string(), "1m".to_string()),
+                    (Scope::denom("denoma").key(), "1m".to_string()),
                     Limiter::ChangeLimiter(ChangeLimiter {
                         divisions: vec![],
                         latest_value: Decimal::zero(),
@@ -1051,7 +1055,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "1h",
                     LimiterParams::ChangeLimiter {
                         window_config: WindowConfig {
@@ -1067,7 +1071,7 @@ mod tests {
                 limiter.list_limiters(&deps.storage).unwrap(),
                 vec![
                     (
-                        ("denoma".to_string(), "1h".to_string()),
+                        (Scope::denom("denoma").key(), "1h".to_string()),
                         Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
@@ -1079,7 +1083,7 @@ mod tests {
                         })
                     ),
                     (
-                        ("denoma".to_string(), "1m".to_string()),
+                        (Scope::denom("denoma").key(), "1m".to_string()),
                         Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
@@ -1094,25 +1098,25 @@ mod tests {
             );
 
             let err = limiter
-                .deregister(&mut deps.storage, "denoma", "nonexistent")
+                .deregister(&mut deps.storage, Scope::denom("denoma"), "nonexistent")
                 .unwrap_err();
 
             assert_eq!(
                 err,
                 ContractError::LimiterDoesNotExist {
-                    denom: "denoma".to_string(),
+                    scope: Scope::denom("denoma"),
                     label: "nonexistent".to_string(),
                 }
             );
 
             limiter
-                .deregister(&mut deps.storage, "denoma", "1m")
+                .deregister(&mut deps.storage, Scope::denom("denoma"), "1m")
                 .unwrap();
 
             assert_eq!(
                 limiter.list_limiters(&deps.storage).unwrap(),
                 vec![(
-                    ("denoma".to_string(), "1h".to_string()),
+                    (Scope::denom("denoma").key(), "1h".to_string()),
                     Limiter::ChangeLimiter(ChangeLimiter {
                         divisions: vec![],
                         latest_value: Decimal::zero(),
@@ -1126,20 +1130,20 @@ mod tests {
             );
 
             let err = limiter
-                .deregister(&mut deps.storage, "denoma", "1h")
+                .deregister(&mut deps.storage, Scope::denom("denoma"), "1h")
                 .unwrap_err();
 
             assert_eq!(
                 err,
                 ContractError::EmptyLimiterNotAllowed {
-                    denom: "denoma".to_string()
+                    scope: Scope::denom("denoma")
                 }
             );
 
             assert_eq!(
                 limiter.list_limiters(&deps.storage).unwrap(),
                 vec![(
-                    ("denoma".to_string(), "1h".to_string()),
+                    (Scope::denom("denoma").key(), "1h".to_string()),
                     Limiter::ChangeLimiter(ChangeLimiter {
                         divisions: vec![],
                         latest_value: Decimal::zero(),
@@ -1154,7 +1158,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denomb",
+                    Scope::denom("denomb"),
                     "1m",
                     LimiterParams::ChangeLimiter {
                         window_config: WindowConfig {
@@ -1167,20 +1171,20 @@ mod tests {
                 .unwrap();
 
             let err = limiter
-                .deregister(&mut deps.storage, "denomb", "1m")
+                .deregister(&mut deps.storage, Scope::denom("denomb"), "1m")
                 .unwrap_err();
 
             assert_eq!(
                 err,
                 ContractError::EmptyLimiterNotAllowed {
-                    denom: "denomb".to_string()
+                    scope: Scope::denom("denomb")
                 }
             );
 
             limiter
                 .register(
                     &mut deps.storage,
-                    "denomb",
+                    Scope::denom("denomb"),
                     "1h",
                     LimiterParams::ChangeLimiter {
                         window_config: WindowConfig {
@@ -1193,25 +1197,25 @@ mod tests {
                 .unwrap();
 
             let err = limiter
-                .deregister(&mut deps.storage, "denoma", "1h")
+                .deregister(&mut deps.storage, Scope::denom("denoma"), "1h")
                 .unwrap_err();
 
             assert_eq!(
                 err,
                 ContractError::EmptyLimiterNotAllowed {
-                    denom: "denoma".to_string()
+                    scope: Scope::denom("denoma")
                 }
             );
 
             limiter
-                .deregister(&mut deps.storage, "denomb", "1m")
+                .deregister(&mut deps.storage, Scope::denom("denomb"), "1m")
                 .unwrap();
 
             assert_eq!(
                 limiter.list_limiters(&deps.storage).unwrap(),
                 vec![
                     (
-                        ("denoma".to_string(), "1h".to_string()),
+                        (Scope::denom("denoma").key(), "1h".to_string()),
                         Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
@@ -1223,7 +1227,7 @@ mod tests {
                         })
                     ),
                     (
-                        ("denomb".to_string(), "1h".to_string()),
+                        (Scope::denom("denomb").key(), "1h".to_string()),
                         Limiter::ChangeLimiter(ChangeLimiter {
                             divisions: vec![],
                             latest_value: Decimal::zero(),
@@ -1253,7 +1257,7 @@ mod tests {
             let err = limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "1m",
                     LimiterParams::ChangeLimiter {
                         window_config: WindowConfig {
@@ -1277,7 +1281,7 @@ mod tests {
             let err = limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "1m",
                     LimiterParams::ChangeLimiter {
                         window_config: WindowConfig {
@@ -1306,7 +1310,7 @@ mod tests {
             let err = limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "1m",
                     LimiterParams::ChangeLimiter {
                         window_config: WindowConfig {
@@ -1330,7 +1334,7 @@ mod tests {
             let err = limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "1m",
                     LimiterParams::ChangeLimiter {
                         window_config: WindowConfig {
@@ -1359,7 +1363,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "1m",
                     LimiterParams::ChangeLimiter {
                         window_config: WindowConfig {
@@ -1376,7 +1380,7 @@ mod tests {
             assert_eq!(
                 limiters,
                 vec![(
-                    ("denoma".to_string(), "1m".to_string()),
+                    (Scope::denom("denoma").key(), "1m".to_string()),
                     Limiter::ChangeLimiter(ChangeLimiter {
                         divisions: vec![],
                         latest_value: Decimal::zero(),
@@ -1891,7 +1895,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "1h",
                     LimiterParams::ChangeLimiter {
                         window_config: config,
@@ -1906,14 +1910,14 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denoma"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
 
             // check divs count
             assert_eq!(
-                list_divisions(&limiter, "denoma", "1h", &deps.storage).len(),
+                list_divisions(&limiter, &Scope::denom("denoma"), "1h", &deps.storage).len(),
                 1
             );
 
@@ -1924,13 +1928,13 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denoma"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
 
             assert_eq!(
-                list_divisions(&limiter, "denoma", "1h", &deps.storage).len(),
+                list_divisions(&limiter, &Scope::denom("denoma"), "1h", &deps.storage).len(),
                 1
             );
 
@@ -1940,7 +1944,7 @@ mod tests {
             let err = limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denoma"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap_err();
@@ -1948,14 +1952,14 @@ mod tests {
             assert_eq!(
                 err,
                 ContractError::UpperLimitExceeded {
-                    denom: "denoma".to_string(),
+                    scope: Scope::denom("denoma"),
                     upper_limit: Decimal::percent(58),
                     value: Decimal::from_str("0.580000000000000001").unwrap(),
                 }
             );
 
             assert_eq!(
-                list_divisions(&limiter, "denoma", "1h", &deps.storage).len(),
+                list_divisions(&limiter, &Scope::denom("denoma"), "1h", &deps.storage).len(),
                 1
             );
 
@@ -1966,7 +1970,7 @@ mod tests {
             let err = limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denoma"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap_err();
@@ -1974,14 +1978,14 @@ mod tests {
             assert_eq!(
                 err,
                 ContractError::UpperLimitExceeded {
-                    denom: "denoma".to_string(),
+                    scope: Scope::denom("denoma"),
                     upper_limit: Decimal::from_str("0.5875").unwrap(),
                     value: Decimal::from_str("0.587500000000000001").unwrap(),
                 }
             );
 
             assert_eq!(
-                list_divisions(&limiter, "denoma", "1h", &deps.storage).len(),
+                list_divisions(&limiter, &Scope::denom("denoma"), "1h", &deps.storage).len(),
                 1
             );
 
@@ -1989,13 +1993,13 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denoma"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
 
             assert_eq!(
-                list_divisions(&limiter, "denoma", "1h", &deps.storage).len(),
+                list_divisions(&limiter, &Scope::denom("denoma"), "1h", &deps.storage).len(),
                 2
             );
 
@@ -2005,7 +2009,7 @@ mod tests {
             let err = limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denoma"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap_err();
@@ -2013,7 +2017,7 @@ mod tests {
             assert_eq!(
                 err,
                 ContractError::UpperLimitExceeded {
-                    denom: "denoma".to_string(),
+                    scope: Scope::denom("denoma"),
                     upper_limit: Decimal::from_str("0.56").unwrap(),
                     value: Decimal::from_str("0.560000000000000001").unwrap(),
                 }
@@ -2026,20 +2030,20 @@ mod tests {
             let err = limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denoma"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap_err();
 
             assert_eq!(
-                list_divisions(&limiter, "denoma", "1h", &deps.storage).len(),
+                list_divisions(&limiter, &Scope::denom("denoma"), "1h", &deps.storage).len(),
                 2
             );
 
             assert_eq!(
                 err,
                 ContractError::UpperLimitExceeded {
-                    denom: "denoma".to_string(),
+                    scope: Scope::denom("denoma"),
                     upper_limit: Decimal::from_str("0.525").unwrap(),
                     value: Decimal::from_str("0.525000000000000001").unwrap(),
                 }
@@ -2049,13 +2053,13 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denoma"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
 
             assert_eq!(
-                list_divisions(&limiter, "denoma", "1h", &deps.storage).len(),
+                list_divisions(&limiter, &Scope::denom("denoma"), "1h", &deps.storage).len(),
                 3
             );
         }
@@ -2071,7 +2075,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denomb",
+                    Scope::denom("denomb"),
                     "1h",
                     LimiterParams::ChangeLimiter {
                         window_config: config,
@@ -2083,7 +2087,7 @@ mod tests {
             limiter
                 .set_change_limiter_boundary_offset(
                     &mut deps.storage,
-                    "denomb",
+                    Scope::denom("denomb"),
                     "1h",
                     Decimal::percent(5),
                 )
@@ -2095,13 +2099,13 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denomb"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
 
             assert_eq!(
-                list_divisions(&limiter, "denomb", "1h", &deps.storage).len(),
+                list_divisions(&limiter, &Scope::denom("denomb"), "1h", &deps.storage).len(),
                 1
             );
 
@@ -2110,13 +2114,13 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denomb"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
 
             assert_eq!(
-                list_divisions(&limiter, "denomb", "1h", &deps.storage).len(),
+                list_divisions(&limiter, &Scope::denom("denomb"), "1h", &deps.storage).len(),
                 1
             );
 
@@ -2125,20 +2129,20 @@ mod tests {
             let err = limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denomb"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap_err();
 
             assert_eq!(
-                list_divisions(&limiter, "denomb", "1h", &deps.storage).len(),
+                list_divisions(&limiter, &Scope::denom("denomb"), "1h", &deps.storage).len(),
                 1
             );
 
             assert_eq!(
                 err,
                 ContractError::UpperLimitExceeded {
-                    denom: "denomb".to_string(),
+                    scope: Scope::denom("denomb"),
                     upper_limit: Decimal::from_str("0.5").unwrap(),
                     value: Decimal::from_str("0.500000000000000001").unwrap(),
                 }
@@ -2148,14 +2152,14 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denomb"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
 
             // 1st division stiil there
             assert_eq!(
-                list_divisions(&limiter, "denomb", "1h", &deps.storage).len(),
+                list_divisions(&limiter, &Scope::denom("denomb"), "1h", &deps.storage).len(),
                 2
             );
 
@@ -2164,7 +2168,7 @@ mod tests {
             let err = limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denomb"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap_err();
@@ -2172,7 +2176,7 @@ mod tests {
             assert_eq!(
                 err,
                 ContractError::UpperLimitExceeded {
-                    denom: "denomb".to_string(),
+                    scope: Scope::denom("denomb"),
                     upper_limit: Decimal::from_str("0.491666666666666666").unwrap(),
                     value: Decimal::from_str("0.491666666666666667").unwrap(),
                 }
@@ -2180,23 +2184,23 @@ mod tests {
 
             // 1st division is not removed yet since limit exceeded first
             assert_eq!(
-                list_divisions(&limiter, "denomb", "1h", &deps.storage).len(),
+                list_divisions(&limiter, &Scope::denom("denomb"), "1h", &deps.storage).len(),
                 2
             );
 
-            let old_divs = list_divisions(&limiter, "denomb", "1h", &deps.storage);
+            let old_divs = list_divisions(&limiter, &Scope::denom("denomb"), "1h", &deps.storage);
             let value = Decimal::from_str("0.491666666666666666").unwrap();
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denomb"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
 
             // 1st division is removed, and add new division
             assert_eq!(
-                list_divisions(&limiter, "denomb", "1h", &deps.storage),
+                list_divisions(&limiter, &Scope::denom("denomb"), "1h", &deps.storage),
                 [
                     old_divs[1..].to_vec(),
                     vec![Division::new(
@@ -2222,7 +2226,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denomb",
+                    Scope::denom("denomb"),
                     "1h",
                     LimiterParams::ChangeLimiter {
                         window_config: config,
@@ -2234,7 +2238,7 @@ mod tests {
             limiter
                 .set_change_limiter_boundary_offset(
                     &mut deps.storage,
-                    "denomb",
+                    Scope::denom("denomb"),
                     "1h",
                     Decimal::percent(5),
                 )
@@ -2245,7 +2249,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denomb"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
@@ -2255,7 +2259,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denomb"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
@@ -2265,7 +2269,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denomb"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
@@ -2276,7 +2280,7 @@ mod tests {
             let err = limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denomb".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denomb"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap_err();
@@ -2284,7 +2288,7 @@ mod tests {
             assert_eq!(
                 err,
                 ContractError::UpperLimitExceeded {
-                    denom: String::from("denomb"),
+                    scope: Scope::denom("denomb"),
                     upper_limit: Decimal::percent(51),
                     value
                 }
@@ -2299,7 +2303,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denom",
+                    Scope::denom("denom"),
                     "1h",
                     LimiterParams::ChangeLimiter {
                         window_config: WindowConfig {
@@ -2318,7 +2322,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denom".to_string(), (Decimal::zero(), value))],
+                    vec![(Scope::denom("denom"), (Decimal::zero(), value))],
                     block_time,
                 )
                 .unwrap();
@@ -2329,7 +2333,7 @@ mod tests {
             let err = limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denom".to_string(), (value, new_value))],
+                    vec![(Scope::denom("denom"), (value, new_value))],
                     new_block_time,
                 )
                 .unwrap_err();
@@ -2337,7 +2341,7 @@ mod tests {
             assert_eq!(
                 err,
                 ContractError::UpperLimitExceeded {
-                    denom: "denom".to_string(),
+                    scope: Scope::denom("denom"),
                     upper_limit: Decimal::percent(56),
                     value: new_value,
                 }
@@ -2349,7 +2353,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denom".to_string(), (value, new_value))],
+                    vec![(Scope::denom("denom"), (value, new_value))],
                     new_block_time,
                 )
                 .unwrap();
@@ -2362,7 +2366,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denom".to_string(), (value, new_value))],
+                    vec![(Scope::denom("denom"), (value, new_value))],
                     new_block_time,
                 )
                 .unwrap();
@@ -2375,7 +2379,7 @@ mod tests {
             limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denom".to_string(), (value, final_value))],
+                    vec![(Scope::denom("denom"), (value, final_value))],
                     final_block_time,
                 )
                 .unwrap();
@@ -2386,7 +2390,7 @@ mod tests {
             let err = limiter
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denom".to_string(), (value, new_value))],
+                    vec![(Scope::denom("denom"), (value, new_value))],
                     final_block_time,
                 )
                 .unwrap_err();
@@ -2394,7 +2398,7 @@ mod tests {
             assert_eq!(
                 err,
                 ContractError::UpperLimitExceeded {
-                    denom: "denom".to_string(),
+                    scope: Scope::denom("denom"),
                     upper_limit: Decimal::from_str("0.555").unwrap(),
                     value: new_value,
                 }
@@ -2409,7 +2413,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "1h",
                     LimiterParams::StaticLimiter {
                         upper_limit: Decimal::percent(60),
@@ -2420,7 +2424,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denomb",
+                    Scope::denom("denomb"),
                     "1h",
                     LimiterParams::StaticLimiter {
                         upper_limit: Decimal::percent(70),
@@ -2436,8 +2440,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), (value_a - EPSILON, value_a)),
-                        ("denomb".to_string(), (value_b + EPSILON, value_b)),
+                        (Scope::denom("denoma"), (value_a - EPSILON, value_a)),
+                        (Scope::denom("denomb"), (value_b + EPSILON, value_b)),
                     ],
                     block_time,
                 )
@@ -2450,8 +2454,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), (value_a - EPSILON, value_a)),
-                        ("denomb".to_string(), (value_b + EPSILON, value_b)),
+                        (Scope::denom("denoma"), (value_a - EPSILON, value_a)),
+                        (Scope::denom("denomb"), (value_b + EPSILON, value_b)),
                     ],
                     block_time,
                 )
@@ -2460,7 +2464,7 @@ mod tests {
             assert_eq!(
                 err,
                 ContractError::UpperLimitExceeded {
-                    denom: "denoma".to_string(),
+                    scope: Scope::denom("denoma"),
                     upper_limit: Decimal::from_str("0.6").unwrap(),
                     value: Decimal::from_str("0.600000000000000001").unwrap(),
                 }
@@ -2473,8 +2477,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), (value_a + EPSILON, value_a)),
-                        ("denomb".to_string(), (value_b - EPSILON, value_b)),
+                        (Scope::denom("denoma"), (value_a + EPSILON, value_a)),
+                        (Scope::denom("denomb"), (value_b - EPSILON, value_b)),
                     ],
                     block_time,
                 )
@@ -2483,7 +2487,7 @@ mod tests {
             assert_eq!(
                 err,
                 ContractError::UpperLimitExceeded {
-                    denom: "denomb".to_string(),
+                    scope: Scope::denom("denomb"),
                     upper_limit: Decimal::from_str("0.7").unwrap(),
                     value: Decimal::from_str("0.700000000000000001").unwrap(),
                 }
@@ -2496,8 +2500,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), (value_a - EPSILON, value_a)),
-                        ("denomb".to_string(), (value_b + EPSILON, value_b)),
+                        (Scope::denom("denoma"), (value_a - EPSILON, value_a)),
+                        (Scope::denom("denomb"), (value_b + EPSILON, value_b)),
                     ],
                     block_time,
                 )
@@ -2510,8 +2514,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), (value_a - EPSILON, value_a)),
-                        ("denomb".to_string(), (value_b + EPSILON, value_b)),
+                        (Scope::denom("denoma"), (value_a - EPSILON, value_a)),
+                        (Scope::denom("denomb"), (value_b + EPSILON, value_b)),
                     ],
                     block_time,
                 )
@@ -2529,8 +2533,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), (value_a, new_value_a)),
-                        ("denomb".to_string(), (value_b, new_value_b)),
+                        (Scope::denom("denoma"), (value_a, new_value_a)),
+                        (Scope::denom("denomb"), (value_b, new_value_b)),
                     ],
                     block_time,
                 )
@@ -2548,8 +2552,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), (value_a, new_value_a)),
-                        ("denomb".to_string(), (value_b, new_value_b)),
+                        (Scope::denom("denoma"), (value_a, new_value_a)),
+                        (Scope::denom("denomb"), (value_b, new_value_b)),
                     ],
                     block_time,
                 )
@@ -2574,7 +2578,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "1h",
                     LimiterParams::ChangeLimiter {
                         window_config: config_1h.clone(),
@@ -2586,7 +2590,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "1w",
                     LimiterParams::ChangeLimiter {
                         window_config: config_1w.clone(),
@@ -2598,7 +2602,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denomb",
+                    Scope::denom("denomb"),
                     "1h",
                     LimiterParams::ChangeLimiter {
                         window_config: config_1h,
@@ -2610,7 +2614,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denomb",
+                    Scope::denom("denomb"),
                     "1w",
                     LimiterParams::ChangeLimiter {
                         window_config: config_1w,
@@ -2622,7 +2626,7 @@ mod tests {
             limiter
                 .register(
                     &mut deps.storage,
-                    "denomb",
+                    Scope::denom("denomb"),
                     "static",
                     LimiterParams::StaticLimiter {
                         upper_limit: Decimal::percent(55),
@@ -2638,8 +2642,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), (value_a, value_a)),
-                        ("denomb".to_string(), (value_b, value_b)),
+                        (Scope::denom("denoma"), (value_a, value_a)),
+                        (Scope::denom("denomb"), (value_b, value_b)),
                     ],
                     block_time,
                 )
@@ -2652,9 +2656,9 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), (value - EPSILON, value)),
+                        (Scope::denom("denoma"), (value - EPSILON, value)),
                         (
-                            "denomb".to_string(),
+                            Scope::denom("denomb"),
                             (Decimal::one() - value + EPSILON, Decimal::one() - value),
                         ),
                     ],
@@ -2665,7 +2669,7 @@ mod tests {
             assert_eq!(
                 err,
                 ContractError::UpperLimitExceeded {
-                    denom: "denoma".to_string(),
+                    scope: Scope::denom("denoma"),
                     upper_limit: Decimal::from_str("0.6").unwrap(),
                     value: Decimal::from_str("0.600000000000000001").unwrap(),
                 }
@@ -2678,8 +2682,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), (value_a + EPSILON, value_a)),
-                        ("denomb".to_string(), (value_b - EPSILON, value_b)),
+                        (Scope::denom("denoma"), (value_a + EPSILON, value_a)),
+                        (Scope::denom("denomb"), (value_b - EPSILON, value_b)),
                     ],
                     block_time,
                 )
@@ -2688,7 +2692,7 @@ mod tests {
             assert_eq!(
                 err,
                 ContractError::UpperLimitExceeded {
-                    denom: "denomb".to_string(),
+                    scope: Scope::denom("denomb"),
                     upper_limit: Decimal::from_str("0.55").unwrap(),
                     value: Decimal::from_str("0.550000000000000001").unwrap(),
                 }
@@ -2701,8 +2705,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), (value_a, value_a)),
-                        ("denomb".to_string(), (value_b, value_b)),
+                        (Scope::denom("denoma"), (value_a, value_a)),
+                        (Scope::denom("denomb"), (value_b, value_b)),
                     ],
                     block_time,
                 )
@@ -2718,8 +2722,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), (value_a - EPSILON, value_a)),
-                        ("denomb".to_string(), (value_b + EPSILON, value_b)),
+                        (Scope::denom("denoma"), (value_a - EPSILON, value_a)),
+                        (Scope::denom("denomb"), (value_b + EPSILON, value_b)),
                     ],
                     block_time,
                 )
@@ -2728,7 +2732,7 @@ mod tests {
             assert_eq!(
                 err,
                 ContractError::UpperLimitExceeded {
-                    denom: "denoma".to_string(),
+                    scope: Scope::denom("denoma"),
                     upper_limit: Decimal::from_str("0.525").unwrap(),
                     value: Decimal::from_str("0.525000000000000001").unwrap(),
                 }
@@ -2741,8 +2745,8 @@ mod tests {
                 .check_limits_and_update(
                     &mut deps.storage,
                     vec![
-                        ("denoma".to_string(), (value_a - EPSILON, value_a)),
-                        ("denomb".to_string(), (value_b + EPSILON, value_b)),
+                        (Scope::denom("denoma"), (value_a - EPSILON, value_a)),
+                        (Scope::denom("denomb"), (value_b + EPSILON, value_b)),
                     ],
                     block_time,
                 )
@@ -2751,7 +2755,7 @@ mod tests {
             assert_eq!(
                 err,
                 ContractError::UpperLimitExceeded {
-                    denom: "denoma".to_string(),
+                    scope: Scope::denom("denoma"),
                     upper_limit: Decimal::from_str("0.55").unwrap(),
                     value: Decimal::from_str("0.550000000000000001").unwrap(),
                 }
@@ -2772,7 +2776,7 @@ mod tests {
                 limiters
                     .register(
                         &mut deps.storage,
-                        "denomc",
+                        Scope::denom("denomc"),
                         "1h",
                         LimiterParams::ChangeLimiter {
                             window_config: config,
@@ -2784,7 +2788,7 @@ mod tests {
                 limiters
                     .register(
                         &mut deps.storage,
-                        "denomc",
+                        Scope::denom("denomc"),
                         "static",
                         LimiterParams::StaticLimiter {
                             upper_limit: Decimal::percent(60),
@@ -2795,7 +2799,7 @@ mod tests {
                 limiters
                     .set_change_limiter_boundary_offset(
                         &mut deps.storage,
-                        "denomc",
+                        Scope::denom("denomc"),
                         "1h",
                         Decimal::percent(20),
                     )
@@ -2803,7 +2807,7 @@ mod tests {
 
                 let limiter = match limiters
                     .limiters
-                    .load(&deps.storage, ("denomc", "1h"))
+                    .load(&deps.storage, (&Scope::denom("denomc").key(), "1h"))
                     .unwrap()
                 {
                     Limiter::ChangeLimiter(limiter) => limiter,
@@ -2817,7 +2821,7 @@ mod tests {
                 let err = limiters
                     .set_change_limiter_boundary_offset(
                         &mut deps.storage,
-                        "denomc",
+                        Scope::denom("denomc"),
                         "static",
                         Decimal::percent(20),
                     )
@@ -2834,7 +2838,7 @@ mod tests {
                 let err = limiters
                     .set_change_limiter_boundary_offset(
                         &mut deps.storage,
-                        "denomc",
+                        Scope::denom("denomc"),
                         "1h",
                         Decimal::zero(),
                     )
@@ -2854,7 +2858,7 @@ mod tests {
                 limiters
                     .register(
                         &mut deps.storage,
-                        "denomc",
+                        Scope::denom("denomc"),
                         "1h",
                         LimiterParams::ChangeLimiter {
                             window_config: config,
@@ -2866,7 +2870,7 @@ mod tests {
                 limiters
                     .register(
                         &mut deps.storage,
-                        "denomc",
+                        Scope::denom("denomc"),
                         "static",
                         LimiterParams::StaticLimiter {
                             upper_limit: Decimal::percent(60),
@@ -2878,7 +2882,7 @@ mod tests {
                 limiters
                     .set_static_limiter_upper_limit(
                         &mut deps.storage,
-                        "denomc",
+                        Scope::denom("denomc"),
                         "static",
                         upper_limit,
                     )
@@ -2886,7 +2890,7 @@ mod tests {
 
                 let limiter = match limiters
                     .limiters
-                    .load(&deps.storage, ("denomc", "static"))
+                    .load(&deps.storage, (&Scope::denom("denomc").key(), "static"))
                     .unwrap()
                 {
                     Limiter::StaticLimiter(limiter) => limiter,
@@ -2896,7 +2900,12 @@ mod tests {
                 assert_eq!(limiter.upper_limit, upper_limit);
 
                 let err = limiters
-                    .set_static_limiter_upper_limit(&mut deps.storage, "denomc", "1h", upper_limit)
+                    .set_static_limiter_upper_limit(
+                        &mut deps.storage,
+                        Scope::denom("denomc"),
+                        "1h",
+                        upper_limit,
+                    )
                     .unwrap_err();
 
                 assert_eq!(
@@ -2934,7 +2943,7 @@ mod tests {
             limiters
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "1h",
                     LimiterParams::ChangeLimiter {
                         window_config: config_1h.clone(),
@@ -2946,7 +2955,7 @@ mod tests {
             limiters
                 .register(
                     &mut deps.storage,
-                    "denoma",
+                    Scope::denom("denoma"),
                     "1w",
                     LimiterParams::ChangeLimiter {
                         window_config: config_1w.clone(),
@@ -2962,7 +2971,7 @@ mod tests {
             limiters
                 .check_limits_and_update(
                     &mut deps.storage,
-                    vec![("denoma".to_string(), (value - EPSILON, value))],
+                    vec![(Scope::denom("denoma"), (value - EPSILON, value))],
                     block_time,
                 )
                 .unwrap();
@@ -2974,8 +2983,12 @@ mod tests {
                 .unwrap();
 
             for (denom, window) in keys.iter() {
-                let divisions =
-                    list_divisions(&limiters, denom.as_str(), window.as_str(), &deps.storage);
+                let divisions = list_divisions(
+                    &limiters,
+                    &denom.parse().unwrap(),
+                    window.as_str(),
+                    &deps.storage,
+                );
 
                 assert_eq!(
                     divisions,
@@ -2983,7 +2996,11 @@ mod tests {
                 )
             }
 
-            assert_dirty_change_limiters_by_denom!("denoma", &limiters, &deps.storage);
+            assert_dirty_change_limiters_by_scope!(
+                &Scope::denom("denoma"),
+                &limiters,
+                &deps.storage
+            );
 
             // reset limiters
             let block_time = block_time.plus_hours(1);
@@ -2992,13 +3009,17 @@ mod tests {
                 .reset_change_limiter_states(
                     &mut deps.storage,
                     block_time,
-                    vec![("denoma".to_string(), value)],
+                    vec![(Scope::denom("denoma").key(), value)],
                 )
                 .unwrap();
 
             for (denom, window) in keys.iter() {
-                let divisions =
-                    list_divisions(&limiters, denom.as_str(), window.as_str(), &deps.storage);
+                let divisions = list_divisions(
+                    &limiters,
+                    &denom.parse().unwrap(),
+                    window.as_str(),
+                    &deps.storage,
+                );
 
                 assert_eq!(
                     divisions,
@@ -3010,11 +3031,15 @@ mod tests {
 
     fn list_divisions(
         limiters: &Limiters,
-        denom: &str,
+        scope: &Scope,
         window: &str,
         storage: &dyn Storage,
     ) -> Vec<Division> {
-        match limiters.limiters.load(storage, (denom, window)).unwrap() {
+        match limiters
+            .limiters
+            .load(storage, (&scope.key(), window))
+            .unwrap()
+        {
             Limiter::ChangeLimiter(limiter) => limiter.divisions,
             Limiter::StaticLimiter(_) => panic!("not a change limiter"),
         }

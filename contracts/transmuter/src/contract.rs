@@ -1,3 +1,4 @@
+use crate::scope::Scope;
 use std::{collections::BTreeMap, iter};
 
 use crate::{
@@ -17,7 +18,7 @@ use cosmwasm_std::{
     SubMsg, Uint128,
 };
 
-use cw_storage_plus::Item;
+use cw_storage_plus::{Item, Map};
 use osmosis_std::types::{
     cosmos::bank::v1beta1::Metadata,
     osmosis::tokenfactory::v1beta1::{MsgCreateDenom, MsgCreateDenomResponse, MsgSetDenomMetadata},
@@ -37,12 +38,16 @@ const CREATE_ALLOYED_DENOM_REPLY_ID: u64 = 1;
 /// Prefix for alloyed asset denom
 const ALLOYED_PREFIX: &str = "alloyed";
 
+// asset_group: label -> denoms
+pub type AssetGroup<'a> = Map<'a, &'a str, Vec<String>>;
+
 pub struct Transmuter<'a> {
     pub(crate) active_status: Item<'a, bool>,
     pub(crate) pool: Item<'a, TransmuterPool>,
     pub(crate) alloyed_asset: AlloyedAsset<'a>,
     pub(crate) role: Role<'a>,
     pub(crate) limiters: Limiters<'a>,
+    pub(crate) asset_group: AssetGroup<'a>,
 }
 
 pub mod key {
@@ -53,6 +58,7 @@ pub mod key {
     pub const ADMIN: &str = "admin";
     pub const MODERATOR: &str = "moderator";
     pub const LIMITERS: &str = "limiters";
+    pub const ASSET_GROUP: &str = "asset_group";
 }
 
 #[contract]
@@ -69,6 +75,7 @@ impl Transmuter<'_> {
             ),
             role: Role::new(key::ADMIN, key::MODERATOR),
             limiters: Limiters::new(key::LIMITERS),
+            asset_group: AssetGroup::new(key::ASSET_GROUP),
         }
     }
 
@@ -228,10 +235,79 @@ impl Transmuter<'_> {
         self.limiters.reset_change_limiter_states(
             deps.storage,
             env.block.time,
-            pool.weights()?.unwrap_or_default(),
+            pool.weights()?
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(denom, weight)| (Scope::denom(&denom).key(), weight)) // TODO: handle asset group
+                .collect(),
         )?;
 
         Ok(Response::new().add_attribute("method", "add_new_assets"))
+    }
+
+    #[sv::msg(exec)]
+    fn create_asset_group(
+        &self,
+        ExecCtx { deps, env: _, info }: ExecCtx,
+        label: String,
+        denoms: Vec<String>,
+    ) -> Result<Response, ContractError> {
+        nonpayable(&info.funds)?;
+
+        // only admin can create asset group
+        ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
+
+        // ensure that all denoms are valid pool assets
+        let pool = self.pool.load(deps.storage)?;
+        for denom in &denoms {
+            ensure!(
+                pool.has_denom(denom),
+                ContractError::InvalidPoolAssetDenom {
+                    denom: denom.clone()
+                }
+            );
+        }
+
+        // ensure that asset group does not exist
+        ensure!(
+            self.asset_group.may_load(deps.storage, &label)?.is_none(),
+            ContractError::AssetGroupAlreadyExists { label }
+        );
+
+        // save asset group
+        self.asset_group.save(deps.storage, &label, &denoms)?;
+
+        Ok(Response::new()
+            .add_attribute("method", "create_asset_group")
+            .add_attribute("label", label))
+    }
+
+    #[sv::msg(exec)]
+    fn remove_asset_group(
+        &self,
+        ExecCtx { deps, env: _, info }: ExecCtx,
+        label: String,
+    ) -> Result<Response, ContractError> {
+        nonpayable(&info.funds)?;
+
+        // only admin can remove asset group
+        ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
+
+        // check if asset group exists
+        ensure!(
+            self.asset_group.load(deps.storage, &label).is_ok(),
+            ContractError::AssetGroupNotFound { label }
+        );
+
+        // remove asset group
+        self.asset_group.remove(deps.storage, &label);
+
+        // remove all limiter for asset group
+        todo!("remove all limiter for asset group");
+
+        // Ok(Response::new()
+        //     .add_attribute("method", "remove_asset_group")
+        //     .add_attribute("label", label))
     }
 
     /// Mark designated denoms as corrupted assets.
@@ -285,7 +361,7 @@ impl Transmuter<'_> {
     fn register_limiter(
         &self,
         ExecCtx { deps, env: _, info }: ExecCtx,
-        denom: String,
+        scope: Scope,
         label: String,
         limiter_params: LimiterParams,
     ) -> Result<Response, ContractError> {
@@ -294,18 +370,30 @@ impl Transmuter<'_> {
         // only admin can register limiter
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
-        // ensure pool has the specified denom
-        let pool = self.pool.load(deps.storage)?;
-        ensure!(
-            pool.has_denom(&denom),
-            ContractError::InvalidPoolAssetDenom { denom }
-        );
+        match scope.clone() {
+            Scope::Denom(denom) => {
+                // ensure pool has the specified denom
+                ensure!(
+                    self.pool.load(deps.storage)?.has_denom(&denom),
+                    ContractError::InvalidPoolAssetDenom { denom }
+                );
+            }
+            Scope::AssetGroup(label) => {
+                // check if asset group exists
+                ensure!(
+                    self.asset_group.may_load(deps.storage, &label)?.is_some(),
+                    ContractError::AssetGroupNotFound { label }
+                );
+            }
+        };
 
+        let scope_key = scope.key();
         let base_attrs = vec![
             ("method", "register_limiter"),
-            ("denom", &denom),
             ("label", &label),
+            ("scope", &scope_key),
         ];
+
         let limiter_attrs = match &limiter_params {
             LimiterParams::ChangeLimiter {
                 window_config,
@@ -330,7 +418,7 @@ impl Transmuter<'_> {
 
         // register limiter
         self.limiters
-            .register(deps.storage, &denom, &label, limiter_params)?;
+            .register(deps.storage, scope, &label, limiter_params)?;
 
         Ok(Response::new()
             .add_attributes(base_attrs)
@@ -341,7 +429,7 @@ impl Transmuter<'_> {
     fn deregister_limiter(
         &self,
         ExecCtx { deps, env: _, info }: ExecCtx,
-        denom: String,
+        scope: Scope,
         label: String,
     ) -> Result<Response, ContractError> {
         nonpayable(&info.funds)?;
@@ -349,14 +437,15 @@ impl Transmuter<'_> {
         // only admin can deregister limiter
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
+        let scope_key = scope.key();
         let attrs = vec![
             ("method", "deregister_limiter"),
-            ("denom", &denom),
+            ("scope", &scope_key),
             ("label", &label),
         ];
 
         // deregister limiter
-        self.limiters.deregister(deps.storage, &denom, &label)?;
+        self.limiters.deregister(deps.storage, scope, &label)?;
 
         Ok(Response::new().add_attributes(attrs))
     }
@@ -365,7 +454,7 @@ impl Transmuter<'_> {
     fn set_change_limiter_boundary_offset(
         &self,
         ExecCtx { deps, env: _, info }: ExecCtx,
-        denom: String,
+        scope: Scope,
         label: String,
         boundary_offset: Decimal,
     ) -> Result<Response, ContractError> {
@@ -375,9 +464,10 @@ impl Transmuter<'_> {
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
         let boundary_offset_string = boundary_offset.to_string();
+        let scope_key = scope.key();
         let attrs = vec![
             ("method", "set_change_limiter_boundary_offset"),
-            ("denom", &denom),
+            ("scope", &scope_key),
             ("label", &label),
             ("boundary_offset", boundary_offset_string.as_str()),
         ];
@@ -385,7 +475,7 @@ impl Transmuter<'_> {
         // set boundary offset
         self.limiters.set_change_limiter_boundary_offset(
             deps.storage,
-            &denom,
+            scope,
             &label,
             boundary_offset,
         )?;
@@ -397,7 +487,7 @@ impl Transmuter<'_> {
     fn set_static_limiter_upper_limit(
         &self,
         ExecCtx { deps, env: _, info }: ExecCtx,
-        denom: String,
+        scope: Scope,
         label: String,
         upper_limit: Decimal,
     ) -> Result<Response, ContractError> {
@@ -407,16 +497,18 @@ impl Transmuter<'_> {
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
         let upper_limit_string = upper_limit.to_string();
+        let scope_key = scope.key();
+
         let attrs = vec![
             ("method", "set_static_limiter_upper_limit"),
-            ("denom", &denom),
+            ("scope", &scope_key),
             ("label", &label),
             ("upper_limit", upper_limit_string.as_str()),
         ];
 
         // set upper limit
         self.limiters
-            .set_static_limiter_upper_limit(deps.storage, &denom, &label, upper_limit)?;
+            .set_static_limiter_upper_limit(deps.storage, scope, &label, upper_limit)?;
 
         Ok(Response::new().add_attributes(attrs))
     }
@@ -1019,7 +1111,7 @@ mod tests {
         let info = mock_info(admin, &[]);
         for denom in ["uosmo", "uion"] {
             let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: denom.to_string(),
+                scope: Scope::Denom(denom.to_string()),
                 label: "change_limiter".to_string(),
                 limiter_params: change_limiter_params.clone(),
             });
@@ -1033,7 +1125,7 @@ mod tests {
             .unwrap();
 
             let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: denom.to_string(),
+                scope: Scope::Denom(denom.to_string()),
                 label: "static_limiter".to_string(),
                 limiter_params: static_limiter_params.clone(),
             });
@@ -1067,8 +1159,8 @@ mod tests {
         execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
 
         for denom in ["uosmo", "uion"] {
-            assert_dirty_change_limiters_by_denom!(
-                denom,
+            assert_dirty_change_limiters_by_scope!(
+                &Scope::denom(denom),
                 Transmuter::default().limiters,
                 deps.as_ref().storage
             );
@@ -1139,8 +1231,8 @@ mod tests {
 
         // Reset change limiter states if new assets are added
         for denom in ["uosmo", "uion"] {
-            assert_reset_change_limiters_by_denom!(
-                denom,
+            assert_reset_change_limiters_by_scope!(
+                &Scope::denom(denom),
                 reset_at,
                 transmuter,
                 deps.as_ref().storage
@@ -1309,7 +1401,7 @@ mod tests {
         // set limiters
         for denom in ["wbtc", "tbtc", "nbtc", "stbtc"] {
             let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: denom.to_string(),
+                scope: Scope::Denom(denom.to_string()),
                 label: "change_limiter".to_string(),
                 limiter_params: change_limiter_params.clone(),
             });
@@ -1324,7 +1416,7 @@ mod tests {
             .unwrap();
 
             let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: denom.to_string(),
+                scope: Scope::Denom(denom.to_string()),
                 label: "static_limiter".to_string(),
                 limiter_params: static_limiter_params.clone(),
             });
@@ -1613,14 +1705,14 @@ mod tests {
         assert_eq!(
             Transmuter::default()
                 .limiters
-                .list_limiters_by_denom(&deps.storage, "wbtc")
+                .list_limiters_by_scope(&deps.storage, &Scope::denom("wbtc"))
                 .unwrap(),
             vec![]
         );
 
         for denom in ["tbtc", "nbtc", "stbtc"] {
-            assert_reset_change_limiters_by_denom!(
-                denom,
+            assert_reset_change_limiters_by_scope!(
+                &Scope::denom(denom),
                 env.block.time,
                 Transmuter::default(),
                 deps.as_ref().storage
@@ -1719,7 +1811,7 @@ mod tests {
         assert_eq!(
             Transmuter::default()
                 .limiters
-                .list_limiters_by_denom(&deps.storage, "tbtc")
+                .list_limiters_by_scope(&deps.storage, &Scope::denom("tbtc"))
                 .unwrap()
                 .len(),
             2
@@ -2206,7 +2298,7 @@ mod tests {
             mock_env(),
             mock_info(user, &[]),
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1h".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: WindowConfig {
@@ -2226,7 +2318,7 @@ mod tests {
             mock_env(),
             mock_info(user, &[]),
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1h".to_string(),
                 limiter_params: LimiterParams::StaticLimiter {
                     upper_limit: Decimal::percent(60),
@@ -2247,7 +2339,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1h".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: window_config_1h.clone(),
@@ -2259,8 +2351,8 @@ mod tests {
 
         let attrs = vec![
             attr("method", "register_limiter"),
-            attr("denom", "uosmo"),
             attr("label", "1h"),
+            attr("scope", "denom::uosmo"),
             attr("limiter_type", "change_limiter"),
             attr("window_size", "3600000000000"),
             attr("division_count", "5"),
@@ -2275,7 +2367,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: "invalid_denom".to_string(),
+                scope: Scope::Denom("invalid_denom".to_string()),
                 label: "1h".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: window_config_1h.clone(),
@@ -2300,7 +2392,7 @@ mod tests {
         assert_eq!(
             limiters.limiters,
             vec![(
-                (String::from("uosmo"), String::from("1h")),
+                (Scope::denom("uosmo").key(), String::from("1h")),
                 Limiter::ChangeLimiter(
                     ChangeLimiter::new(window_config_1h.clone(), Decimal::percent(1)).unwrap()
                 )
@@ -2316,7 +2408,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1w".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: window_config_1w.clone(),
@@ -2328,8 +2420,8 @@ mod tests {
 
         let attrs_1w = vec![
             attr("method", "register_limiter"),
-            attr("denom", "uosmo"),
             attr("label", "1w"),
+            attr("scope", "denom::uosmo"),
             attr("limiter_type", "change_limiter"),
             attr("window_size", "604800000000"),
             attr("division_count", "5"),
@@ -2347,13 +2439,13 @@ mod tests {
             limiters.limiters,
             vec![
                 (
-                    (String::from("uosmo"), String::from("1h")),
+                    (Scope::denom("uosmo").key(), String::from("1h")),
                     Limiter::ChangeLimiter(
                         ChangeLimiter::new(window_config_1h, Decimal::percent(1)).unwrap()
                     )
                 ),
                 (
-                    (String::from("uosmo"), String::from("1w")),
+                    (Scope::denom("uosmo").key(), String::from("1w")),
                     Limiter::ChangeLimiter(
                         ChangeLimiter::new(window_config_1w.clone(), Decimal::percent(1)).unwrap()
                     )
@@ -2367,7 +2459,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "static".to_string(),
                 limiter_params: LimiterParams::StaticLimiter {
                     upper_limit: Decimal::percent(60),
@@ -2378,8 +2470,8 @@ mod tests {
 
         let attrs = vec![
             attr("method", "register_limiter"),
-            attr("denom", "uosmo"),
             attr("label", "static"),
+            attr("scope", "denom::uosmo"),
             attr("limiter_type", "static_limiter"),
             attr("upper_limit", "0.6"),
         ];
@@ -2392,7 +2484,7 @@ mod tests {
             mock_env(),
             mock_info(user, &[]),
             ContractExecMsg::Transmuter(ExecMsg::DeregisterLimiter {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1h".to_string(),
             }),
         )
@@ -2406,7 +2498,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::DeregisterLimiter {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1h".to_string(),
             }),
         )
@@ -2414,7 +2506,7 @@ mod tests {
 
         let attrs = vec![
             attr("method", "deregister_limiter"),
-            attr("denom", "uosmo"),
+            attr("scope", "denom::uosmo"),
             attr("label", "1h"),
         ];
 
@@ -2429,13 +2521,13 @@ mod tests {
             limiters.limiters,
             vec![
                 (
-                    (String::from("uosmo"), String::from("1w")),
+                    (Scope::denom("uosmo").key(), String::from("1w")),
                     Limiter::ChangeLimiter(
                         ChangeLimiter::new(window_config_1w.clone(), Decimal::percent(1)).unwrap()
                     )
                 ),
                 (
-                    (String::from("uosmo"), String::from("static")),
+                    (Scope::denom("uosmo").key(), String::from("static")),
                     Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
                 )
             ]
@@ -2447,7 +2539,7 @@ mod tests {
             mock_env(),
             mock_info(user, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetChangeLimiterBoundaryOffset {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1w".to_string(),
                 boundary_offset: Decimal::zero(),
             }),
@@ -2462,7 +2554,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetChangeLimiterBoundaryOffset {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1h".to_string(),
                 boundary_offset: Decimal::zero(),
             }),
@@ -2472,7 +2564,7 @@ mod tests {
         assert_eq!(
             err,
             ContractError::LimiterDoesNotExist {
-                denom: "uosmo".to_string(),
+                scope: Scope::denom("uosmo"),
                 label: "1h".to_string()
             }
         );
@@ -2483,7 +2575,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetChangeLimiterBoundaryOffset {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1w".to_string(),
                 boundary_offset: Decimal::percent(10),
             }),
@@ -2492,7 +2584,7 @@ mod tests {
 
         let attrs = vec![
             attr("method", "set_change_limiter_boundary_offset"),
-            attr("denom", "uosmo"),
+            attr("scope", "denom::uosmo"),
             attr("label", "1w"),
             attr("boundary_offset", "0.1"),
         ];
@@ -2508,13 +2600,13 @@ mod tests {
             limiters.limiters,
             vec![
                 (
-                    (String::from("uosmo"), String::from("1w")),
+                    (Scope::denom("uosmo").key(), String::from("1w")),
                     Limiter::ChangeLimiter(
                         ChangeLimiter::new(window_config_1w.clone(), Decimal::percent(10)).unwrap()
                     )
                 ),
                 (
-                    (String::from("uosmo"), String::from("static")),
+                    (Scope::denom("uosmo").key(), String::from("static")),
                     Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
                 )
             ]
@@ -2526,7 +2618,7 @@ mod tests {
             mock_env(),
             mock_info(user, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetStaticLimiterUpperLimit {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "static".to_string(),
                 upper_limit: Decimal::percent(50),
             }),
@@ -2541,7 +2633,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetStaticLimiterUpperLimit {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1h".to_string(),
                 upper_limit: Decimal::percent(50),
             }),
@@ -2551,7 +2643,7 @@ mod tests {
         assert_eq!(
             err,
             ContractError::LimiterDoesNotExist {
-                denom: "uosmo".to_string(),
+                scope: Scope::denom("uosmo"),
                 label: "1h".to_string()
             }
         );
@@ -2562,7 +2654,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetStaticLimiterUpperLimit {
-                denom: "uosmo".to_string(),
+                scope: Scope::denom("uosmo"),
                 label: "1w".to_string(),
                 upper_limit: Decimal::percent(50),
             }),
@@ -2583,7 +2675,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetStaticLimiterUpperLimit {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "static".to_string(),
                 upper_limit: Decimal::percent(50),
             }),
@@ -2592,7 +2684,7 @@ mod tests {
 
         let attrs = vec![
             attr("method", "set_static_limiter_upper_limit"),
-            attr("denom", "uosmo"),
+            attr("scope", "denom::uosmo"),
             attr("label", "static"),
             attr("upper_limit", "0.5"),
         ];
@@ -2608,13 +2700,13 @@ mod tests {
             limiters.limiters,
             vec![
                 (
-                    (String::from("uosmo"), String::from("1w")),
+                    (Scope::denom("uosmo").key(), String::from("1w")),
                     Limiter::ChangeLimiter(
                         ChangeLimiter::new(window_config_1w, Decimal::percent(10)).unwrap()
                     )
                 ),
                 (
-                    (String::from("uosmo"), String::from("static")),
+                    (Scope::denom("uosmo").key(), String::from("static")),
                     Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(50)).unwrap())
                 )
             ]

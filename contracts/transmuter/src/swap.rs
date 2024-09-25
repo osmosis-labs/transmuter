@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::{
     alloyed_asset::{swap_from_alloyed, swap_to_alloyed},
     contract::Transmuter,
+    scope::Scope,
     transmuter_pool::{AmountConstraint, TransmuterPool},
     ContractError,
 };
@@ -293,7 +294,11 @@ impl Transmuter<'_> {
             self.limiters.reset_change_limiter_states(
                 deps.storage,
                 env.block.time,
-                pool.weights()?.unwrap_or_default(),
+                pool.weights()?
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(denom, weight)| (Scope::denom(&denom).key(), weight)) // TODO: handle asset group
+                    .collect::<Vec<_>>(),
             )?;
         } else {
             let prev_weights = pool.weights_map()?;
@@ -588,8 +593,12 @@ impl Transmuter<'_> {
         for corrupted in pool.clone().corrupted_assets() {
             if corrupted.amount().is_zero() {
                 pool.remove_corrupted_asset(corrupted.denom())?;
-                self.limiters
-                    .uncheck_deregister_all_for_denom(storage, corrupted.denom())?;
+                self.limiters.uncheck_deregister_all_for_scope(
+                    storage,
+                    Scope::denom(corrupted.denom()), // TODO: bubble this up
+                )?;
+
+                // TODO: remove denom from asset group, if asset group is empty, remove it
             }
         }
 
@@ -597,15 +606,16 @@ impl Transmuter<'_> {
     }
 }
 
+// TODO: compute weight pairs by target > denom
 fn pair_weights_by_denom(
     prev_weights: BTreeMap<String, Decimal>,
     updated_weights: Vec<(String, Decimal)>,
-) -> Vec<(String, (Decimal, Decimal))> {
+) -> Vec<(Scope, (Decimal, Decimal))> {
     let mut denom_weight_pairs = Vec::new();
 
     for (denom, weight) in updated_weights {
         let prev_weight = prev_weights.get(denom.as_str()).unwrap_or(&weight);
-        denom_weight_pairs.push((denom, (*prev_weight, weight)));
+        denom_weight_pairs.push((Scope::denom(&denom), (*prev_weight, weight)));
     }
 
     denom_weight_pairs
@@ -1184,7 +1194,7 @@ mod tests {
                 .limiters
                 .register(
                     &mut deps.storage,
-                    denom.as_str(),
+                    Scope::denom(denom.as_str()),
                     "static",
                     LimiterParams::StaticLimiter {
                         upper_limit: Decimal::percent(100),
@@ -1219,7 +1229,7 @@ mod tests {
                 assert!(
                     transmuter
                         .limiters
-                        .list_limiters_by_denom(&deps.storage, denom.as_str())
+                        .list_limiters_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
                         .unwrap()
                         .is_empty(),
                     "must not contain limiter for {} since it's corrupted and drained",
@@ -1236,7 +1246,7 @@ mod tests {
                 assert!(
                     !transmuter
                         .limiters
-                        .list_limiters_by_denom(&deps.storage, denom.as_str())
+                        .list_limiters_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
                         .unwrap()
                         .is_empty(),
                     "must contain limiter for {} since it's not corrupted or not drained",
@@ -1284,7 +1294,7 @@ mod tests {
                 .limiters
                 .register(
                     &mut deps.storage,
-                    denom.as_str(),
+                    Scope::denom(denom.as_str()),
                     "static",
                     LimiterParams::StaticLimiter {
                         upper_limit: Decimal::percent(100),
@@ -1324,7 +1334,10 @@ mod tests {
             .unique()
             .collect_vec();
 
-        assert_eq!(limiter_denoms, vec!["denom2", "denom3"]);
+        assert_eq!(
+            limiter_denoms,
+            vec![Scope::denom("denom2").key(), Scope::denom("denom3").key()]
+        );
     }
 
     #[test]
@@ -1365,7 +1378,7 @@ mod tests {
                 .limiters
                 .register(
                     &mut deps.storage,
-                    denom.as_str(),
+                    Scope::denom(denom.as_str()),
                     "static",
                     LimiterParams::StaticLimiter {
                         upper_limit: Decimal::percent(100),
@@ -1405,7 +1418,10 @@ mod tests {
             .unique()
             .collect_vec();
 
-        assert_eq!(limiter_denoms, vec!["denom2", "denom3"]);
+        assert_eq!(
+            limiter_denoms,
+            vec![Scope::denom("denom2").key(), Scope::denom("denom3").key()]
+        );
     }
 
     #[rstest]
