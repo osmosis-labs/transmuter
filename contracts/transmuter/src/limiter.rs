@@ -395,6 +395,27 @@ impl<'a> Limiters<'a> {
         Ok(())
     }
 
+    /// Deregister a limiter without checking if it will be empty.
+    /// This is useful when the scope is being removed, so that limiters for the scope are no longer needed.
+    pub fn unchecked_deregister(
+        &self,
+        storage: &mut dyn Storage,
+        scope: Scope,
+        label: &str,
+    ) -> Result<Limiter, ContractError> {
+        let scope_key = scope.key();
+        match self.limiters.may_load(storage, (&scope_key, label))? {
+            Some(limiter) => {
+                self.limiters.remove(storage, (&scope_key, label));
+                Ok(limiter)
+            }
+            None => Err(ContractError::LimiterDoesNotExist {
+                scope,
+                label: label.to_string(),
+            }),
+        }
+    }
+
     pub fn deregister(
         &self,
         storage: &mut dyn Storage,
@@ -404,11 +425,11 @@ impl<'a> Limiters<'a> {
         let scope_key = scope.key();
         match self.limiters.may_load(storage, (&scope_key, label))? {
             Some(limiter) => {
-                let limiter_for_denom_will_not_be_empty =
+                let limiter_for_scope_will_not_be_empty =
                     self.list_limiters_by_scope(storage, &scope)?.len() >= 2;
 
                 ensure!(
-                    limiter_for_denom_will_not_be_empty,
+                    limiter_for_scope_will_not_be_empty,
                     ContractError::EmptyLimiterNotAllowed { scope }
                 );
 
@@ -1240,6 +1261,50 @@ mod tests {
                     )
                 ]
             );
+        }
+
+        #[test]
+        fn test_unchecked_deregister() {
+            let mut deps = mock_dependencies();
+            let limiter = Limiters::new("limiters");
+
+            // Register two limiters for denoma and one for denomb
+            limiter
+                .register(
+                    &mut deps.storage,
+                    Scope::denom("denoma"),
+                    "1h",
+                    LimiterParams::ChangeLimiter {
+                        window_config: WindowConfig {
+                            window_size: Uint64::from(3_600_000_000_000u64),
+                            division_count: Uint64::from(2u64),
+                        },
+                        boundary_offset: Decimal::percent(10),
+                    },
+                )
+                .unwrap();
+
+            // Unchecked deregister one limiter from denoma
+            let removed_limiter = limiter
+                .unchecked_deregister(&mut deps.storage, Scope::denom("denoma"), "1h")
+                .unwrap();
+
+            // Check that the removed limiter is correct
+            assert_eq!(
+                removed_limiter,
+                Limiter::ChangeLimiter(ChangeLimiter {
+                    divisions: vec![],
+                    latest_value: Decimal::zero(),
+                    window_config: WindowConfig {
+                        window_size: Uint64::from(3_600_000_000_000u64),
+                        division_count: Uint64::from(2u64),
+                    },
+                    boundary_offset: Decimal::percent(10)
+                })
+            );
+
+            // Check that the remaining limiters are correct
+            assert_eq!(limiter.list_limiters(&deps.storage).unwrap(), vec![]);
         }
     }
 

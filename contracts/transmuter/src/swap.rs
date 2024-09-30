@@ -621,6 +621,7 @@ impl Transmuter<'_> {
                     Scope::denom(corrupted.denom()), // TODO: bubble this up
                 )?;
 
+                // TODO: remove limiters from asset group too
                 // TODO: remove denom from asset group, if asset group is empty, remove it
             }
         }
@@ -1760,3 +1761,7 @@ mod tests {
         assert_eq!(scope_value_pairs, expected_scope_value_pairs);
     }
 }
+
+// TODO:
+// - integration tests for asset group limiters
+// - migration: prefixing exsting limiters key with "denom::"

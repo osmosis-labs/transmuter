@@ -14,8 +14,8 @@ use crate::{
 };
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_ne, Addr, Coin, Decimal, DepsMut, Env, Reply, Response, StdError, Storage,
-    SubMsg, Uint128,
+    ensure, ensure_ne, Addr, Coin, Decimal, DepsMut, Env, Order, Reply, Response, StdError,
+    Storage, SubMsg, Uint128,
 };
 
 use cw_storage_plus::{Item, Map};
@@ -302,12 +302,22 @@ impl Transmuter<'_> {
         // remove asset group
         self.asset_group.remove(deps.storage, &label);
 
-        // remove all limiter for asset group
-        todo!("remove all limiter for asset group");
+        // remove all limiters for asset group
+        let limiters = self
+            .limiters
+            .list_limiters_by_scope(deps.storage, &Scope::AssetGroup(label.clone()))?;
 
-        // Ok(Response::new()
-        //     .add_attribute("method", "remove_asset_group")
-        //     .add_attribute("label", label))
+        for (limiter_label, _) in limiters {
+            self.limiters.unchecked_deregister(
+                deps.storage,
+                Scope::AssetGroup(label.clone()),
+                &limiter_label,
+            )?;
+        }
+
+        Ok(Response::new()
+            .add_attribute("method", "remove_asset_group")
+            .add_attribute("label", label))
     }
 
     /// Mark designated denoms as corrupted assets.
@@ -650,6 +660,19 @@ impl Transmuter<'_> {
     }
 
     #[sv::msg(query)]
+    fn list_asset_groups(
+        &self,
+        QueryCtx { deps, env: _ }: QueryCtx,
+    ) -> Result<ListAssetGroupsResponse, ContractError> {
+        let asset_groups = self
+            .asset_group
+            .range(deps.storage, None, None, Order::Ascending)
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+
+        Ok(ListAssetGroupsResponse { asset_groups })
+    }
+
+    #[sv::msg(query)]
     pub fn get_shares(
         &self,
         QueryCtx { deps, env: _ }: QueryCtx,
@@ -914,6 +937,11 @@ pub struct ListAssetConfigsResponse {
 #[cw_serde]
 pub struct ListLimitersResponse {
     pub limiters: Vec<((String, String), Limiter)>,
+}
+
+#[cw_serde]
+pub struct ListAssetGroupsResponse {
+    pub asset_groups: BTreeMap<String, Vec<String>>,
 }
 
 #[cw_serde]
@@ -4004,6 +4032,318 @@ mod tests {
                     }
                 ]
             })
+        );
+    }
+
+    #[test]
+    fn test_asset_group() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let admin = "admin";
+
+        // Setup balance for each asset
+        deps.querier.update_balance(
+            env.contract.address.clone(),
+            vec![
+                Coin::new(1000000, "asset1"),
+                Coin::new(1000000, "asset2"),
+                Coin::new(1000000, "asset3"),
+            ],
+        );
+
+        // Initialize the contract
+        let instantiate_msg = InstantiateMsg {
+            admin: Some(admin.to_string()),
+            moderator: "moderator".to_string(),
+            pool_asset_configs: vec![
+                AssetConfig {
+                    denom: "asset1".to_string(),
+                    normalization_factor: Uint128::from(1000000u128),
+                },
+                AssetConfig {
+                    denom: "asset2".to_string(),
+                    normalization_factor: Uint128::from(1000000u128),
+                },
+                AssetConfig {
+                    denom: "asset3".to_string(),
+                    normalization_factor: Uint128::from(1000000u128),
+                },
+            ],
+            alloyed_asset_subdenom: "alloyed".to_string(),
+            alloyed_asset_normalization_factor: Uint128::from(1000000u128),
+        };
+
+        let info = mock_info(admin, &[]);
+        instantiate(deps.as_mut(), env.clone(), info.clone(), instantiate_msg).unwrap();
+
+        // Create asset group
+        let create_asset_group_msg = ContractExecMsg::Transmuter(ExecMsg::CreateAssetGroup {
+            label: "group1".to_string(),
+            denoms: vec!["asset1".to_string(), "asset2".to_string()],
+        });
+
+        // Test non-admin trying to create asset group
+        let non_admin_info = mock_info("non_admin", &[]);
+        let non_admin_create_msg = ContractExecMsg::Transmuter(ExecMsg::CreateAssetGroup {
+            label: "group1".to_string(),
+            denoms: vec!["asset1".to_string(), "asset2".to_string()],
+        });
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            non_admin_info,
+            non_admin_create_msg,
+        )
+        .unwrap_err();
+        assert_eq!(err, ContractError::Unauthorized {});
+
+        // Test admin creating asset group
+        let res = execute(deps.as_mut(), env.clone(), info, create_asset_group_msg).unwrap();
+
+        assert_eq!(
+            res.attributes,
+            vec![
+                attr("method", "create_asset_group"),
+                attr("label", "group1"),
+            ]
+        );
+
+        // List asset groups
+        let list_asset_groups_msg = ContractQueryMsg::Transmuter(QueryMsg::ListAssetGroups {});
+        let list_asset_groups_res: Result<ListAssetGroupsResponse, ContractError> =
+            query(deps.as_ref(), env.clone(), list_asset_groups_msg)
+                .map(|value| from_json(value).unwrap());
+
+        assert_eq!(
+            list_asset_groups_res,
+            Ok(ListAssetGroupsResponse {
+                asset_groups: BTreeMap::from([(
+                    "group1".to_string(),
+                    vec!["asset1".to_string(), "asset2".to_string()],
+                )]),
+            })
+        );
+
+        // Try setting limiter with non-existent group
+        let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+            label: "limiter1".to_string(),
+            scope: Scope::asset_group("group2"),
+            limiter_params: LimiterParams::ChangeLimiter {
+                window_config: WindowConfig {
+                    window_size: 86400u64.into(),
+                    division_count: 10u64.into(),
+                },
+                boundary_offset: Decimal::percent(10),
+            },
+        });
+
+        let register_limiter_info = mock_info("admin", &[]);
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            register_limiter_info.clone(),
+            register_limiter_msg.clone(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ContractError::AssetGroupNotFound { .. }));
+
+        // Create group2
+        let create_asset_group_msg2 = ContractExecMsg::Transmuter(ExecMsg::CreateAssetGroup {
+            label: "group2".to_string(),
+            denoms: vec!["asset3".to_string()],
+        });
+
+        let create_asset_group_info2 = mock_info("admin", &[]);
+        let res2 = execute(
+            deps.as_mut(),
+            env.clone(),
+            create_asset_group_info2,
+            create_asset_group_msg2,
+        )
+        .unwrap();
+
+        assert_eq!(
+            res2.attributes,
+            vec![
+                attr("method", "create_asset_group"),
+                attr("label", "group2"),
+            ]
+        );
+
+        // Verify group2 was created
+        let list_asset_groups_msg2 = ContractQueryMsg::Transmuter(QueryMsg::ListAssetGroups {});
+        let list_asset_groups_res2: Result<ListAssetGroupsResponse, ContractError> =
+            query(deps.as_ref(), env.clone(), list_asset_groups_msg2)
+                .map(|value| from_json(value).unwrap());
+
+        assert_eq!(
+            list_asset_groups_res2,
+            Ok(ListAssetGroupsResponse {
+                asset_groups: BTreeMap::from([
+                    (
+                        "group1".to_string(),
+                        vec!["asset1".to_string(), "asset2".to_string()]
+                    ),
+                    ("group2".to_string(), vec!["asset3".to_string()]),
+                ]),
+            })
+        );
+
+        // Try to register limiter for group2
+        let res3 = execute(
+            deps.as_mut(),
+            env.clone(),
+            register_limiter_info,
+            register_limiter_msg,
+        )
+        .unwrap();
+
+        assert_eq!(
+            res3.attributes,
+            vec![
+                attr("method", "register_limiter"),
+                attr("label", "limiter1"),
+                attr("scope", "asset_group::group2"),
+                attr("limiter_type", "change_limiter"),
+                attr("window_size", "86400"),
+                attr("division_count", "10"),
+                attr("boundary_offset", "0.1"),
+            ]
+        );
+
+        // Verify limiter was registered
+        let list_limiters_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
+        let list_limiters_res: ListLimitersResponse =
+            from_json(query(deps.as_ref(), env.clone(), list_limiters_msg).unwrap()).unwrap();
+
+        assert_eq!(
+            list_limiters_res.limiters,
+            vec![(
+                (
+                    Scope::asset_group("group2").to_string(),
+                    "limiter1".to_string()
+                ),
+                Limiter::ChangeLimiter(
+                    ChangeLimiter::new(
+                        WindowConfig {
+                            window_size: 86400u64.into(),
+                            division_count: 10u64.into(),
+                        },
+                        Decimal::percent(10),
+                    )
+                    .unwrap()
+                )
+            )]
+        );
+
+        // Try to create a group with a non-existing asset
+        let create_invalid_group_msg = ContractExecMsg::Transmuter(ExecMsg::CreateAssetGroup {
+            label: "invalid_group".to_string(),
+            denoms: vec!["asset1".to_string(), "non_existing_asset".to_string()],
+        });
+
+        let admin_info = mock_info(admin, &[]);
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            admin_info,
+            create_invalid_group_msg,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::InvalidPoolAssetDenom {
+                denom: "non_existing_asset".to_string()
+            }
+        );
+
+        // Verify that the invalid group was not created
+        let list_asset_groups_msg = ContractQueryMsg::Transmuter(QueryMsg::ListAssetGroups {});
+        let list_asset_groups_res: ListAssetGroupsResponse =
+            from_json(query(deps.as_ref(), env.clone(), list_asset_groups_msg).unwrap()).unwrap();
+
+        assert_eq!(
+            list_asset_groups_res.asset_groups,
+            BTreeMap::from([
+                (
+                    "group1".to_string(),
+                    vec!["asset1".to_string(), "asset2".to_string()]
+                ),
+                ("group2".to_string(), vec!["asset3".to_string()]),
+            ])
+        );
+
+        // Test removing an asset group
+        let remove_group_msg = ContractExecMsg::Transmuter(ExecMsg::RemoveAssetGroup {
+            label: "group2".to_string(),
+        });
+
+        // Try to remove the group with a non-admin account
+        let non_admin_info = mock_info("non_admin", &[]);
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            non_admin_info,
+            remove_group_msg.clone(),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, ContractError::Unauthorized {});
+
+        // Remove the group with the admin account
+        let admin_info = mock_info(admin, &[]);
+        let res = execute(deps.as_mut(), env.clone(), admin_info, remove_group_msg).unwrap();
+
+        assert_eq!(
+            res.attributes,
+            vec![
+                attr("method", "remove_asset_group"),
+                attr("label", "group2"),
+            ]
+        );
+
+        // Verify that the group was removed
+        let list_asset_groups_msg = ContractQueryMsg::Transmuter(QueryMsg::ListAssetGroups {});
+        let list_asset_groups_res: ListAssetGroupsResponse =
+            from_json(query(deps.as_ref(), env.clone(), list_asset_groups_msg).unwrap()).unwrap();
+
+        assert_eq!(
+            list_asset_groups_res.asset_groups,
+            BTreeMap::from([(
+                "group1".to_string(),
+                vec!["asset1".to_string(), "asset2".to_string()]
+            )])
+        );
+
+        // Test that limiter1 is removed along with the asset group
+        let list_limiters_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
+        let list_limiters_res: ListLimitersResponse =
+            from_json(query(deps.as_ref(), env.clone(), list_limiters_msg).unwrap()).unwrap();
+
+        // Check that limiter1 is not in the list of limiters
+        assert_eq!(list_limiters_res.limiters, vec![]);
+
+        // Test removing a non-existing asset group
+        let remove_nonexistent_group_msg = ContractExecMsg::Transmuter(ExecMsg::RemoveAssetGroup {
+            label: "non_existent_group".to_string(),
+        });
+
+        let admin_info = mock_info(admin, &[]);
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            admin_info,
+            remove_nonexistent_group_msg,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::AssetGroupNotFound {
+                label: "non_existent_group".to_string()
+            }
         );
     }
 }
