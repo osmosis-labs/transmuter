@@ -2,47 +2,44 @@ use std::collections::HashMap;
 
 use cosmwasm_std::{ensure, Decimal};
 
-use crate::{asset::Asset, ContractError};
+use crate::{asset::Asset, corruptable::Corruptable, scope::Scope, ContractError};
 
 use super::TransmuterPool;
 
 impl TransmuterPool {
-    pub fn mark_corrupted_assets(
-        &mut self,
-        corrupted_denoms: &[String],
-    ) -> Result<(), ContractError> {
-        // check if removing_assets are in the pool_assets
-        for corrupted_denom in corrupted_denoms {
-            ensure!(
-                self.has_denom(corrupted_denom),
-                ContractError::InvalidPoolAssetDenom {
-                    denom: corrupted_denom.to_string()
-                }
-            );
+    pub fn mark_corrupted_asset(&mut self, corrupted_denom: &str) -> Result<(), ContractError> {
+        // check if denom is in the pool_assets
+        ensure!(
+            self.has_denom(corrupted_denom),
+            ContractError::InvalidPoolAssetDenom {
+                denom: corrupted_denom.to_string()
+            }
+        );
 
-            self.pool_assets
-                .iter_mut()
-                .find(|asset| asset.denom() == corrupted_denom)
-                .map(|asset| asset.mark_as_corrupted());
+        for asset in self.pool_assets.iter_mut() {
+            if asset.denom() == corrupted_denom {
+                asset.mark_as_corrupted();
+                break;
+            }
         }
 
         Ok(())
     }
 
-    pub fn unmark_corrupted_assets(&mut self, denoms: &[String]) -> Result<(), ContractError> {
-        // check if denoms are of corrupted assets
-        for uncorrupted_denom in denoms {
-            ensure!(
-                self.is_corrupted_asset(uncorrupted_denom),
-                ContractError::InvalidCorruptedAssetDenom {
-                    denom: uncorrupted_denom.to_string()
-                }
-            );
+    pub fn unmark_corrupted_asset(&mut self, uncorrupted_denom: &str) -> Result<(), ContractError> {
+        // check if denom is of corrupted asset
+        ensure!(
+            self.is_corrupted_asset(uncorrupted_denom),
+            ContractError::InvalidCorruptedAssetDenom {
+                denom: uncorrupted_denom.to_string()
+            }
+        );
 
-            self.pool_assets
-                .iter_mut()
-                .find(|asset| asset.denom() == uncorrupted_denom)
-                .map(|asset| asset.unmark_as_corrupted());
+        for asset in self.pool_assets.iter_mut() {
+            if asset.denom() == uncorrupted_denom {
+                asset.unmark_as_corrupted();
+                break;
+            }
         }
 
         Ok(())
@@ -130,8 +127,8 @@ impl TransmuterPool {
 
             ensure!(
                 !has_amount_increased && !has_weight_increased,
-                ContractError::CorruptedAssetRelativelyIncreased {
-                    denom: post_action.denom().to_string()
+                ContractError::CorruptedScopeRelativelyIncreased {
+                    scope: Scope::denom(post_action.denom())
                 }
             );
         }
@@ -159,9 +156,7 @@ mod tests {
         };
 
         // remove asset that is not in the pool
-        let err = pool
-            .mark_corrupted_assets(&["asset5".to_string()])
-            .unwrap_err();
+        let err = pool.mark_corrupted_asset("asset5").unwrap_err();
         assert_eq!(
             err,
             ContractError::InvalidPoolAssetDenom {
@@ -169,9 +164,7 @@ mod tests {
             }
         );
 
-        let err = pool
-            .mark_corrupted_assets(&["asset1".to_string(), "assetx".to_string()])
-            .unwrap_err();
+        let err = pool.mark_corrupted_asset("assetx").unwrap_err();
         assert_eq!(
             err,
             ContractError::InvalidPoolAssetDenom {
@@ -179,7 +172,7 @@ mod tests {
             }
         );
 
-        pool.mark_corrupted_assets(&["asset1".to_string()]).unwrap();
+        pool.mark_corrupted_asset("asset1").unwrap();
         assert_eq!(
             pool.pool_assets,
             Asset::unchecked_equal_assets_from_coins(&[
@@ -206,8 +199,8 @@ mod tests {
             ]
         );
 
-        pool.mark_corrupted_assets(&["asset2".to_string(), "asset3".to_string()])
-            .unwrap();
+        pool.mark_corrupted_asset("asset2").unwrap();
+        pool.mark_corrupted_asset("asset3").unwrap();
 
         assert_eq!(
             pool.pool_assets,
@@ -250,7 +243,7 @@ mod tests {
             ]),
         };
 
-        pool.mark_corrupted_assets(&["asset1".to_string()]).unwrap();
+        pool.mark_corrupted_asset("asset1").unwrap();
 
         // increase corrupted asset directly
         let err = pool
@@ -266,8 +259,8 @@ mod tests {
 
         assert_eq!(
             err,
-            ContractError::CorruptedAssetRelativelyIncreased {
-                denom: "asset1".to_string()
+            ContractError::CorruptedScopeRelativelyIncreased {
+                scope: Scope::denom("asset1")
             }
         );
 
@@ -285,8 +278,8 @@ mod tests {
 
         assert_eq!(
             err,
-            ContractError::CorruptedAssetRelativelyIncreased {
-                denom: "asset1".to_string()
+            ContractError::CorruptedScopeRelativelyIncreased {
+                scope: Scope::denom("asset1")
             }
         );
 
@@ -307,8 +300,8 @@ mod tests {
 
         assert_eq!(
             err.unwrap_err(),
-            ContractError::CorruptedAssetRelativelyIncreased {
-                denom: "asset1".to_string()
+            ContractError::CorruptedScopeRelativelyIncreased {
+                scope: Scope::denom("asset1")
             }
         );
 
@@ -322,7 +315,7 @@ mod tests {
             ]),
         };
 
-        pool.mark_corrupted_assets(&["asset1".to_string()]).unwrap();
+        pool.mark_corrupted_asset("asset1").unwrap();
 
         // decrease both corrupted and other asset with slightly more weight on the corrupted asset
         // requires slightly more weight to work due to rounding error

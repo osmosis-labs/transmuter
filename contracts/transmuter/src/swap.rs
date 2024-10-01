@@ -2,14 +2,15 @@ use std::collections::{BTreeMap, HashMap};
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env, Order,
-    Response, StdError, Storage, Uint128,
+    ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env, Response,
+    StdError, Storage, Uint128,
 };
 use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
 use serde::Serialize;
 
 use crate::{
     alloyed_asset::{swap_from_alloyed, swap_to_alloyed},
+    asset_group::AssetGroup,
     contract::Transmuter,
     scope::Scope,
     transmuter_pool::{AmountConstraint, TransmuterPool},
@@ -633,17 +634,19 @@ impl Transmuter<'_> {
     fn get_asset_group(
         &self,
         storage: &dyn Storage,
-    ) -> Result<HashMap<String, Vec<String>>, StdError> {
-        self.asset_group
-            .range(storage, None, None, Order::Ascending)
-            .collect::<Result<HashMap<String, Vec<String>>, _>>()
+    ) -> Result<BTreeMap<String, AssetGroup>, StdError> {
+        Ok(self
+            .asset_groups
+            .may_load(storage)?
+            .unwrap_or_default()
+            .into_inner())
     }
 }
 
 fn construct_scope_value_pairs(
     prev_weights: BTreeMap<String, Decimal>,
     updated_weights: Vec<(String, Decimal)>,
-    asset_group: HashMap<String, Vec<String>>,
+    asset_group: BTreeMap<String, AssetGroup>,
 ) -> Result<Vec<(Scope, (Decimal, Decimal))>, StdError> {
     let mut denom_weight_pairs: HashMap<Scope, (Decimal, Decimal)> = HashMap::new();
     let mut asset_group_weight_pairs: HashMap<Scope, (Decimal, Decimal)> = HashMap::new();
@@ -651,8 +654,8 @@ fn construct_scope_value_pairs(
     // Reverse index the asset groups
     // TODO: handle cases where asset group contains denom that does not exist
     let mut asset_groups_of_denom = HashMap::new();
-    for (group, denoms) in asset_group {
-        for denom in denoms {
+    for (group, asset_group) in asset_group {
+        for denom in asset_group.into_denoms() {
             asset_groups_of_denom
                 .entry(denom)
                 .or_insert_with(Vec::new)
@@ -664,7 +667,7 @@ fn construct_scope_value_pairs(
         let prev_weight = prev_weights.get(denom.as_str()).unwrap_or(weight);
         denom_weight_pairs.insert(Scope::denom(denom), (*prev_weight, *weight));
 
-        for group in asset_groups_of_denom.get(denom.as_str()).unwrap_or(&vec![]) {
+        for group in asset_groups_of_denom.get(denom).unwrap_or(&vec![]) {
             match asset_group_weight_pairs.get_mut(&Scope::asset_group(group)) {
                 Some((prev, curr)) => {
                     *prev = prev.checked_add(*prev_weight)?;
@@ -1241,16 +1244,11 @@ mod tests {
             .pool_assets
             .into_iter()
             .map(|asset| asset.denom().to_string())
-            .collect::<Vec<_>>();
+            .collect::<Vec<String>>();
 
-        pool.mark_corrupted_assets(
-            corrupted_denoms
-                .iter()
-                .map(|denom| denom.to_string())
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )
-        .unwrap();
+        for denom in corrupted_denoms {
+            pool.mark_corrupted_asset(denom).unwrap();
+        }
 
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
 
@@ -1350,7 +1348,7 @@ mod tests {
             .map(|asset| asset.denom().to_string())
             .collect::<Vec<_>>();
 
-        pool.mark_corrupted_assets(&["denom1".to_owned()]).unwrap();
+        pool.mark_corrupted_asset("denom1").unwrap();
 
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
 
@@ -1434,7 +1432,7 @@ mod tests {
             .map(|asset| asset.denom().to_string())
             .collect::<Vec<_>>();
 
-        pool.mark_corrupted_assets(&["denom1".to_owned()]).unwrap();
+        pool.mark_corrupted_asset("denom1").unwrap();
 
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
 
@@ -1723,13 +1721,15 @@ mod tests {
             .map(|(label, asset_group)| {
                 (
                     label.to_string(),
-                    asset_group
-                        .into_iter()
-                        .map(|asset| asset.to_string())
-                        .collect_vec(),
+                    AssetGroup::new(
+                        asset_group
+                            .into_iter()
+                            .map(|asset| asset.to_string())
+                            .collect_vec(),
+                    ),
                 )
             })
-            .collect();
+            .collect::<BTreeMap<String, AssetGroup>>();
 
         let prev_weights = denom_weights
             .clone()
@@ -1761,7 +1761,3 @@ mod tests {
         assert_eq!(scope_value_pairs, expected_scope_value_pairs);
     }
 }
-
-// TODO:
-// - integration tests for asset group limiters
-// - migration: prefixing exsting limiters key with "denom::"

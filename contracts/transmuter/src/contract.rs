@@ -1,4 +1,8 @@
-use crate::scope::Scope;
+use crate::{
+    asset_group::{AssetGroup, AssetGroups},
+    corruptable::Corruptable,
+    scope::Scope,
+};
 use std::{collections::BTreeMap, iter};
 
 use crate::{
@@ -14,11 +18,11 @@ use crate::{
 };
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_ne, Addr, Coin, Decimal, DepsMut, Env, Order, Reply, Response, StdError,
-    Storage, SubMsg, Uint128,
+    ensure, ensure_ne, Addr, Coin, Decimal, DepsMut, Env, Reply, Response, StdError, Storage,
+    SubMsg, Uint128,
 };
 
-use cw_storage_plus::{Item, Map};
+use cw_storage_plus::Item;
 use osmosis_std::types::{
     cosmos::bank::v1beta1::Metadata,
     osmosis::tokenfactory::v1beta1::{MsgCreateDenom, MsgCreateDenomResponse, MsgSetDenomMetadata},
@@ -38,16 +42,13 @@ const CREATE_ALLOYED_DENOM_REPLY_ID: u64 = 1;
 /// Prefix for alloyed asset denom
 const ALLOYED_PREFIX: &str = "alloyed";
 
-// asset_group: label -> denoms
-pub type AssetGroup<'a> = Map<'a, &'a str, Vec<String>>;
-
 pub struct Transmuter<'a> {
     pub(crate) active_status: Item<'a, bool>,
     pub(crate) pool: Item<'a, TransmuterPool>,
     pub(crate) alloyed_asset: AlloyedAsset<'a>,
     pub(crate) role: Role<'a>,
     pub(crate) limiters: Limiters<'a>,
-    pub(crate) asset_group: AssetGroup<'a>,
+    pub(crate) asset_groups: Item<'a, AssetGroups>,
 }
 
 pub mod key {
@@ -75,7 +76,7 @@ impl Transmuter<'_> {
             ),
             role: Role::new(key::ADMIN, key::MODERATOR),
             limiters: Limiters::new(key::LIMITERS),
-            asset_group: AssetGroup::new(key::ASSET_GROUP),
+            asset_groups: Item::new(key::ASSET_GROUP),
         }
     }
 
@@ -139,6 +140,9 @@ impl Transmuter<'_> {
         // set normalization factor for alloyed asset
         self.alloyed_asset
             .set_normalization_factor(deps.storage, alloyed_asset_normalization_factor)?;
+
+        // initialize asset groups
+        self.asset_groups.save(deps.storage, &AssetGroups::new())?;
 
         Ok(Response::new()
             .add_attribute("method", "instantiate")
@@ -268,14 +272,14 @@ impl Transmuter<'_> {
             );
         }
 
-        // ensure that asset group does not exist
-        ensure!(
-            self.asset_group.may_load(deps.storage, &label)?.is_none(),
-            ContractError::AssetGroupAlreadyExists { label }
-        );
+        // create asset group
+        let mut asset_groups = self
+            .asset_groups
+            .may_load(deps.storage)?
+            .unwrap_or_default();
 
-        // save asset group
-        self.asset_group.save(deps.storage, &label, &denoms)?;
+        asset_groups.create_asset_group(label.clone(), denoms)?;
+        self.asset_groups.save(deps.storage, &asset_groups)?;
 
         Ok(Response::new()
             .add_attribute("method", "create_asset_group")
@@ -293,14 +297,13 @@ impl Transmuter<'_> {
         // only admin can remove asset group
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
-        // check if asset group exists
-        ensure!(
-            self.asset_group.load(deps.storage, &label).is_ok(),
-            ContractError::AssetGroupNotFound { label }
-        );
+        let mut asset_groups = self
+            .asset_groups
+            .may_load(deps.storage)?
+            .unwrap_or_default();
 
-        // remove asset group
-        self.asset_group.remove(deps.storage, &label);
+        asset_groups.remove_asset_group(&label)?;
+        self.asset_groups.save(deps.storage, &asset_groups)?;
 
         // remove all limiters for asset group
         let limiters = self
@@ -320,51 +323,80 @@ impl Transmuter<'_> {
             .add_attribute("label", label))
     }
 
-    /// Mark designated denoms as corrupted assets.
-    /// As a result, the corrupted assets will not allowed to be increased by any means,
+    /// Mark designated scopes as corrupted scopes.
+    /// As a result, the corrupted scopes will not allowed to be increased by any means,
     /// both in terms of amount and weight.
-    /// The only way to redeem other pool asset, is to also redeem the corrupted asset
+    /// The only way to redeem other pool asset outside of the corrupted scopes is
+    /// to also redeem asset within the corrupted scopes
     /// with the same pool-defnined value.
     #[sv::msg(exec)]
-    fn mark_corrupted_assets(
+    fn mark_corrupted_scopes(
         &self,
         ExecCtx { deps, env: _, info }: ExecCtx,
-        denoms: Vec<String>,
+        scopes: Vec<Scope>,
     ) -> Result<Response, ContractError> {
-        non_empty_input_required("denoms", &denoms)?;
+        non_empty_input_required("scopes", &scopes)?;
         nonpayable(&info.funds)?;
 
         // only moderator can mark corrupted assets
         ensure_moderator_authority!(info.sender, self.role.moderator, deps.as_ref());
 
-        self.pool
-            .update(deps.storage, |mut pool| -> Result<_, ContractError> {
-                pool.mark_corrupted_assets(&denoms)?;
-                Ok(pool)
-            })?;
+        let mut pool = self.pool.load(deps.storage)?;
+        let mut asset_groups = self
+            .asset_groups
+            .may_load(deps.storage)?
+            .unwrap_or_default();
 
-        Ok(Response::new().add_attribute("method", "mark_corrupted_assets"))
+        for scope in &scopes {
+            match scope {
+                Scope::Denom(denom) => {
+                    pool.mark_corrupted_asset(denom)?;
+                }
+                Scope::AssetGroup(label) => {
+                    asset_groups.mark_corrupted_asset_group(label)?;
+                }
+            }
+        }
+
+        self.pool.save(deps.storage, &pool)?;
+        self.asset_groups.save(deps.storage, &asset_groups)?;
+
+        Ok(Response::new().add_attribute("method", "mark_corrupted_scopes"))
     }
 
     #[sv::msg(exec)]
-    fn unmark_corrupted_assets(
+    fn unmark_corrupted_scopes(
         &self,
         ExecCtx { deps, env: _, info }: ExecCtx,
-        denoms: Vec<String>,
+        scopes: Vec<Scope>,
     ) -> Result<Response, ContractError> {
-        non_empty_input_required("denoms", &denoms)?;
+        non_empty_input_required("scopes", &scopes)?;
         nonpayable(&info.funds)?;
 
         // only moderator can unmark corrupted assets
         ensure_moderator_authority!(info.sender, self.role.moderator, deps.as_ref());
 
-        self.pool
-            .update(deps.storage, |mut pool| -> Result<_, ContractError> {
-                pool.unmark_corrupted_assets(&denoms)?;
-                Ok(pool)
-            })?;
+        let mut pool = self.pool.load(deps.storage)?;
+        let mut asset_groups = self
+            .asset_groups
+            .may_load(deps.storage)?
+            .unwrap_or_default();
 
-        Ok(Response::new().add_attribute("method", "unmark_corrupted_assets"))
+        for scope in &scopes {
+            match scope {
+                Scope::Denom(denom) => {
+                    pool.unmark_corrupted_asset(denom)?;
+                }
+                Scope::AssetGroup(label) => {
+                    asset_groups.unmark_corrupted_asset_group(label)?;
+                }
+            }
+        }
+
+        self.pool.save(deps.storage, &pool)?;
+        self.asset_groups.save(deps.storage, &asset_groups)?;
+
+        Ok(Response::new().add_attribute("method", "unmark_corrupted_scopes"))
     }
 
     #[sv::msg(exec)]
@@ -380,6 +412,11 @@ impl Transmuter<'_> {
         // only admin can register limiter
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
+        let asset_groups = self
+            .asset_groups
+            .may_load(deps.storage)?
+            .unwrap_or_default();
+
         match scope.clone() {
             Scope::Denom(denom) => {
                 // ensure pool has the specified denom
@@ -391,7 +428,7 @@ impl Transmuter<'_> {
             Scope::AssetGroup(label) => {
                 // check if asset group exists
                 ensure!(
-                    self.asset_group.may_load(deps.storage, &label)?.is_some(),
+                    asset_groups.has(&label),
                     ContractError::AssetGroupNotFound { label }
                 );
             }
@@ -665,11 +702,13 @@ impl Transmuter<'_> {
         QueryCtx { deps, env: _ }: QueryCtx,
     ) -> Result<ListAssetGroupsResponse, ContractError> {
         let asset_groups = self
-            .asset_group
-            .range(deps.storage, None, None, Order::Ascending)
-            .collect::<Result<BTreeMap<_, _>, _>>()?;
+            .asset_groups
+            .may_load(deps.storage)?
+            .unwrap_or_default();
 
-        Ok(ListAssetGroupsResponse { asset_groups })
+        Ok(ListAssetGroupsResponse {
+            asset_groups: asset_groups.into_inner(),
+        })
     }
 
     #[sv::msg(query)]
@@ -816,18 +855,30 @@ impl Transmuter<'_> {
     }
 
     #[sv::msg(query)]
-    pub(crate) fn get_corrupted_denoms(
+    pub(crate) fn get_corrupted_scopes(
         &self,
         QueryCtx { deps, env: _ }: QueryCtx,
-    ) -> Result<GetCorrruptedDenomsResponse, ContractError> {
+    ) -> Result<GetCorrruptedScopesResponse, ContractError> {
         let pool = self.pool.load(deps.storage)?;
-        let corrupted_denoms = pool
+        let asset_groups = self
+            .asset_groups
+            .may_load(deps.storage)?
+            .unwrap_or_default();
+
+        let corrupted_assets = pool
             .corrupted_assets()
             .into_iter()
-            .map(|a| a.denom().to_string())
-            .collect();
+            .map(|a| Scope::denom(a.denom()));
 
-        Ok(GetCorrruptedDenomsResponse { corrupted_denoms })
+        let corrupted_asset_groups = asset_groups
+            .into_inner()
+            .into_iter()
+            .filter(|(_, asset_group)| asset_group.is_corrupted())
+            .map(|(label, _)| Scope::AssetGroup(label));
+
+        Ok(GetCorrruptedScopesResponse {
+            corrupted_scopes: corrupted_assets.chain(corrupted_asset_groups).collect(),
+        })
     }
 
     // --- admin ---
@@ -941,7 +992,7 @@ pub struct ListLimitersResponse {
 
 #[cw_serde]
 pub struct ListAssetGroupsResponse {
-    pub asset_groups: BTreeMap<String, Vec<String>>,
+    pub asset_groups: BTreeMap<String, AssetGroup>,
 }
 
 #[cw_serde]
@@ -990,8 +1041,8 @@ pub struct CalcInAmtGivenOutResponse {
 }
 
 #[cw_serde]
-pub struct GetCorrruptedDenomsResponse {
-    pub corrupted_denoms: Vec<String>,
+pub struct GetCorrruptedScopesResponse {
+    pub corrupted_scopes: Vec<Scope>,
 }
 
 #[cw_serde]
@@ -1366,8 +1417,8 @@ mod tests {
 
         // Mark corrupted assets by non-moderator
         let info = mock_info("someone", &[]);
-        let mark_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedAssets {
-            denoms: vec!["wbtc".to_string(), "tbtc".to_string()],
+        let mark_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedScopes {
+            scopes: vec![Scope::denom("wbtc"), Scope::denom("tbtc")],
         });
 
         let res = execute(
@@ -1384,12 +1435,12 @@ mod tests {
         let res = query(
             deps.as_ref(),
             env.clone(),
-            ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedDenoms {}),
+            ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedScopes {}),
         )
         .unwrap();
-        let GetCorrruptedDenomsResponse { corrupted_denoms } = from_json(res).unwrap();
+        let GetCorrruptedScopesResponse { corrupted_scopes } = from_json(res).unwrap();
 
-        assert_eq!(corrupted_denoms, Vec::<String>::new());
+        assert_eq!(corrupted_scopes, Vec::<Scope>::new());
 
         // The asset must not yet be removed
         let res = query(
@@ -1468,9 +1519,9 @@ mod tests {
         execute(deps.as_mut(), env.clone(), info.clone(), exit_pool_msg).unwrap();
 
         // Mark corrupted assets by moderator
-        let corrupted_denoms = vec!["wbtc".to_string(), "tbtc".to_string()];
-        let mark_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedAssets {
-            denoms: corrupted_denoms.clone(),
+        let corrupted_scopes = vec![Scope::denom("wbtc"), Scope::denom("tbtc")];
+        let mark_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedScopes {
+            scopes: corrupted_scopes.clone(),
         });
 
         let info = mock_info(moderator, &[]);
@@ -1488,12 +1539,15 @@ mod tests {
         let res = query(
             deps.as_ref(),
             env.clone(),
-            ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedDenoms {}),
+            ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedScopes {}),
         )
         .unwrap();
-        let res: GetCorrruptedDenomsResponse = from_json(res).unwrap();
+        let get_corrupted_scopes_response: GetCorrruptedScopesResponse = from_json(res).unwrap();
 
-        assert_eq!(res.corrupted_denoms, corrupted_denoms);
+        assert_eq!(
+            get_corrupted_scopes_response.corrupted_scopes,
+            corrupted_scopes
+        );
 
         // Check if the assets were removed
         let res = query(
@@ -1548,9 +1602,14 @@ mod tests {
 
         let env = increase_block_height(&env, 1);
 
-        for denom in corrupted_denoms {
-            let expected_err = ContractError::CorruptedAssetRelativelyIncreased {
-                denom: denom.clone(),
+        for scope in corrupted_scopes {
+            let expected_err = ContractError::CorruptedScopeRelativelyIncreased {
+                scope: scope.clone(),
+            };
+
+            let denom = match scope {
+                Scope::Denom(denom) => denom,
+                _ => unreachable!(),
             };
 
             // join with corrupted denom should fail
@@ -1627,7 +1686,7 @@ mod tests {
             let err = execute(deps.as_mut(), env.clone(), info, exit_pool_msg).unwrap_err();
             assert!(matches!(
                 err,
-                ContractError::CorruptedAssetRelativelyIncreased { .. }
+                ContractError::CorruptedScopeRelativelyIncreased { .. }
             ));
 
             let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
@@ -1643,7 +1702,7 @@ mod tests {
             let err = execute(deps.as_mut(), env.clone(), info, exit_pool_msg).unwrap_err();
             assert!(matches!(
                 err,
-                ContractError::CorruptedAssetRelativelyIncreased { .. }
+                ContractError::CorruptedScopeRelativelyIncreased { .. }
             ));
         }
 
@@ -1684,8 +1743,8 @@ mod tests {
 
         assert_eq!(
             err,
-            ContractError::CorruptedAssetRelativelyIncreased {
-                denom: "wbtc".to_string()
+            ContractError::CorruptedScopeRelativelyIncreased {
+                scope: Scope::denom("wbtc")
             }
         );
 
@@ -1749,8 +1808,8 @@ mod tests {
 
         // try unmark nbtc should fail
         let unmark_corrupted_assets_msg =
-            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedAssets {
-                denoms: vec!["nbtc".to_string()],
+            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedScopes {
+                scopes: vec![Scope::denom("nbtc")],
             });
 
         let info = mock_info(moderator, &[]);
@@ -1771,8 +1830,8 @@ mod tests {
 
         // unmark tbtc by non moderator should fail
         let unmark_corrupted_assets_msg =
-            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedAssets {
-                denoms: vec!["tbtc".to_string()],
+            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedScopes {
+                scopes: vec![Scope::denom("tbtc")],
             });
 
         let info = mock_info("someone", &[]);
@@ -1788,8 +1847,8 @@ mod tests {
 
         // unmark tbtc
         let unmark_corrupted_assets_msg =
-            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedAssets {
-                denoms: vec!["tbtc".to_string()],
+            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedScopes {
+                scopes: vec![Scope::denom("tbtc")],
             });
 
         let info = mock_info(moderator, &[]);
@@ -1805,13 +1864,13 @@ mod tests {
         let res = query(
             deps.as_ref(),
             env.clone(),
-            ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedDenoms {}),
+            ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedScopes {}),
         )
         .unwrap();
 
-        let GetCorrruptedDenomsResponse { corrupted_denoms } = from_json(res).unwrap();
+        let GetCorrruptedScopesResponse { corrupted_scopes } = from_json(res).unwrap();
 
-        assert_eq!(corrupted_denoms, Vec::<String>::new());
+        assert_eq!(corrupted_scopes, Vec::<Scope>::new());
 
         // no liquidity or pool assets changes
         let GetTotalPoolLiquidityResponse {
@@ -4119,7 +4178,7 @@ mod tests {
             Ok(ListAssetGroupsResponse {
                 asset_groups: BTreeMap::from([(
                     "group1".to_string(),
-                    vec!["asset1".to_string(), "asset2".to_string()],
+                    AssetGroup::new(vec!["asset1".to_string(), "asset2".to_string()]),
                 )]),
             })
         );
@@ -4183,9 +4242,12 @@ mod tests {
                 asset_groups: BTreeMap::from([
                     (
                         "group1".to_string(),
-                        vec!["asset1".to_string(), "asset2".to_string()]
+                        AssetGroup::new(vec!["asset1".to_string(), "asset2".to_string()])
                     ),
-                    ("group2".to_string(), vec!["asset3".to_string()]),
+                    (
+                        "group2".to_string(),
+                        AssetGroup::new(vec!["asset3".to_string()])
+                    ),
                 ]),
             })
         );
@@ -4269,9 +4331,12 @@ mod tests {
             BTreeMap::from([
                 (
                     "group1".to_string(),
-                    vec!["asset1".to_string(), "asset2".to_string()]
+                    AssetGroup::new(vec!["asset1".to_string(), "asset2".to_string()])
                 ),
-                ("group2".to_string(), vec!["asset3".to_string()]),
+                (
+                    "group2".to_string(),
+                    AssetGroup::new(vec!["asset3".to_string()])
+                ),
             ])
         );
 
@@ -4313,7 +4378,7 @@ mod tests {
             list_asset_groups_res.asset_groups,
             BTreeMap::from([(
                 "group1".to_string(),
-                vec!["asset1".to_string(), "asset2".to_string()]
+                AssetGroup::new(vec!["asset1".to_string(), "asset2".to_string()])
             )])
         );
 
@@ -4345,5 +4410,157 @@ mod tests {
                 label: "non_existent_group".to_string()
             }
         );
+    }
+
+    #[test]
+    fn test_mark_corrupted_scopes() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let admin = "admin";
+        let moderator = "moderator";
+        let user = "user";
+
+        // Add supply for denoms using deps.querier.update_balance
+        deps.querier.update_balance(
+            env.contract.address.clone(),
+            vec![Coin::new(1000000, "asset1"), Coin::new(2000000, "asset2")],
+        );
+
+        // Initialize the contract
+        let init_msg = InstantiateMsg {
+            admin: Some(admin.to_string()),
+            moderator: moderator.to_string(),
+            pool_asset_configs: vec![
+                AssetConfig {
+                    denom: "asset1".to_string(),
+                    normalization_factor: Uint128::new(1),
+                },
+                AssetConfig {
+                    denom: "asset2".to_string(),
+                    normalization_factor: Uint128::new(1),
+                },
+            ],
+            alloyed_asset_subdenom: "alloyed".to_string(),
+            alloyed_asset_normalization_factor: Uint128::new(1),
+        };
+        let info = mock_info(admin, &[]);
+        instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
+
+        // Mark corrupted scopes
+        let mark_corrupted_scopes_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedScopes {
+            scopes: vec![Scope::Denom("asset1".to_string())],
+        });
+        let moderator_info = mock_info(moderator, &[]);
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            moderator_info.clone(),
+            mark_corrupted_scopes_msg,
+        )
+        .unwrap();
+
+        // Check the response
+        assert_eq!(
+            res.attributes,
+            vec![attr("method", "mark_corrupted_scopes")]
+        );
+
+        // Verify that the scope is marked as corrupted
+        // Query the contract to get the corrupted denoms
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedScopes {});
+        let query_res: GetCorrruptedScopesResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+
+        // Check that "asset1" is in the corrupted denoms list
+        assert_eq!(query_res.corrupted_scopes, vec![Scope::denom("asset1")]);
+
+        // Try to mark corrupted scopes as a non-moderator (should fail)
+        let user_info = mock_info(user, &[]);
+        let unauthorized_mark_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedScopes {
+            scopes: vec![Scope::denom("asset2")],
+        });
+        let err =
+            execute(deps.as_mut(), env.clone(), user_info, unauthorized_mark_msg).unwrap_err();
+        assert_eq!(err, ContractError::Unauthorized {});
+
+        // Test create_asset_group
+        let create_asset_group_msg = ContractExecMsg::Transmuter(ExecMsg::CreateAssetGroup {
+            label: "group1".to_string(),
+            denoms: vec!["asset1".to_string(), "asset2".to_string()],
+        });
+        let admin_info = mock_info(admin, &[]);
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            admin_info.clone(),
+            create_asset_group_msg,
+        )
+        .unwrap();
+
+        // Check the response
+        assert_eq!(
+            res.attributes,
+            vec![
+                attr("method", "create_asset_group"),
+                attr("label", "group1"),
+            ]
+        );
+
+        // Test mark_asset_group_as_corrupted
+        let moderator_info = mock_info(moderator, &[]);
+        let mark_group_corrupted_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedScopes {
+            scopes: vec![Scope::asset_group("group1")],
+        });
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            moderator_info.clone(),
+            mark_group_corrupted_msg,
+        )
+        .unwrap();
+
+        // Check the response
+        assert_eq!(
+            res.attributes,
+            vec![attr("method", "mark_corrupted_scopes"),]
+        );
+
+        // Verify that the asset group is marked as corrupted
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedScopes {});
+        let query_res: GetCorrruptedScopesResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+
+        // Check that both "asset1" and "asset2" are in the corrupted scopes list
+        assert_eq!(
+            query_res.corrupted_scopes,
+            vec![Scope::denom("asset1"), Scope::asset_group("group1")]
+        );
+
+        // Test unmark_corrupted_scopes for the asset group
+        let unmark_group_corrupted_msg =
+            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedScopes {
+                scopes: vec![Scope::asset_group("group1")],
+            });
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            moderator_info.clone(),
+            unmark_group_corrupted_msg,
+        )
+        .unwrap();
+
+        // Check the response
+        assert_eq!(
+            res.attributes,
+            vec![attr("method", "unmark_corrupted_scopes"),]
+        );
+
+        // Verify that the asset group is no longer marked as corrupted
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedScopes {});
+        let query_res: GetCorrruptedScopesResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+
+        // Check that the asset group is no longer in the corrupted scopes list
+        assert_eq!(query_res.corrupted_scopes, vec![Scope::denom("asset1")]);
     }
 }

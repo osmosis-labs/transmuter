@@ -1,7 +1,7 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{ensure, Coin, Deps, StdError, Uint128, Uint256};
 
-use crate::ContractError;
+use crate::{corruptable::Corruptable, ContractError};
 
 #[derive(PartialEq)]
 pub enum Rounding {
@@ -121,16 +121,6 @@ impl Asset {
         Ok(self)
     }
 
-    pub fn mark_as_corrupted(&'_ mut self) -> &'_ Self {
-        self.is_corrupted = true;
-        self
-    }
-
-    pub fn unmark_as_corrupted(&'_ mut self) -> &'_ Self {
-        self.is_corrupted = false;
-        self
-    }
-
     pub fn denom(&self) -> &str {
         &self.denom
     }
@@ -141,10 +131,6 @@ impl Asset {
 
     pub fn normalization_factor(&self) -> Uint128 {
         self.normalization_factor
-    }
-
-    pub fn is_corrupted(&self) -> bool {
-        self.is_corrupted
     }
 
     pub fn config(&self) -> AssetConfig {
@@ -185,6 +171,22 @@ impl Asset {
             .iter()
             .map(|coin| Self::unchecked(coin.amount, &coin.denom, Uint128::one()))
             .collect()
+    }
+}
+
+impl Corruptable for Asset {
+    fn is_corrupted(&self) -> bool {
+        self.is_corrupted
+    }
+
+    fn mark_as_corrupted(&mut self) -> &mut Self {
+        self.is_corrupted = true;
+        self
+    }
+
+    fn unmark_as_corrupted(&mut self) -> &mut Self {
+        self.is_corrupted = false;
+        self
     }
 }
 

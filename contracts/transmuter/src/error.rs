@@ -179,8 +179,8 @@ pub enum ContractError {
     #[error("Normalization factor must be positive")]
     NormalizationFactorMustBePositive {},
 
-    #[error("Corrupted asset: {denom} must not increase in amount or weight")]
-    CorruptedAssetRelativelyIncreased { denom: String }, // TODO: change this to threshold scope as well
+    #[error("Corrupted scope: {scope} must not increase in amount or weight")]
+    CorruptedScopeRelativelyIncreased { scope: Scope },
 
     #[error("Asset group {label} not found")]
     AssetGroupNotFound { label: String },
