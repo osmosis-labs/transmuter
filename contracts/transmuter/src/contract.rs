@@ -230,7 +230,7 @@ impl Transmuter<'_> {
         self.limiters.reset_change_limiter_states(
             deps.storage,
             env.block.time,
-            pool.weights()?
+            pool.asset_weights()?
                 .unwrap_or_default()
                 .into_iter()
                 .map(|(denom, weight)| (Scope::denom(&denom).key(), weight)) // TODO: handle asset group

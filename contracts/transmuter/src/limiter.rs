@@ -621,7 +621,7 @@ macro_rules! assert_reset_change_limiters_by_scope {
     ($scope:expr, $reset_at:expr, $transmuter:expr, $storage:expr) => {
         let pool = $transmuter.pool.load($storage).unwrap();
         let weights = pool
-            .weights()
+            .asset_weights()
             .unwrap()
             .unwrap_or_default()
             .into_iter()

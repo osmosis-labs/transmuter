@@ -20,7 +20,7 @@ impl TransmuterPool {
     ///
     /// If total pool asset amount is zero, returns None to signify that
     /// it makes no sense to calculate ratios, but not an error.
-    pub fn weights(&self) -> Result<Option<Vec<(String, Decimal)>>, ContractError> {
+    pub fn asset_weights(&self) -> Result<Option<Vec<(String, Decimal)>>, ContractError> {
         let std_norm_factor = lcm_from_iter(
             self.pool_assets
                 .iter()
@@ -52,7 +52,11 @@ impl TransmuterPool {
     }
 
     pub fn weights_map(&self) -> Result<BTreeMap<String, Decimal>, ContractError> {
-        Ok(self.weights()?.unwrap_or_default().into_iter().collect())
+        Ok(self
+            .asset_weights()?
+            .unwrap_or_default()
+            .into_iter()
+            .collect())
     }
 
     fn normalized_asset_values(
@@ -176,7 +180,7 @@ mod tests {
             asset_groups: BTreeMap::new(),
         };
 
-        let ratios = pool.weights().unwrap();
+        let ratios = pool.asset_weights().unwrap();
         assert_eq!(ratios, Some(expected));
     }
 
@@ -190,7 +194,7 @@ mod tests {
             asset_groups: BTreeMap::new(),
         };
 
-        let ratios = pool.weights().unwrap();
+        let ratios = pool.asset_weights().unwrap();
         assert_eq!(ratios, None);
     }
 }

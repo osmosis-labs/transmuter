@@ -96,7 +96,7 @@ impl TransmuterPool {
         }
 
         // if total pool value == 0 -> Empty mapping, later unwrap weight will be 0
-        let weight_pre_action = self.weights()?.unwrap_or_default();
+        let weight_pre_action = self.asset_weights()?.unwrap_or_default();
         let weight_pre_action = weight_pre_action.into_iter().collect::<HashMap<_, _>>();
 
         let res = action(self)?;
@@ -108,7 +108,7 @@ impl TransmuterPool {
             .filter(|asset| asset.is_corrupted());
 
         // if total pool value == 0 -> Empty mapping, later unwrap weight will be 0
-        let weight_post_action = self.weights()?.unwrap_or_default();
+        let weight_post_action = self.asset_weights()?.unwrap_or_default();
         let weight_post_action = weight_post_action.into_iter().collect::<HashMap<_, _>>();
 
         for post_action in corrupted_assets_post_action {
@@ -198,7 +198,11 @@ impl TransmuterPool {
     }
 
     fn get_weights(&self) -> Result<HashMap<String, Decimal>, ContractError> {
-        Ok(self.weights()?.unwrap_or_default().into_iter().collect())
+        Ok(self
+            .asset_weights()?
+            .unwrap_or_default()
+            .into_iter()
+            .collect())
     }
 
     /// Get the state of corrupted asset groups.

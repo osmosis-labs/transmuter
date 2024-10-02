@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
+
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::ensure;
+use cosmwasm_std::{ensure, Decimal};
 
 use crate::{corruptable::Corruptable, ContractError};
 
@@ -107,6 +109,8 @@ impl TransmuterPool {
             );
         }
 
+        // TODO: limit sizes of asset groups
+
         self.asset_groups.insert(label, AssetGroup::new(denoms));
 
         Ok(self)
@@ -122,10 +126,37 @@ impl TransmuterPool {
 
         Ok(self)
     }
+
+    pub fn asset_group_weights(&self) -> Result<BTreeMap<String, Decimal>, ContractError> {
+        let denom_weights: BTreeMap<_, _> = self
+            .asset_weights()?
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
+        let mut weights = BTreeMap::new();
+        for (label, asset_group) in &self.asset_groups {
+            let mut group_weight = Decimal::zero();
+            for denom in &asset_group.denoms {
+                let denom_weight = denom_weights
+                    .get(denom)
+                    .copied()
+                    .unwrap_or_else(Decimal::zero);
+                group_weight = group_weight.checked_add(denom_weight)?;
+            }
+            weights.insert(label.to_string(), group_weight);
+        }
+
+        Ok(weights)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use cosmwasm_std::Uint128;
+
+    use crate::asset::Asset;
+
     use super::*;
 
     #[test]
@@ -175,5 +206,39 @@ mod tests {
         assert!(group.is_corrupted());
         group.unmark_as_corrupted().unmark_as_corrupted();
         assert!(!group.is_corrupted());
+    }
+
+    #[test]
+    fn test_asset_group_weights() {
+        let mut pool = TransmuterPool::new(vec![
+            Asset::new(Uint128::new(200), "denom1", Uint128::new(2)).unwrap(),
+            Asset::new(Uint128::new(300), "denom2", Uint128::new(3)).unwrap(),
+            Asset::new(Uint128::new(500), "denom3", Uint128::new(5)).unwrap(),
+        ])
+        .unwrap();
+
+        // Test with empty pool
+        let weights = pool.asset_group_weights().unwrap();
+        assert!(weights.is_empty());
+
+        pool.create_asset_group(
+            "group1".to_string(),
+            vec!["denom1".to_string(), "denom2".to_string()],
+        )
+        .unwrap();
+
+        pool.create_asset_group("group2".to_string(), vec!["denom3".to_string()])
+            .unwrap();
+
+        let weights = pool.asset_group_weights().unwrap();
+        assert_eq!(weights.len(), 2);
+        assert_eq!(
+            weights.get("group1").unwrap(),
+            &Decimal::raw(666666666666666666)
+        );
+        assert_eq!(
+            weights.get("group2").unwrap(),
+            &Decimal::raw(333333333333333333)
+        );
     }
 }

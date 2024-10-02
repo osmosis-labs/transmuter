@@ -130,7 +130,7 @@ impl Transmuter<'_> {
         pool.join_pool(&tokens_in)?;
 
         // check and update limiters only if pool assets are not zero
-        if let Some(updated_weights) = pool.weights()? {
+        if let Some(updated_weights) = pool.asset_weights()? {
             let scope_value_pairs = construct_scope_value_pairs(
                 prev_weights,
                 updated_weights,
@@ -300,7 +300,7 @@ impl Transmuter<'_> {
             self.limiters.reset_change_limiter_states(
                 deps.storage,
                 env.block.time,
-                pool.weights()?
+                pool.asset_weights()?
                     .unwrap_or_default()
                     .into_iter()
                     .map(|(denom, weight)| (Scope::denom(&denom).key(), weight)) // TODO: handle asset group
@@ -312,7 +312,7 @@ impl Transmuter<'_> {
             pool.exit_pool(&tokens_out)?;
 
             // check and update limiters only if pool assets are not zero
-            if let Some(updated_weights) = pool.weights()? {
+            if let Some(updated_weights) = pool.asset_weights()? {
                 let scope_value_pairs = construct_scope_value_pairs(
                     prev_weights,
                     updated_weights,
@@ -377,7 +377,7 @@ impl Transmuter<'_> {
         );
 
         // check and update limiters only if pool assets are not zero
-        if let Some(updated_weights) = pool.weights()? {
+        if let Some(updated_weights) = pool.asset_weights()? {
             let scope_value_pairs = construct_scope_value_pairs(
                 prev_weights,
                 updated_weights,
@@ -438,7 +438,7 @@ impl Transmuter<'_> {
         );
 
         // check and update limiters only if pool assets are not zero
-        if let Some(updated_weights) = pool.weights()? {
+        if let Some(updated_weights) = pool.asset_weights()? {
             let scope_value_pairs = construct_scope_value_pairs(
                 prev_weights,
                 updated_weights,
@@ -620,11 +620,11 @@ impl Transmuter<'_> {
                     storage,
                     Scope::denom(corrupted.denom()), // TODO: bubble this up
                 )?;
-
-                // TODO: remove limiters from asset group too
-                // TODO: remove denom from asset group, if asset group is empty, remove it
             }
         }
+
+        // TODO: remove limiters from asset group too
+        // TODO: remove denom from asset group, if asset group is empty, remove it
 
         Ok(())
     }
