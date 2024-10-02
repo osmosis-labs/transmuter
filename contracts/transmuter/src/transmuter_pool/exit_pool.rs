@@ -6,7 +6,7 @@ use super::TransmuterPool;
 
 impl TransmuterPool {
     pub fn exit_pool(&mut self, tokens_out: &[Coin]) -> Result<(), ContractError> {
-        self.with_corrupted_asset_protocol(|pool| pool.unchecked_exit_pool(tokens_out))
+        self.with_corrupted_scopes_protocol(|pool| pool.unchecked_exit_pool(tokens_out))
     }
 
     pub fn unchecked_exit_pool(&mut self, tokens_out: &[Coin]) -> Result<(), ContractError> {
@@ -44,6 +44,8 @@ impl TransmuterPool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use crate::asset::Asset;
 
     use super::*;
@@ -57,6 +59,7 @@ mod tests {
                 Coin::new(100_000, ETH_USDC),
                 Coin::new(100_000, COSMOS_USDC),
             ]),
+            asset_groups: BTreeMap::new(),
         };
 
         // exit pool with first token
@@ -67,7 +70,8 @@ mod tests {
                 pool_assets: Asset::unchecked_equal_assets_from_coins(&[
                     Coin::new(90_000, ETH_USDC),
                     Coin::new(100_000, COSMOS_USDC),
-                ])
+                ]),
+                asset_groups: BTreeMap::new(),
             }
         );
 
@@ -79,7 +83,8 @@ mod tests {
                 pool_assets: Asset::unchecked_equal_assets_from_coins(&[
                     Coin::new(90_000, ETH_USDC),
                     Coin::new(90_000, COSMOS_USDC),
-                ])
+                ]),
+                asset_groups: BTreeMap::new(),
             }
         );
 
@@ -92,7 +97,8 @@ mod tests {
                 pool_assets: Asset::unchecked_equal_assets_from_coins(&[
                     Coin::new(0, ETH_USDC),
                     Coin::new(0, COSMOS_USDC),
-                ])
+                ]),
+                asset_groups: BTreeMap::new(),
             }
         );
     }
@@ -104,6 +110,7 @@ mod tests {
                 Coin::new(100_000, ETH_USDC),
                 Coin::new(100_000, COSMOS_USDC),
             ]),
+            asset_groups: BTreeMap::new(),
         };
 
         // exit pool with invalid token
@@ -134,6 +141,7 @@ mod tests {
                 Coin::new(100_000, ETH_USDC),
                 Coin::new(100_000, COSMOS_USDC),
             ]),
+            asset_groups: BTreeMap::new(),
         };
 
         let err = pool.exit_pool(&[Coin::new(100_001, ETH_USDC)]).unwrap_err();

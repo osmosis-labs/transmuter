@@ -1,6 +1,5 @@
 mod alloyed_asset;
 mod asset;
-mod asset_group;
 pub mod contract;
 mod corruptable;
 mod error;

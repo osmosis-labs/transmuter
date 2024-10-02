@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
-
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::ensure;
 
 use crate::{corruptable::Corruptable, ContractError};
+
+use super::TransmuterPool;
 
 #[cw_serde]
 pub struct AssetGroup {
@@ -54,28 +54,13 @@ impl Corruptable for AssetGroup {
     }
 }
 
-#[cw_serde]
-pub struct AssetGroups(BTreeMap<String, AssetGroup>);
-
-impl Default for AssetGroups {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl AssetGroups {
-    pub fn new() -> Self {
-        Self(BTreeMap::new())
-    }
-
-    pub fn has(&self, label: &str) -> bool {
-        self.0.contains_key(label)
+impl TransmuterPool {
+    pub fn has_asset_group(&self, label: &str) -> bool {
+        self.asset_groups.contains_key(label)
     }
 
     pub fn mark_corrupted_asset_group(&mut self, label: &str) -> Result<&mut Self, ContractError> {
-        let Self(asset_groups) = self;
-
-        asset_groups
+        self.asset_groups
             .get_mut(label)
             .ok_or_else(|| ContractError::AssetGroupNotFound {
                 label: label.to_string(),
@@ -89,9 +74,7 @@ impl AssetGroups {
         &mut self,
         label: &str,
     ) -> Result<&mut Self, ContractError> {
-        let Self(asset_groups) = self;
-
-        asset_groups
+        self.asset_groups
             .get_mut(label)
             .ok_or_else(|| ContractError::AssetGroupNotFound {
                 label: label.to_string(),
@@ -106,35 +89,38 @@ impl AssetGroups {
         label: String,
         denoms: Vec<String>,
     ) -> Result<&mut Self, ContractError> {
-        let Self(asset_groups) = self;
-
+        // ensure that asset group does not already exist
         ensure!(
-            !asset_groups.contains_key(&label),
+            !self.asset_groups.contains_key(&label),
             ContractError::AssetGroupAlreadyExists {
                 label: label.clone()
             }
         );
 
-        asset_groups.insert(label, AssetGroup::new(denoms));
+        // ensure that all denoms are valid pool assets
+        for denom in &denoms {
+            ensure!(
+                self.has_denom(denom),
+                ContractError::InvalidPoolAssetDenom {
+                    denom: denom.clone()
+                }
+            );
+        }
+
+        self.asset_groups.insert(label, AssetGroup::new(denoms));
 
         Ok(self)
     }
 
     pub fn remove_asset_group(&mut self, label: &str) -> Result<&mut Self, ContractError> {
-        let Self(asset_groups) = self;
-
         ensure!(
-            asset_groups.remove(label).is_some(),
+            self.asset_groups.remove(label).is_some(),
             ContractError::AssetGroupNotFound {
                 label: label.to_string()
             }
         );
 
         Ok(self)
-    }
-
-    pub fn into_inner(self) -> BTreeMap<String, AssetGroup> {
-        self.0
     }
 }
 

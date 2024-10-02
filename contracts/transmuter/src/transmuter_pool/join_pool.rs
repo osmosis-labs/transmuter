@@ -6,7 +6,7 @@ use super::TransmuterPool;
 
 impl TransmuterPool {
     pub fn join_pool(&mut self, tokens_in: &[Coin]) -> Result<(), ContractError> {
-        self.with_corrupted_asset_protocol(|pool| pool.unchecked_join_pool(tokens_in))
+        self.with_corrupted_scopes_protocol(|pool| pool.unchecked_join_pool(tokens_in))
     }
 
     fn unchecked_join_pool(&mut self, tokens_in: &[Coin]) -> Result<(), ContractError> {

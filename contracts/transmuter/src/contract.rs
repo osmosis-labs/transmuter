@@ -1,8 +1,4 @@
-use crate::{
-    asset_group::{AssetGroup, AssetGroups},
-    corruptable::Corruptable,
-    scope::Scope,
-};
+use crate::{corruptable::Corruptable, scope::Scope};
 use std::{collections::BTreeMap, iter};
 
 use crate::{
@@ -14,7 +10,7 @@ use crate::{
     math::{self, rescale},
     role::Role,
     swap::{BurnTarget, Entrypoint, SwapFromAlloyedConstraint, SwapToAlloyedConstraint, SWAP_FEE},
-    transmuter_pool::TransmuterPool,
+    transmuter_pool::{AssetGroup, TransmuterPool},
 };
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
@@ -48,7 +44,6 @@ pub struct Transmuter<'a> {
     pub(crate) alloyed_asset: AlloyedAsset<'a>,
     pub(crate) role: Role<'a>,
     pub(crate) limiters: Limiters<'a>,
-    pub(crate) asset_groups: Item<'a, AssetGroups>,
 }
 
 pub mod key {
@@ -76,7 +71,6 @@ impl Transmuter<'_> {
             ),
             role: Role::new(key::ADMIN, key::MODERATOR),
             limiters: Limiters::new(key::LIMITERS),
-            asset_groups: Item::new(key::ASSET_GROUP),
         }
     }
 
@@ -140,9 +134,6 @@ impl Transmuter<'_> {
         // set normalization factor for alloyed asset
         self.alloyed_asset
             .set_normalization_factor(deps.storage, alloyed_asset_normalization_factor)?;
-
-        // initialize asset groups
-        self.asset_groups.save(deps.storage, &AssetGroups::new())?;
 
         Ok(Response::new()
             .add_attribute("method", "instantiate")
@@ -261,25 +252,12 @@ impl Transmuter<'_> {
         // only admin can create asset group
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
-        // ensure that all denoms are valid pool assets
-        let pool = self.pool.load(deps.storage)?;
-        for denom in &denoms {
-            ensure!(
-                pool.has_denom(denom),
-                ContractError::InvalidPoolAssetDenom {
-                    denom: denom.clone()
-                }
-            );
-        }
-
         // create asset group
-        let mut asset_groups = self
-            .asset_groups
-            .may_load(deps.storage)?
-            .unwrap_or_default();
-
-        asset_groups.create_asset_group(label.clone(), denoms)?;
-        self.asset_groups.save(deps.storage, &asset_groups)?;
+        self.pool
+            .update(deps.storage, |mut pool| -> Result<_, ContractError> {
+                pool.create_asset_group(label.clone(), denoms)?;
+                Ok(pool)
+            })?;
 
         Ok(Response::new()
             .add_attribute("method", "create_asset_group")
@@ -297,13 +275,11 @@ impl Transmuter<'_> {
         // only admin can remove asset group
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
-        let mut asset_groups = self
-            .asset_groups
-            .may_load(deps.storage)?
-            .unwrap_or_default();
-
-        asset_groups.remove_asset_group(&label)?;
-        self.asset_groups.save(deps.storage, &asset_groups)?;
+        self.pool
+            .update(deps.storage, |mut pool| -> Result<_, ContractError> {
+                pool.remove_asset_group(&label)?;
+                Ok(pool)
+            })?;
 
         // remove all limiters for asset group
         let limiters = self
@@ -342,10 +318,6 @@ impl Transmuter<'_> {
         ensure_moderator_authority!(info.sender, self.role.moderator, deps.as_ref());
 
         let mut pool = self.pool.load(deps.storage)?;
-        let mut asset_groups = self
-            .asset_groups
-            .may_load(deps.storage)?
-            .unwrap_or_default();
 
         for scope in &scopes {
             match scope {
@@ -353,13 +325,12 @@ impl Transmuter<'_> {
                     pool.mark_corrupted_asset(denom)?;
                 }
                 Scope::AssetGroup(label) => {
-                    asset_groups.mark_corrupted_asset_group(label)?;
+                    pool.mark_corrupted_asset_group(label)?;
                 }
             }
         }
 
         self.pool.save(deps.storage, &pool)?;
-        self.asset_groups.save(deps.storage, &asset_groups)?;
 
         Ok(Response::new().add_attribute("method", "mark_corrupted_scopes"))
     }
@@ -377,10 +348,6 @@ impl Transmuter<'_> {
         ensure_moderator_authority!(info.sender, self.role.moderator, deps.as_ref());
 
         let mut pool = self.pool.load(deps.storage)?;
-        let mut asset_groups = self
-            .asset_groups
-            .may_load(deps.storage)?
-            .unwrap_or_default();
 
         for scope in &scopes {
             match scope {
@@ -388,13 +355,12 @@ impl Transmuter<'_> {
                     pool.unmark_corrupted_asset(denom)?;
                 }
                 Scope::AssetGroup(label) => {
-                    asset_groups.unmark_corrupted_asset_group(label)?;
+                    pool.unmark_corrupted_asset_group(label)?;
                 }
             }
         }
 
         self.pool.save(deps.storage, &pool)?;
-        self.asset_groups.save(deps.storage, &asset_groups)?;
 
         Ok(Response::new().add_attribute("method", "unmark_corrupted_scopes"))
     }
@@ -412,23 +378,20 @@ impl Transmuter<'_> {
         // only admin can register limiter
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
-        let asset_groups = self
-            .asset_groups
-            .may_load(deps.storage)?
-            .unwrap_or_default();
+        let pool = self.pool.load(deps.storage)?;
 
         match scope.clone() {
             Scope::Denom(denom) => {
                 // ensure pool has the specified denom
                 ensure!(
-                    self.pool.load(deps.storage)?.has_denom(&denom),
+                    pool.has_denom(&denom),
                     ContractError::InvalidPoolAssetDenom { denom }
                 );
             }
             Scope::AssetGroup(label) => {
                 // check if asset group exists
                 ensure!(
-                    asset_groups.has(&label),
+                    pool.has_asset_group(&label),
                     ContractError::AssetGroupNotFound { label }
                 );
             }
@@ -701,13 +664,10 @@ impl Transmuter<'_> {
         &self,
         QueryCtx { deps, env: _ }: QueryCtx,
     ) -> Result<ListAssetGroupsResponse, ContractError> {
-        let asset_groups = self
-            .asset_groups
-            .may_load(deps.storage)?
-            .unwrap_or_default();
+        let pool = self.pool.load(deps.storage)?;
 
         Ok(ListAssetGroupsResponse {
-            asset_groups: asset_groups.into_inner(),
+            asset_groups: pool.asset_groups,
         })
     }
 
@@ -860,21 +820,17 @@ impl Transmuter<'_> {
         QueryCtx { deps, env: _ }: QueryCtx,
     ) -> Result<GetCorrruptedScopesResponse, ContractError> {
         let pool = self.pool.load(deps.storage)?;
-        let asset_groups = self
-            .asset_groups
-            .may_load(deps.storage)?
-            .unwrap_or_default();
 
         let corrupted_assets = pool
             .corrupted_assets()
             .into_iter()
             .map(|a| Scope::denom(a.denom()));
 
-        let corrupted_asset_groups = asset_groups
-            .into_inner()
-            .into_iter()
+        let corrupted_asset_groups = pool
+            .asset_groups
+            .iter()
             .filter(|(_, asset_group)| asset_group.is_corrupted())
-            .map(|(label, _)| Scope::AssetGroup(label));
+            .map(|(label, _)| Scope::asset_group(label));
 
         Ok(GetCorrruptedScopesResponse {
             corrupted_scopes: corrupted_assets.chain(corrupted_asset_groups).collect(),

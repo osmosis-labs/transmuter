@@ -1,10 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-use cosmwasm_std::{ensure, Decimal};
+use cosmwasm_std::{ensure, Decimal, Uint128};
 
+use super::{asset_group::AssetGroup, TransmuterPool};
 use crate::{asset::Asset, corruptable::Corruptable, scope::Scope, ContractError};
-
-use super::TransmuterPool;
 
 impl TransmuterPool {
     pub fn mark_corrupted_asset(&mut self, corrupted_denom: &str) -> Result<(), ContractError> {
@@ -78,9 +77,9 @@ impl TransmuterPool {
         Ok(())
     }
 
-    /// Enforce corrupted assets protocol on specific action. This will ensure that amount or weight
-    /// of corrupted assets will never be increased.
-    pub fn with_corrupted_asset_protocol<A, R>(&mut self, action: A) -> Result<R, ContractError>
+    /// Enforce corrupted scopes protocol on specific action. This will ensure that amount or weight
+    /// of corrupted scopes will never be increased.
+    pub fn with_corrupted_scopes_protocol<A, R>(&mut self, action: A) -> Result<R, ContractError>
     where
         A: FnOnce(&mut Self) -> Result<R, ContractError>,
     {
@@ -135,6 +134,144 @@ impl TransmuterPool {
 
         Ok(res)
     }
+
+    /// Enforce corrupted scopes protocol on specific action. This will ensure that amount or weight
+    /// of corrupted scopes will never be increased.
+    pub fn _with_corrupted_scopes_protocol<A, R>(
+        &mut self,
+        asset_groups: BTreeMap<String, AssetGroup>,
+        action: A,
+    ) -> Result<R, ContractError>
+    where
+        A: FnOnce(&mut Self) -> Result<R, ContractError>,
+    {
+        let corrupted_assets_pre_action = self.get_corrupted_assets();
+        let corrupted_asset_groups = self.get_corrupted_asset_groups(asset_groups);
+
+        // early return result without any checks if no corrupted scope
+        if corrupted_assets_pre_action.is_empty() && corrupted_asset_groups.is_empty() {
+            return action(self);
+        }
+
+        let weight_pre_action = self.get_weights()?;
+        let corrupted_asset_groups_state_pre_action =
+            self.get_corrupted_asset_groups_state(&corrupted_asset_groups, &weight_pre_action)?;
+
+        let res = action(self)?;
+
+        let corrupted_assets_post_action = self.get_corrupted_assets();
+        let weight_post_action = self.get_weights()?;
+        let corrupted_asset_groups_state_post_action =
+            self.get_corrupted_asset_groups_state(&corrupted_asset_groups, &weight_post_action)?;
+
+        self.check_corrupted_assets(
+            &corrupted_assets_pre_action,
+            &corrupted_assets_post_action,
+            &weight_pre_action,
+            &weight_post_action,
+        )?;
+
+        self.check_corrupted_asset_groups(
+            &corrupted_asset_groups_state_pre_action,
+            &corrupted_asset_groups_state_post_action,
+        )?;
+
+        Ok(res)
+    }
+
+    fn get_corrupted_assets(&self) -> HashMap<String, Asset> {
+        self.pool_assets
+            .iter()
+            .filter(|asset| asset.is_corrupted())
+            .map(|asset| (asset.denom().to_string(), asset.clone()))
+            .collect()
+    }
+
+    fn get_corrupted_asset_groups(
+        &self,
+        asset_groups: BTreeMap<String, AssetGroup>,
+    ) -> BTreeMap<String, AssetGroup> {
+        asset_groups
+            .into_iter()
+            .filter(|(_, asset_group)| asset_group.is_corrupted())
+            .collect()
+    }
+
+    fn get_weights(&self) -> Result<HashMap<String, Decimal>, ContractError> {
+        Ok(self.weights()?.unwrap_or_default().into_iter().collect())
+    }
+
+    /// Get the state of corrupted asset groups.
+    /// returns map for label -> (amount, weight) for each asset group
+    fn get_corrupted_asset_groups_state(
+        &self,
+        corrupted_asset_groups: &BTreeMap<String, AssetGroup>,
+        weights: &HashMap<String, Decimal>,
+    ) -> Result<BTreeMap<String, (Uint128, Decimal)>, ContractError> {
+        corrupted_asset_groups
+            .iter()
+            .map(|(label, asset_group)| -> Result<_, ContractError> {
+                let (amount, weight) = asset_group.denoms().iter().try_fold(
+                    (Uint128::zero(), Decimal::zero()),
+                    |(acc_amount, acc_weight), denom| -> Result<_, ContractError> {
+                        let asset = self.get_pool_asset_by_denom(denom)?;
+                        let amount = acc_amount.checked_add(asset.amount())?;
+                        let weight = acc_weight
+                            .checked_add(*weights.get(denom).unwrap_or(&Decimal::zero()))?;
+                        Ok((amount, weight))
+                    },
+                )?;
+                Ok((label.clone(), (amount, weight)))
+            })
+            .collect()
+    }
+
+    fn check_corrupted_assets(
+        &self,
+        pre_action: &HashMap<String, Asset>,
+        post_action: &HashMap<String, Asset>,
+        weight_pre_action: &HashMap<String, Decimal>,
+        weight_post_action: &HashMap<String, Decimal>,
+    ) -> Result<(), ContractError> {
+        let zero_dec = Decimal::zero();
+        for (denom, post_asset) in post_action {
+            let pre_asset = pre_action.get(denom).ok_or(ContractError::Never)?;
+            let weight_pre = weight_pre_action.get(denom).unwrap_or(&zero_dec);
+            let weight_post = weight_post_action.get(denom).unwrap_or(&zero_dec);
+
+            let has_amount_increased = pre_asset.amount() < post_asset.amount();
+            let has_weight_increased = weight_pre < weight_post;
+
+            ensure!(
+                !has_amount_increased && !has_weight_increased,
+                ContractError::CorruptedScopeRelativelyIncreased {
+                    scope: Scope::denom(post_asset.denom())
+                }
+            );
+        }
+        Ok(())
+    }
+
+    fn check_corrupted_asset_groups(
+        &self,
+        pre_action: &BTreeMap<String, (Uint128, Decimal)>,
+        post_action: &BTreeMap<String, (Uint128, Decimal)>,
+    ) -> Result<(), ContractError> {
+        for (label, (pre_amount, pre_weight)) in pre_action {
+            let (post_amount, post_weight) = post_action.get(label).ok_or(ContractError::Never)?;
+
+            let has_amount_increased = pre_amount < post_amount;
+            let has_weight_increased = pre_weight < post_weight;
+
+            ensure!(
+                !has_amount_increased && !has_weight_increased,
+                ContractError::CorruptedScopeRelativelyIncreased {
+                    scope: Scope::asset_group(label)
+                }
+            );
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -153,6 +290,7 @@ mod tests {
                 Coin::new(1, "asset3"),
                 Coin::new(0, "asset4"),
             ]),
+            asset_groups: BTreeMap::new(),
         };
 
         // remove asset that is not in the pool
@@ -241,18 +379,19 @@ mod tests {
                 Coin::new(1, "asset3"),
                 Coin::new(0, "asset4"),
             ]),
+            asset_groups: BTreeMap::new(),
         };
 
         pool.mark_corrupted_asset("asset1").unwrap();
 
         // increase corrupted asset directly
         let err = pool
-            .with_corrupted_asset_protocol(|pool| {
-                pool.pool_assets
-                    .iter_mut()
-                    .find(|asset| asset.denom() == "asset1")
-                    .map(|asset| asset.increase_amount(Uint128::new(1)).unwrap())
-                    .unwrap();
+            ._with_corrupted_scopes_protocol(BTreeMap::new(), |pool| {
+                for asset in pool.pool_assets.iter_mut() {
+                    if asset.denom() == "asset1" {
+                        asset.increase_amount(Uint128::new(1)).unwrap();
+                    }
+                }
                 Ok(())
             })
             .unwrap_err();
@@ -266,12 +405,12 @@ mod tests {
 
         // decrease other asset -> increase corrupted asset weight
         let err = pool
-            .with_corrupted_asset_protocol(|pool| {
-                pool.pool_assets
-                    .iter_mut()
-                    .find(|asset| asset.denom() == "asset2")
-                    .map(|asset| asset.decrease_amount(Uint128::new(1)).unwrap())
-                    .unwrap();
+            ._with_corrupted_scopes_protocol(BTreeMap::new(), |pool| {
+                for asset in pool.pool_assets.iter_mut() {
+                    if asset.denom() == "asset2" {
+                        asset.decrease_amount(Uint128::new(1)).unwrap();
+                    }
+                }
                 Ok(())
             })
             .unwrap_err();
@@ -284,22 +423,24 @@ mod tests {
         );
 
         // decrease both corrupted and other asset with different weight
-        let err = pool.with_corrupted_asset_protocol(|pool| {
-            pool.pool_assets
-                .iter_mut()
-                .find(|asset| asset.denom() == "asset1")
-                .map(|asset| asset.decrease_amount(Uint128::new(1)).unwrap())
-                .unwrap();
-            pool.pool_assets
-                .iter_mut()
-                .find(|asset| asset.denom() == "asset2")
-                .map(|asset| asset.decrease_amount(Uint128::new(2)).unwrap())
-                .unwrap();
-            Ok(())
-        });
+        let err = pool
+            ._with_corrupted_scopes_protocol(BTreeMap::new(), |pool| {
+                for asset in pool.pool_assets.iter_mut() {
+                    if asset.denom() == "asset1" {
+                        asset.decrease_amount(Uint128::new(1)).unwrap();
+                    }
+
+                    if asset.denom() == "asset2" {
+                        asset.decrease_amount(Uint128::new(2)).unwrap();
+                    }
+                }
+
+                Ok(())
+            })
+            .unwrap_err();
 
         assert_eq!(
-            err.unwrap_err(),
+            err,
             ContractError::CorruptedScopeRelativelyIncreased {
                 scope: Scope::denom("asset1")
             }
@@ -313,23 +454,23 @@ mod tests {
                 Coin::new(1, "asset3"),
                 Coin::new(0, "asset4"),
             ]),
+            asset_groups: BTreeMap::new(),
         };
 
         pool.mark_corrupted_asset("asset1").unwrap();
 
         // decrease both corrupted and other asset with slightly more weight on the corrupted asset
         // requires slightly more weight to work due to rounding error
-        pool.with_corrupted_asset_protocol(|pool| {
-            pool.pool_assets
-                .iter_mut()
-                .find(|asset| asset.denom() == "asset1")
-                .map(|asset| asset.decrease_amount(Uint128::new(2)).unwrap())
-                .unwrap();
-            pool.pool_assets
-                .iter_mut()
-                .find(|asset| asset.denom() == "asset2")
-                .map(|asset| asset.decrease_amount(Uint128::new(1)).unwrap())
-                .unwrap();
+        pool._with_corrupted_scopes_protocol(BTreeMap::new(), |pool| {
+            for asset in pool.pool_assets.iter_mut() {
+                if asset.denom() == "asset1" {
+                    asset.decrease_amount(Uint128::new(2)).unwrap();
+                }
+
+                if asset.denom() == "asset2" {
+                    asset.decrease_amount(Uint128::new(1)).unwrap();
+                }
+            }
             Ok(())
         })
         .unwrap();
@@ -351,6 +492,122 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>()
+        );
+
+        let mut asset_groups = BTreeMap::from_iter(vec![(
+            "group1".to_string(),
+            AssetGroup::new(vec!["asset2".to_string(), "asset3".to_string()]),
+        )]);
+
+        // increase asset in non-corrupted asset group
+        pool._with_corrupted_scopes_protocol(asset_groups.clone(), |pool| {
+            for asset in pool.pool_assets.iter_mut() {
+                if asset.denom() == "asset2" {
+                    asset.increase_amount(Uint128::new(1)).unwrap();
+                }
+            }
+
+            Ok(())
+        })
+        .unwrap();
+
+        asset_groups.get_mut("group1").unwrap().mark_as_corrupted();
+
+        // increase asset in corrupted asset group
+        let err = pool
+            ._with_corrupted_scopes_protocol(asset_groups.clone(), |pool| {
+                for asset in pool.pool_assets.iter_mut() {
+                    if asset.denom() == "asset2" {
+                        asset.increase_amount(Uint128::new(1)).unwrap();
+                    }
+                }
+                Ok(())
+            })
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::CorruptedScopeRelativelyIncreased {
+                scope: Scope::asset_group("group1")
+            }
+        );
+
+        // increase all assets except asset1
+        let err = pool
+            ._with_corrupted_scopes_protocol(asset_groups.clone(), |pool| {
+                for asset in pool.pool_assets.iter_mut() {
+                    if asset.denom() != "asset1" {
+                        asset.increase_amount(Uint128::new(1)).unwrap();
+                    }
+                }
+
+                Ok(())
+            })
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::CorruptedScopeRelativelyIncreased {
+                scope: Scope::asset_group("group1")
+            }
+        );
+
+        pool.unmark_corrupted_asset("asset1").unwrap();
+
+        // decrease asset 2
+        pool._with_corrupted_scopes_protocol(asset_groups.clone(), |pool| {
+            for asset in pool.pool_assets.iter_mut() {
+                if asset.denom() == "asset2" {
+                    asset.decrease_amount(Uint128::new(1)).unwrap();
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        // decrease asset 3
+        pool._with_corrupted_scopes_protocol(asset_groups.clone(), |pool| {
+            for asset in pool.pool_assets.iter_mut() {
+                if asset.denom() == "asset3" {
+                    asset.decrease_amount(Uint128::new(1)).unwrap();
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        // decrease asset 2 and 3
+        pool._with_corrupted_scopes_protocol(asset_groups.clone(), |pool| {
+            for asset in pool.pool_assets.iter_mut() {
+                if asset.denom() == "asset2" {
+                    asset.decrease_amount(Uint128::new(1)).unwrap();
+                }
+
+                if asset.denom() == "asset3" {
+                    asset.decrease_amount(Uint128::new(1)).unwrap();
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        // decrease asset 4 should fail
+        let err = pool
+            ._with_corrupted_scopes_protocol(asset_groups.clone(), |pool| {
+                for asset in pool.pool_assets.iter_mut() {
+                    if asset.denom() == "asset4" {
+                        asset.decrease_amount(Uint128::new(1)).unwrap();
+                    }
+                }
+                Ok(())
+            })
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::CorruptedScopeRelativelyIncreased {
+                scope: Scope::asset_group("group1")
+            }
         );
     }
 }

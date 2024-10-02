@@ -10,10 +10,9 @@ use serde::Serialize;
 
 use crate::{
     alloyed_asset::{swap_from_alloyed, swap_to_alloyed},
-    asset_group::AssetGroup,
     contract::Transmuter,
     scope::Scope,
-    transmuter_pool::{AmountConstraint, TransmuterPool},
+    transmuter_pool::{AmountConstraint, AssetGroup, TransmuterPool},
     ContractError,
 };
 
@@ -135,7 +134,7 @@ impl Transmuter<'_> {
             let scope_value_pairs = construct_scope_value_pairs(
                 prev_weights,
                 updated_weights,
-                self.get_asset_group(deps.storage)?,
+                pool.asset_groups.clone(),
             )?;
 
             self.limiters.check_limits_and_update(
@@ -317,7 +316,7 @@ impl Transmuter<'_> {
                 let scope_value_pairs = construct_scope_value_pairs(
                     prev_weights,
                     updated_weights,
-                    self.get_asset_group(deps.storage)?,
+                    pool.asset_groups.clone(),
                 )?;
 
                 self.limiters.check_limits_and_update(
@@ -382,7 +381,7 @@ impl Transmuter<'_> {
             let scope_value_pairs = construct_scope_value_pairs(
                 prev_weights,
                 updated_weights,
-                self.get_asset_group(deps.storage)?,
+                pool.asset_groups.clone(),
             )?;
 
             self.limiters.check_limits_and_update(
@@ -443,7 +442,7 @@ impl Transmuter<'_> {
             let scope_value_pairs = construct_scope_value_pairs(
                 prev_weights,
                 updated_weights,
-                self.get_asset_group(deps.storage)?,
+                pool.asset_groups.clone(),
             )?;
             self.limiters.check_limits_and_update(
                 deps.storage,
@@ -628,18 +627,6 @@ impl Transmuter<'_> {
         }
 
         Ok(())
-    }
-
-    /// get asset group mapping from storage
-    fn get_asset_group(
-        &self,
-        storage: &dyn Storage,
-    ) -> Result<BTreeMap<String, AssetGroup>, StdError> {
-        Ok(self
-            .asset_groups
-            .may_load(storage)?
-            .unwrap_or_default()
-            .into_inner())
     }
 }
 
@@ -901,6 +888,7 @@ mod tests {
                         Asset::new(Uint128::from(1000u128), "denom1", 1u128).unwrap(),
                         Asset::new(Uint128::from(1000u128), "denom2", 10u128).unwrap(),
                     ],
+                    asset_groups: BTreeMap::new(),
                 },
             )
             .unwrap();
@@ -1038,6 +1026,7 @@ mod tests {
                         Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
                         Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
                     ],
+                    asset_groups: BTreeMap::new(),
                 },
             )
             .unwrap();
@@ -1237,6 +1226,7 @@ mod tests {
                 Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(), // 1000000000000 * 10
                 Asset::new(Uint128::from(1000000000000u128), "denom3", 1u128).unwrap(), // 1000000000000 * 100
             ],
+            asset_groups: BTreeMap::new(),
         };
 
         let all_denoms = pool
@@ -1339,6 +1329,7 @@ mod tests {
                 Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(), // 1000000000000 * 10
                 Asset::new(Uint128::from(1000000000000u128), "denom3", 1u128).unwrap(), // 1000000000000 * 100
             ],
+            asset_groups: BTreeMap::new(),
         };
 
         let all_denoms = pool
@@ -1423,6 +1414,7 @@ mod tests {
                 Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(), // 1000000000000 * 10
                 Asset::new(Uint128::from(1000000000000u128), "denom3", 1u128).unwrap(), // 1000000000000 * 100
             ],
+            asset_groups: BTreeMap::new(),
         };
 
         let all_denoms = pool
@@ -1568,6 +1560,7 @@ mod tests {
                         Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
                         Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
                     ],
+                    asset_groups: BTreeMap::new(),
                 },
             )
             .unwrap();
@@ -1665,6 +1658,7 @@ mod tests {
                         Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
                         Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
                     ],
+                    asset_groups: BTreeMap::new(),
                 },
             )
             .unwrap();

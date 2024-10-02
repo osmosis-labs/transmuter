@@ -171,7 +171,10 @@ mod tests {
             .into_iter()
             .map(|asset| asset.unwrap())
             .collect();
-        let pool = TransmuterPool { pool_assets };
+        let pool = TransmuterPool {
+            pool_assets,
+            asset_groups: BTreeMap::new(),
+        };
 
         let ratios = pool.weights().unwrap();
         assert_eq!(ratios, Some(expected));
@@ -184,6 +187,7 @@ mod tests {
                 Coin::new(0, "axlusdc"),
                 Coin::new(0, "whusdc"),
             ]),
+            asset_groups: BTreeMap::new(),
         };
 
         let ratios = pool.weights().unwrap();

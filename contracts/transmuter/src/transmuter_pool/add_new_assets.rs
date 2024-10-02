@@ -13,6 +13,8 @@ impl TransmuterPool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use cosmwasm_std::{Coin, Uint128, Uint64};
 
     use crate::transmuter_pool::{MAX_POOL_ASSET_DENOMS, MIN_POOL_ASSET_DENOMS};
@@ -26,6 +28,7 @@ mod tests {
                 Coin::new(100000000, "asset1"),
                 Coin::new(99999999, "asset2"),
             ]),
+            asset_groups: BTreeMap::new(),
         };
         let new_assets = Asset::unchecked_equal_assets_from_coins(&[
             Coin::new(0, "asset3"),
@@ -50,6 +53,7 @@ mod tests {
                 Coin::new(100000000, "asset1"),
                 Coin::new(99999999, "asset2"),
             ]),
+            asset_groups: BTreeMap::new(),
         };
         let new_assets = Asset::unchecked_equal_assets_from_coins(&[
             Coin::new(0, "asset3"),
@@ -72,6 +76,7 @@ mod tests {
                 Coin::new(100000000, "asset1"),
                 Coin::new(99999999, "asset2"),
             ]),
+            asset_groups: BTreeMap::new(),
         };
         let err = pool
             .add_new_assets(Asset::unchecked_equal_assets_from_coins(&[
@@ -94,6 +99,7 @@ mod tests {
                 Coin::new(100000000, "asset1"),
                 Coin::new(99999999, "asset2"),
             ]),
+            asset_groups: BTreeMap::new(),
         };
         let new_assets = Asset::unchecked_equal_assets_from_coins(&[
             Coin::new(0, "asset3"),
