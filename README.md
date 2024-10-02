@@ -156,7 +156,7 @@ As for now, `cosmwasmpool` module still haven't route pool deactivation to the c
 Admin is set on instantiate and can send the following msg:
 
 ```json
-{ "set_active_status": true }
+{ "set_active_status": { "active": true } }
 ```
 
 With deactivation, the pool will not be able to accept any execute or sudo request except for `set_active_status`.
