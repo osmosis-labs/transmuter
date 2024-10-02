@@ -74,6 +74,17 @@ impl TransmuterPool {
         );
 
         self.pool_assets.retain(|asset| asset.denom() != denom);
+
+        // remove corrupted asset from asset groups
+        for label in self.asset_groups.clone().keys() {
+            let asset_group = self.asset_groups.get_mut(label).unwrap();
+            asset_group.remove_denoms(vec![denom.to_string()]);
+
+            if asset_group.denoms().is_empty() {
+                self.asset_groups.remove(label);
+            }
+        }
+
         Ok(())
     }
 
@@ -613,5 +624,99 @@ mod tests {
                 scope: Scope::asset_group("group1")
             }
         );
+    }
+
+    #[test]
+    fn test_remove_corrupted_asset() {
+        let mut pool = TransmuterPool {
+            pool_assets: Asset::unchecked_equal_assets_from_coins(&[
+                Coin::new(100, "asset1"),
+                Coin::new(200, "asset2"),
+                Coin::new(300, "asset3"),
+            ]),
+            asset_groups: BTreeMap::from_iter(vec![(
+                "group1".to_string(),
+                AssetGroup::new(vec!["asset1".to_string(), "asset2".to_string()]),
+            )]),
+        };
+
+        // Mark asset2 as corrupted
+        pool.mark_corrupted_asset("asset2").unwrap();
+
+        // Attempt to remove asset2 with non-zero amount (should fail)
+        let err = pool.remove_corrupted_asset("asset2").unwrap_err();
+        assert_eq!(err, ContractError::InvalidCorruptedAssetRemoval {});
+
+        // Decrease amount of asset2 to zero
+        for asset in pool.pool_assets.iter_mut() {
+            if asset.denom() == "asset2" {
+                asset.decrease_amount(Uint128::new(200)).unwrap();
+            }
+        }
+
+        // Remove corrupted asset2 (should succeed)
+        pool.remove_corrupted_asset("asset2").unwrap();
+
+        assert_eq!(
+            pool.asset_groups,
+            BTreeMap::from_iter(vec![(
+                "group1".to_string(),
+                AssetGroup::new(vec!["asset1".to_string()]),
+            )])
+        );
+
+        // Verify asset2 is removed
+        assert_eq!(
+            pool.pool_assets,
+            vec![
+                Asset::unchecked(Uint128::new(100), "asset1", Uint128::one()),
+                Asset::unchecked(Uint128::new(300), "asset3", Uint128::one()),
+            ]
+        );
+
+        // Attempt to remove non-corrupted asset (should fail)
+        let err = pool.remove_corrupted_asset("asset1").unwrap_err();
+        assert_eq!(
+            err,
+            ContractError::InvalidCorruptedAssetDenom {
+                denom: "asset1".to_string()
+            }
+        );
+
+        // Attempt to remove non-existent asset (should fail)
+        let err = pool.remove_corrupted_asset("non_existent").unwrap_err();
+        assert_eq!(
+            err,
+            ContractError::InvalidTransmuteDenom {
+                denom: "non_existent".to_string(),
+                expected_denom: vec!["asset1".to_string(), "asset3".to_string()]
+            }
+        );
+
+        // Mark asset1 as corrupted
+        pool.mark_corrupted_asset("asset1").unwrap();
+
+        // Decrease amount of asset1 to zero
+        for asset in pool.pool_assets.iter_mut() {
+            if asset.denom() == "asset1" {
+                asset.decrease_amount(Uint128::new(100)).unwrap();
+            }
+        }
+
+        // Remove corrupted asset1
+        pool.remove_corrupted_asset("asset1").unwrap();
+
+        // Verify asset1 is removed
+        assert_eq!(
+            pool.pool_assets,
+            vec![Asset::unchecked(
+                Uint128::new(300),
+                "asset3",
+                Uint128::one()
+            ),]
+        );
+
+        // Verify asset groups are updated
+        assert!(pool.asset_groups.is_empty());
     }
 }
