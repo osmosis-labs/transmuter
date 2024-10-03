@@ -1,4 +1,7 @@
-use cosmwasm_std::{CheckedFromRatioError, DivideByZeroError, OverflowError};
+use cosmwasm_std::{
+    CheckedFromRatioError, Decimal256RangeExceeded, DecimalRangeExceeded, DivideByZeroError,
+    OverflowError,
+};
 
 #[derive(thiserror::Error, Debug, PartialEq)]
 pub enum TransmuterMathError {
@@ -11,6 +14,18 @@ pub enum TransmuterMathError {
 
     #[error("Missing data points to calculate moving average")]
     MissingDataPoints,
+
+    #[error("`{var_name}` must be within normalized range [0, 1]")]
+    OutOfNormalizedRange { var_name: String },
+
+    #[error("Normalized balance exceeds upper limit")]
+    NormalizedBalanceExceedsUpperLimit,
+
+    #[error("{0}")]
+    DecimalRangeExceeded(#[from] DecimalRangeExceeded),
+
+    #[error("{0}")]
+    Decimal256RangeExceeded(#[from] Decimal256RangeExceeded),
 
     #[error("{0}")]
     OverflowError(#[from] OverflowError),
