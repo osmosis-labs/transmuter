@@ -48,7 +48,7 @@ pub enum ContractError {
     InvalidCorruptedAssetDenom { denom: String },
 
     #[error("Only corrupted asset with 0 amount can be removed")]
-    InvalidCorruptedAssetRemoval {},
+    InvalidAssetRemoval {},
 
     #[error("Pool asset denom count must be within {min} - {max} inclusive, but got: {actual}")]
     PoolAssetDenomCountOutOfRange {

@@ -57,25 +57,18 @@ impl TransmuterPool {
             .any(|asset| asset.denom() == denom && asset.is_corrupted())
     }
 
-    pub fn remove_corrupted_asset(&mut self, denom: &str) -> Result<(), ContractError> {
+    pub fn remove_asset(&mut self, denom: &str) -> Result<(), ContractError> {
         let asset = self.get_pool_asset_by_denom(denom)?;
-        // make sure that removing asset is corrupted
-        ensure!(
-            asset.is_corrupted(),
-            ContractError::InvalidCorruptedAssetDenom {
-                denom: denom.to_string()
-            }
-        );
 
         // make sure that removing asset has 0 amount
         ensure!(
             asset.amount().is_zero(),
-            ContractError::InvalidCorruptedAssetRemoval {}
+            ContractError::InvalidAssetRemoval {}
         );
 
         self.pool_assets.retain(|asset| asset.denom() != denom);
 
-        // remove corrupted asset from asset groups
+        // remove asset from asset groups
         for label in self.asset_groups.clone().keys() {
             let asset_group = self.asset_groups.get_mut(label).unwrap();
             asset_group.remove_denoms(vec![denom.to_string()]);
@@ -644,8 +637,8 @@ mod tests {
         pool.mark_corrupted_asset("asset2").unwrap();
 
         // Attempt to remove asset2 with non-zero amount (should fail)
-        let err = pool.remove_corrupted_asset("asset2").unwrap_err();
-        assert_eq!(err, ContractError::InvalidCorruptedAssetRemoval {});
+        let err = pool.remove_asset("asset2").unwrap_err();
+        assert_eq!(err, ContractError::InvalidAssetRemoval {});
 
         // Decrease amount of asset2 to zero
         for asset in pool.pool_assets.iter_mut() {
@@ -655,7 +648,7 @@ mod tests {
         }
 
         // Remove corrupted asset2 (should succeed)
-        pool.remove_corrupted_asset("asset2").unwrap();
+        pool.remove_asset("asset2").unwrap();
 
         assert_eq!(
             pool.asset_groups,
@@ -674,17 +667,8 @@ mod tests {
             ]
         );
 
-        // Attempt to remove non-corrupted asset (should fail)
-        let err = pool.remove_corrupted_asset("asset1").unwrap_err();
-        assert_eq!(
-            err,
-            ContractError::InvalidCorruptedAssetDenom {
-                denom: "asset1".to_string()
-            }
-        );
-
         // Attempt to remove non-existent asset (should fail)
-        let err = pool.remove_corrupted_asset("non_existent").unwrap_err();
+        let err = pool.remove_asset("non_existent").unwrap_err();
         assert_eq!(
             err,
             ContractError::InvalidTransmuteDenom {
@@ -704,7 +688,7 @@ mod tests {
         }
 
         // Remove corrupted asset1
-        pool.remove_corrupted_asset("asset1").unwrap();
+        pool.remove_asset("asset1").unwrap();
 
         // Verify asset1 is removed
         assert_eq!(
