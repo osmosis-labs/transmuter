@@ -1773,7 +1773,7 @@ mod tests {
 
         deps.querier.update_balance(
             "someone",
-            vec![Coin::new(1_000_000_000_000, alloyed_denom.clone())], // TODO: increase shares
+            vec![Coin::new(1_000_000_000_000, alloyed_denom.clone())],
         );
         let all_nbtc = total_liquidity_of("nbtc", &deps.storage);
         let force_redeem_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
