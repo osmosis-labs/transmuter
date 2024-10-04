@@ -164,7 +164,6 @@ Using higher $𝑘$ values will result in larger penalties for moves away from t
 Lower $𝑘$ values provide a more gradual and linear impact, leading to a more moderate fee structure.
 '''
 
-# TODO: observation, the more d (= starting point further from midpoint) with the same change in d, the less fee is taken? 
 # we want the opposite, the further away from midpoint, it scales up the fee.
 # Potentially, Fee / (1-d)??????
 
