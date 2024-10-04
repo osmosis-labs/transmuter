@@ -280,6 +280,18 @@ impl Transmuter<'_> {
         }?
         .to_string();
 
+        let denoms_in_corrupted_asset_group = pool
+            .asset_groups
+            .iter()
+            .flat_map(|(_, asset_group)| {
+                if asset_group.is_corrupted() {
+                    asset_group.denoms().to_vec()
+                } else {
+                    vec![]
+                }
+            })
+            .collect::<Vec<_>>();
+
         let is_force_exit_corrupted_assets = tokens_out.iter().all(|coin| {
             let total_liquidity = pool
                 .get_pool_asset_by_denom(&coin.denom)
@@ -287,8 +299,11 @@ impl Transmuter<'_> {
                 .unwrap_or_default();
 
             let is_redeeming_total_liquidity = coin.amount == total_liquidity;
+            let is_under_corrupted_asset_group =
+                denoms_in_corrupted_asset_group.contains(&coin.denom);
 
-            pool.is_corrupted_asset(&coin.denom) && is_redeeming_total_liquidity
+            is_redeeming_total_liquidity
+                && (is_under_corrupted_asset_group || pool.is_corrupted_asset(&coin.denom))
         });
 
         // If all tokens out are corrupted assets and exit with all remaining liquidity
@@ -298,14 +313,21 @@ impl Transmuter<'_> {
 
             // change limiter needs reset if force redemption since it gets by passed
             // the current state will not be accurate
+
+            let asset_weights_iter = pool
+                .asset_weights()?
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(denom, weight)| (Scope::denom(&denom).key(), weight));
+            let asset_group_weights_iter = pool
+                .asset_group_weights()?
+                .into_iter()
+                .map(|(label, weight)| (Scope::asset_group(&label).key(), weight));
+
             self.limiters.reset_change_limiter_states(
                 deps.storage,
                 env.block.time,
-                pool.asset_weights()?
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|(denom, weight)| (Scope::denom(&denom).key(), weight)) // TODO: handle asset group
-                    .collect::<Vec<_>>(),
+                asset_weights_iter.chain(asset_group_weights_iter),
             )?;
         } else {
             let prev_weights = pool.weights_map()?;

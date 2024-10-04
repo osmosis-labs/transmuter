@@ -589,7 +589,7 @@ impl<'a> Limiters<'a> {
         &self,
         storage: &mut dyn Storage,
         block_time: Timestamp,
-        weights: Vec<(String, Decimal)>,
+        weights: impl Iterator<Item = (String, Decimal)>,
     ) -> Result<(), ContractError> {
         // there is no need to limit, since the number of limiters is expected to be small
         let limiters = self.list_limiters(storage)?;
@@ -620,12 +620,14 @@ impl<'a> Limiters<'a> {
 macro_rules! assert_reset_change_limiters_by_scope {
     ($scope:expr, $reset_at:expr, $transmuter:expr, $storage:expr) => {
         let pool = $transmuter.pool.load($storage).unwrap();
-        let weights = pool
+        let asset_weights = pool
             .asset_weights()
             .unwrap()
             .unwrap_or_default()
             .into_iter()
             .collect::<std::collections::HashMap<_, _>>();
+
+        let asset_group_weights = pool.asset_group_weights().unwrap();
 
         let limiters = $transmuter
             .limiters
@@ -635,8 +637,8 @@ macro_rules! assert_reset_change_limiters_by_scope {
         for (_label, limiter) in limiters {
             if let $crate::limiter::Limiter::ChangeLimiter(limiter) = limiter {
                 let value = match $scope {
-                    Scope::Denom(denom) => *weights.get(denom.as_str()).unwrap(),
-                    _ => unimplemented!("asset group weight is not supported yet"),
+                    Scope::Denom(denom) => *asset_weights.get(denom.as_str()).unwrap(),
+                    Scope::AssetGroup(label) => *asset_group_weights.get(label.as_str()).unwrap(),
                 };
                 assert_eq!(
                     limiter.divisions(),
@@ -3074,7 +3076,7 @@ mod tests {
                 .reset_change_limiter_states(
                     &mut deps.storage,
                     block_time,
-                    vec![(Scope::denom("denoma").key(), value)],
+                    vec![(Scope::denom("denoma").key(), value)].into_iter(),
                 )
                 .unwrap();
 
