@@ -679,7 +679,6 @@ fn construct_scope_value_pairs(
     let mut asset_group_weight_pairs: HashMap<Scope, (Decimal, Decimal)> = HashMap::new();
 
     // Reverse index the asset groups
-    // TODO: handle cases where asset group contains denom that does not exist
     let mut asset_groups_of_denom = HashMap::new();
     for (group, asset_group) in asset_group {
         for denom in asset_group.into_denoms() {
