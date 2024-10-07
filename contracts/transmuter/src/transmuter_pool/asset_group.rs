@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{ensure, Decimal};
+use cosmwasm_std::{ensure, Decimal, Uint64};
 
-use crate::{corruptable::Corruptable, ContractError};
+use crate::{corruptable::Corruptable, transmuter_pool::MAX_ASSET_GROUPS, ContractError};
 
 use super::TransmuterPool;
 
@@ -109,9 +109,15 @@ impl TransmuterPool {
             );
         }
 
-        // TODO: limit sizes of asset groups
-
         self.asset_groups.insert(label, AssetGroup::new(denoms));
+
+        ensure!(
+            Uint64::from(self.asset_groups.len() as u64) <= MAX_ASSET_GROUPS,
+            ContractError::AssetGroupCountOutOfRange {
+                max: MAX_ASSET_GROUPS,
+                actual: Uint64::new(self.asset_groups.len() as u64)
+            }
+        );
 
         Ok(self)
     }
@@ -234,6 +240,38 @@ mod tests {
         assert_eq!(
             weights.get("group2").unwrap(),
             &Decimal::raw(333333333333333333)
+        );
+    }
+
+    #[test]
+    fn test_create_asset_group_within_range() {
+        let mut pool = TransmuterPool::new(vec![
+            Asset::new(Uint128::new(100), "denom1", Uint128::new(1)).unwrap(),
+            Asset::new(Uint128::new(200), "denom2", Uint128::new(1)).unwrap(),
+            Asset::new(Uint128::new(300), "denom3", Uint128::new(1)).unwrap(),
+        ])
+        .unwrap();
+
+        // Test creating groups up to the maximum allowed
+        for i in 1..=MAX_ASSET_GROUPS.u64() {
+            let group_name = format!("group{}", i);
+            let result = pool.create_asset_group(group_name.clone(), vec!["denom1".to_string()]);
+            assert!(result.is_ok(), "Failed to create group {}", i);
+        }
+
+        // Attempt to create one more group, which should fail
+        let result = pool.create_asset_group("extra_group".to_string(), vec!["denom1".to_string()]);
+        assert!(
+            result.is_err(),
+            "Should not be able to create group beyond the maximum"
+        );
+        assert!(
+            matches!(
+                result.unwrap_err(),
+                ContractError::AssetGroupCountOutOfRange { max, actual }
+                if max == MAX_ASSET_GROUPS && actual == MAX_ASSET_GROUPS + Uint64::one()
+            ),
+            "Unexpected error when exceeding max asset groups"
         );
     }
 }

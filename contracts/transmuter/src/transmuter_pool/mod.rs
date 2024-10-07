@@ -25,6 +25,10 @@ const MIN_POOL_ASSET_DENOMS: Uint64 = Uint64::new(1u64);
 /// prevent the contract from running out of gas when iterating
 const MAX_POOL_ASSET_DENOMS: Uint64 = Uint64::new(20u64);
 
+/// Maximum number of asset groups allowed in a pool.
+/// This limit helps prevent excessive gas consumption when iterating over groups.
+const MAX_ASSET_GROUPS: Uint64 = Uint64::new(10u64);
+
 #[cw_serde]
 pub struct TransmuterPool {
     pub pool_assets: Vec<Asset>,

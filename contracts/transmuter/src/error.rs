@@ -57,6 +57,9 @@ pub enum ContractError {
         actual: Uint64,
     },
 
+    #[error("Asset group count must be within {max} inclusive, but got: {actual}")]
+    AssetGroupCountOutOfRange { max: Uint64, actual: Uint64 },
+
     #[error("Insufficient pool asset: required: {required}, available: {available}")]
     InsufficientPoolAsset { required: Coin, available: Coin },
 
