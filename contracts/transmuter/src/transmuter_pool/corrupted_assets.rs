@@ -101,7 +101,6 @@ impl TransmuterPool {
 
         // if total pool value == 0 -> Empty mapping, later unwrap weight will be 0
         let weight_pre_action = self.asset_weights()?.unwrap_or_default();
-        let weight_pre_action = weight_pre_action.into_iter().collect::<HashMap<_, _>>();
 
         let res = action(self)?;
 
@@ -113,7 +112,6 @@ impl TransmuterPool {
 
         // if total pool value == 0 -> Empty mapping, later unwrap weight will be 0
         let weight_post_action = self.asset_weights()?.unwrap_or_default();
-        let weight_post_action = weight_post_action.into_iter().collect::<HashMap<_, _>>();
 
         for post_action in corrupted_assets_post_action {
             let denom = post_action.denom().to_string();
@@ -157,14 +155,14 @@ impl TransmuterPool {
             return action(self);
         }
 
-        let weight_pre_action = self.get_weights()?;
+        let weight_pre_action = self.asset_weights()?.unwrap_or_default();
         let corrupted_asset_groups_state_pre_action =
             self.get_corrupted_asset_groups_state(&corrupted_asset_groups, &weight_pre_action)?;
 
         let res = action(self)?;
 
         let corrupted_assets_post_action = self.get_corrupted_assets();
-        let weight_post_action = self.get_weights()?;
+        let weight_post_action = self.asset_weights()?.unwrap_or_default();
         let corrupted_asset_groups_state_post_action =
             self.get_corrupted_asset_groups_state(&corrupted_asset_groups, &weight_post_action)?;
 
@@ -183,7 +181,7 @@ impl TransmuterPool {
         Ok(res)
     }
 
-    fn get_corrupted_assets(&self) -> HashMap<String, Asset> {
+    fn get_corrupted_assets(&self) -> BTreeMap<String, Asset> {
         self.pool_assets
             .iter()
             .filter(|asset| asset.is_corrupted())
@@ -201,20 +199,12 @@ impl TransmuterPool {
             .collect()
     }
 
-    fn get_weights(&self) -> Result<HashMap<String, Decimal>, ContractError> {
-        Ok(self
-            .asset_weights()?
-            .unwrap_or_default()
-            .into_iter()
-            .collect())
-    }
-
     /// Get the state of corrupted asset groups.
     /// returns map for label -> (amount, weight) for each asset group
     fn get_corrupted_asset_groups_state(
         &self,
         corrupted_asset_groups: &BTreeMap<String, AssetGroup>,
-        weights: &HashMap<String, Decimal>,
+        weights: &BTreeMap<String, Decimal>,
     ) -> Result<BTreeMap<String, (Uint128, Decimal)>, ContractError> {
         corrupted_asset_groups
             .iter()
@@ -236,10 +226,10 @@ impl TransmuterPool {
 
     fn check_corrupted_assets(
         &self,
-        pre_action: &HashMap<String, Asset>,
-        post_action: &HashMap<String, Asset>,
-        weight_pre_action: &HashMap<String, Decimal>,
-        weight_post_action: &HashMap<String, Decimal>,
+        pre_action: &BTreeMap<String, Asset>,
+        post_action: &BTreeMap<String, Asset>,
+        weight_pre_action: &BTreeMap<String, Decimal>,
+        weight_post_action: &BTreeMap<String, Decimal>,
     ) -> Result<(), ContractError> {
         let zero_dec = Decimal::zero();
         for (denom, post_asset) in post_action {

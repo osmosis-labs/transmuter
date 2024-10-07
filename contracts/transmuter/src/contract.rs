@@ -2152,7 +2152,7 @@ mod tests {
             .list_limiters(&deps.storage)
             .unwrap()
             .into_iter()
-            .map(|(k, v)| k)
+            .map(|(k, _)| k)
             .collect::<Vec<_>>();
         assert_eq!(
             limiters,

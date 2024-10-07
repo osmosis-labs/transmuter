@@ -128,12 +128,7 @@ impl TransmuterPool {
     }
 
     pub fn asset_group_weights(&self) -> Result<BTreeMap<String, Decimal>, ContractError> {
-        let denom_weights: BTreeMap<_, _> = self
-            .asset_weights()?
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
-
+        let denom_weights = self.asset_weights()?.unwrap_or_default();
         let mut weights = BTreeMap::new();
         for (label, asset_group) in &self.asset_groups {
             let mut group_weight = Decimal::zero();

@@ -126,7 +126,7 @@ impl Transmuter<'_> {
             ContractError::ZeroValueOperation {}
         );
 
-        let prev_weights = pool.weights_map()?;
+        let prev_weights = pool.asset_weights()?.unwrap_or_default();
 
         pool.join_pool(&tokens_in)?;
 
@@ -330,7 +330,7 @@ impl Transmuter<'_> {
                 asset_weights_iter.chain(asset_group_weights_iter),
             )?;
         } else {
-            let prev_weights = pool.weights_map()?;
+            let prev_weights = pool.asset_weights()?.unwrap_or_default();
 
             pool.exit_pool(&tokens_out)?;
 
@@ -385,7 +385,7 @@ impl Transmuter<'_> {
         env: Env,
     ) -> Result<Response, ContractError> {
         let pool = self.pool.load(deps.storage)?;
-        let prev_weights = pool.weights_map()?;
+        let prev_weights = pool.asset_weights()?.unwrap_or_default();
 
         let (mut pool, actual_token_out) =
             self.out_amt_given_in(deps.as_ref(), pool, token_in, token_out_denom)?;
@@ -443,7 +443,7 @@ impl Transmuter<'_> {
         env: Env,
     ) -> Result<Response, ContractError> {
         let pool = self.pool.load(deps.storage)?;
-        let prev_weights = pool.weights_map()?;
+        let prev_weights = pool.asset_weights()?.unwrap_or_default();
 
         let (mut pool, actual_token_in) = self.in_amt_given_out(
             deps.as_ref(),
@@ -672,7 +672,7 @@ impl Transmuter<'_> {
 
 fn construct_scope_value_pairs(
     prev_weights: BTreeMap<String, Decimal>,
-    updated_weights: Vec<(String, Decimal)>,
+    updated_weights: BTreeMap<String, Decimal>,
     asset_group: BTreeMap<String, AssetGroup>,
 ) -> Result<Vec<(Scope, (Decimal, Decimal))>, StdError> {
     let mut denom_weight_pairs: HashMap<Scope, (Decimal, Decimal)> = HashMap::new();
@@ -1775,7 +1775,7 @@ mod tests {
             .clone()
             .into_iter()
             .map(|(denom, (_, updated_weight))| (denom.to_string(), updated_weight))
-            .collect_vec();
+            .collect();
 
         let mut scope_value_pairs =
             construct_scope_value_pairs(prev_weights, updated_weights, asset_groups).unwrap();
