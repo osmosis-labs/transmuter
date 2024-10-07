@@ -54,7 +54,6 @@ pub mod key {
     pub const ADMIN: &str = "admin";
     pub const MODERATOR: &str = "moderator";
     pub const LIMITERS: &str = "limiters";
-    pub const ASSET_GROUP: &str = "asset_group";
 }
 
 #[contract]
