@@ -30,7 +30,7 @@ impl TransmuterPool {
         token_in_denom: &str,
         token_out_denom: &str,
     ) -> Result<(Coin, Coin), ContractError> {
-        self.with_corrupted_asset_protocol(|pool| {
+        self.with_corrupted_scopes_protocol(|pool| {
             pool.unchecked_transmute(amount_constraint, token_in_denom, token_out_denom)
         })
     }

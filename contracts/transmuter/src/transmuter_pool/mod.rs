@@ -1,4 +1,5 @@
 mod add_new_assets;
+mod asset_group;
 mod corrupted_assets;
 mod exit_pool;
 mod has_denom;
@@ -6,13 +7,14 @@ mod join_pool;
 mod transmute;
 mod weight;
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{ensure, Coin, Uint128, Uint64};
 
 use crate::{asset::Asset, ContractError};
 
+pub use asset_group::AssetGroup;
 pub use transmute::AmountConstraint;
 
 /// Minimum number of pool assets.
@@ -23,14 +25,22 @@ const MIN_POOL_ASSET_DENOMS: Uint64 = Uint64::new(1u64);
 /// prevent the contract from running out of gas when iterating
 const MAX_POOL_ASSET_DENOMS: Uint64 = Uint64::new(20u64);
 
+/// Maximum number of asset groups allowed in a pool.
+/// This limit helps prevent excessive gas consumption when iterating over groups.
+const MAX_ASSET_GROUPS: Uint64 = Uint64::new(10u64);
+
 #[cw_serde]
 pub struct TransmuterPool {
     pub pool_assets: Vec<Asset>,
+    pub asset_groups: BTreeMap<String, AssetGroup>,
 }
 
 impl TransmuterPool {
     pub fn new(pool_assets: Vec<Asset>) -> Result<Self, ContractError> {
-        let pool = Self { pool_assets };
+        let pool = Self {
+            pool_assets,
+            asset_groups: BTreeMap::new(),
+        };
 
         pool.ensure_no_duplicated_denom()?;
         pool.ensure_pool_asset_count_within_range()?;
@@ -111,7 +121,10 @@ impl TransmuterPool {
             })
             .collect::<Result<Vec<_>, ContractError>>()?;
 
-        Ok(Self { pool_assets })
+        Ok(Self {
+            pool_assets,
+            ..self
+        })
     }
 }
 
@@ -138,6 +151,7 @@ mod tests {
             TransmuterPool::new(Asset::unchecked_equal_assets(&["a"])).unwrap(),
             TransmuterPool {
                 pool_assets: Asset::unchecked_equal_assets(&["a"]),
+                asset_groups: BTreeMap::new(),
             }
         );
 
@@ -146,6 +160,7 @@ mod tests {
             TransmuterPool::new(Asset::unchecked_equal_assets(&["a", "b"])).unwrap(),
             TransmuterPool {
                 pool_assets: Asset::unchecked_equal_assets(&["a", "b"]),
+                asset_groups: BTreeMap::new(),
             }
         );
 
@@ -156,7 +171,8 @@ mod tests {
         assert_eq!(
             TransmuterPool::new(assets.clone()).unwrap(),
             TransmuterPool {
-                pool_assets: assets
+                pool_assets: assets,
+                asset_groups: BTreeMap::new(),
             }
         );
 

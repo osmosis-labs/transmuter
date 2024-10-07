@@ -1,3 +1,4 @@
+use crate::{corruptable::Corruptable, scope::Scope};
 use std::{collections::BTreeMap, iter};
 
 use crate::{
@@ -9,7 +10,7 @@ use crate::{
     math::{self, rescale},
     role::Role,
     swap::{BurnTarget, Entrypoint, SwapFromAlloyedConstraint, SwapToAlloyedConstraint, SWAP_FEE},
-    transmuter_pool::TransmuterPool,
+    transmuter_pool::{AssetGroup, TransmuterPool},
 };
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
@@ -225,67 +226,155 @@ impl Transmuter<'_> {
         pool.add_new_assets(assets)?;
         self.pool.save(deps.storage, &pool)?;
 
+        let asset_weights_iter = pool
+            .asset_weights()?
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(denom, weight)| (Scope::denom(&denom).key(), weight));
+        let asset_group_weights_iter = pool
+            .asset_group_weights()?
+            .into_iter()
+            .map(|(label, weight)| (Scope::asset_group(&label).key(), weight));
+
         self.limiters.reset_change_limiter_states(
             deps.storage,
             env.block.time,
-            pool.weights()?.unwrap_or_default(),
+            asset_weights_iter.chain(asset_group_weights_iter),
         )?;
 
         Ok(Response::new().add_attribute("method", "add_new_assets"))
     }
 
-    /// Mark designated denoms as corrupted assets.
-    /// As a result, the corrupted assets will not allowed to be increased by any means,
-    /// both in terms of amount and weight.
-    /// The only way to redeem other pool asset, is to also redeem the corrupted asset
-    /// with the same pool-defnined value.
     #[sv::msg(exec)]
-    fn mark_corrupted_assets(
+    fn create_asset_group(
         &self,
         ExecCtx { deps, env: _, info }: ExecCtx,
+        label: String,
         denoms: Vec<String>,
     ) -> Result<Response, ContractError> {
-        non_empty_input_required("denoms", &denoms)?;
+        nonpayable(&info.funds)?;
+
+        // only admin can create asset group
+        ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
+
+        // create asset group
+        self.pool
+            .update(deps.storage, |mut pool| -> Result<_, ContractError> {
+                pool.create_asset_group(label.clone(), denoms)?;
+                Ok(pool)
+            })?;
+
+        Ok(Response::new()
+            .add_attribute("method", "create_asset_group")
+            .add_attribute("label", label))
+    }
+
+    #[sv::msg(exec)]
+    fn remove_asset_group(
+        &self,
+        ExecCtx { deps, env: _, info }: ExecCtx,
+        label: String,
+    ) -> Result<Response, ContractError> {
+        nonpayable(&info.funds)?;
+
+        // only admin can remove asset group
+        ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
+
+        self.pool
+            .update(deps.storage, |mut pool| -> Result<_, ContractError> {
+                pool.remove_asset_group(&label)?;
+                Ok(pool)
+            })?;
+
+        // remove all limiters for asset group
+        let limiters = self
+            .limiters
+            .list_limiters_by_scope(deps.storage, &Scope::AssetGroup(label.clone()))?;
+
+        for (limiter_label, _) in limiters {
+            self.limiters.unchecked_deregister(
+                deps.storage,
+                Scope::AssetGroup(label.clone()),
+                &limiter_label,
+            )?;
+        }
+
+        Ok(Response::new()
+            .add_attribute("method", "remove_asset_group")
+            .add_attribute("label", label))
+    }
+
+    /// Mark designated scopes as corrupted scopes.
+    /// As a result, the corrupted scopes will not allowed to be increased by any means,
+    /// both in terms of amount and weight.
+    /// The only way to redeem other pool asset outside of the corrupted scopes is
+    /// to also redeem asset within the corrupted scopes
+    /// with the same pool-defnined value.
+    #[sv::msg(exec)]
+    fn mark_corrupted_scopes(
+        &self,
+        ExecCtx { deps, env: _, info }: ExecCtx,
+        scopes: Vec<Scope>,
+    ) -> Result<Response, ContractError> {
+        non_empty_input_required("scopes", &scopes)?;
         nonpayable(&info.funds)?;
 
         // only moderator can mark corrupted assets
         ensure_moderator_authority!(info.sender, self.role.moderator, deps.as_ref());
 
-        self.pool
-            .update(deps.storage, |mut pool| -> Result<_, ContractError> {
-                pool.mark_corrupted_assets(&denoms)?;
-                Ok(pool)
-            })?;
+        let mut pool = self.pool.load(deps.storage)?;
 
-        Ok(Response::new().add_attribute("method", "mark_corrupted_assets"))
+        for scope in &scopes {
+            match scope {
+                Scope::Denom(denom) => {
+                    pool.mark_corrupted_asset(denom)?;
+                }
+                Scope::AssetGroup(label) => {
+                    pool.mark_corrupted_asset_group(label)?;
+                }
+            }
+        }
+
+        self.pool.save(deps.storage, &pool)?;
+
+        Ok(Response::new().add_attribute("method", "mark_corrupted_scopes"))
     }
 
     #[sv::msg(exec)]
-    fn unmark_corrupted_assets(
+    fn unmark_corrupted_scopes(
         &self,
         ExecCtx { deps, env: _, info }: ExecCtx,
-        denoms: Vec<String>,
+        scopes: Vec<Scope>,
     ) -> Result<Response, ContractError> {
-        non_empty_input_required("denoms", &denoms)?;
+        non_empty_input_required("scopes", &scopes)?;
         nonpayable(&info.funds)?;
 
         // only moderator can unmark corrupted assets
         ensure_moderator_authority!(info.sender, self.role.moderator, deps.as_ref());
 
-        self.pool
-            .update(deps.storage, |mut pool| -> Result<_, ContractError> {
-                pool.unmark_corrupted_assets(&denoms)?;
-                Ok(pool)
-            })?;
+        let mut pool = self.pool.load(deps.storage)?;
 
-        Ok(Response::new().add_attribute("method", "unmark_corrupted_assets"))
+        for scope in &scopes {
+            match scope {
+                Scope::Denom(denom) => {
+                    pool.unmark_corrupted_asset(denom)?;
+                }
+                Scope::AssetGroup(label) => {
+                    pool.unmark_corrupted_asset_group(label)?;
+                }
+            }
+        }
+
+        self.pool.save(deps.storage, &pool)?;
+
+        Ok(Response::new().add_attribute("method", "unmark_corrupted_scopes"))
     }
 
     #[sv::msg(exec)]
     fn register_limiter(
         &self,
         ExecCtx { deps, env: _, info }: ExecCtx,
-        denom: String,
+        scope: Scope,
         label: String,
         limiter_params: LimiterParams,
     ) -> Result<Response, ContractError> {
@@ -294,18 +383,32 @@ impl Transmuter<'_> {
         // only admin can register limiter
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
-        // ensure pool has the specified denom
         let pool = self.pool.load(deps.storage)?;
-        ensure!(
-            pool.has_denom(&denom),
-            ContractError::InvalidPoolAssetDenom { denom }
-        );
 
+        match scope.clone() {
+            Scope::Denom(denom) => {
+                // ensure pool has the specified denom
+                ensure!(
+                    pool.has_denom(&denom),
+                    ContractError::InvalidPoolAssetDenom { denom }
+                );
+            }
+            Scope::AssetGroup(label) => {
+                // check if asset group exists
+                ensure!(
+                    pool.has_asset_group(&label),
+                    ContractError::AssetGroupNotFound { label }
+                );
+            }
+        };
+
+        let scope_key = scope.key();
         let base_attrs = vec![
             ("method", "register_limiter"),
-            ("denom", &denom),
             ("label", &label),
+            ("scope", &scope_key),
         ];
+
         let limiter_attrs = match &limiter_params {
             LimiterParams::ChangeLimiter {
                 window_config,
@@ -330,7 +433,7 @@ impl Transmuter<'_> {
 
         // register limiter
         self.limiters
-            .register(deps.storage, &denom, &label, limiter_params)?;
+            .register(deps.storage, scope, &label, limiter_params)?;
 
         Ok(Response::new()
             .add_attributes(base_attrs)
@@ -341,7 +444,7 @@ impl Transmuter<'_> {
     fn deregister_limiter(
         &self,
         ExecCtx { deps, env: _, info }: ExecCtx,
-        denom: String,
+        scope: Scope,
         label: String,
     ) -> Result<Response, ContractError> {
         nonpayable(&info.funds)?;
@@ -349,14 +452,15 @@ impl Transmuter<'_> {
         // only admin can deregister limiter
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
+        let scope_key = scope.key();
         let attrs = vec![
             ("method", "deregister_limiter"),
-            ("denom", &denom),
+            ("scope", &scope_key),
             ("label", &label),
         ];
 
         // deregister limiter
-        self.limiters.deregister(deps.storage, &denom, &label)?;
+        self.limiters.deregister(deps.storage, scope, &label)?;
 
         Ok(Response::new().add_attributes(attrs))
     }
@@ -365,7 +469,7 @@ impl Transmuter<'_> {
     fn set_change_limiter_boundary_offset(
         &self,
         ExecCtx { deps, env: _, info }: ExecCtx,
-        denom: String,
+        scope: Scope,
         label: String,
         boundary_offset: Decimal,
     ) -> Result<Response, ContractError> {
@@ -375,9 +479,10 @@ impl Transmuter<'_> {
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
         let boundary_offset_string = boundary_offset.to_string();
+        let scope_key = scope.key();
         let attrs = vec![
             ("method", "set_change_limiter_boundary_offset"),
-            ("denom", &denom),
+            ("scope", &scope_key),
             ("label", &label),
             ("boundary_offset", boundary_offset_string.as_str()),
         ];
@@ -385,7 +490,7 @@ impl Transmuter<'_> {
         // set boundary offset
         self.limiters.set_change_limiter_boundary_offset(
             deps.storage,
-            &denom,
+            scope,
             &label,
             boundary_offset,
         )?;
@@ -397,7 +502,7 @@ impl Transmuter<'_> {
     fn set_static_limiter_upper_limit(
         &self,
         ExecCtx { deps, env: _, info }: ExecCtx,
-        denom: String,
+        scope: Scope,
         label: String,
         upper_limit: Decimal,
     ) -> Result<Response, ContractError> {
@@ -407,16 +512,18 @@ impl Transmuter<'_> {
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
         let upper_limit_string = upper_limit.to_string();
+        let scope_key = scope.key();
+
         let attrs = vec![
             ("method", "set_static_limiter_upper_limit"),
-            ("denom", &denom),
+            ("scope", &scope_key),
             ("label", &label),
             ("upper_limit", upper_limit_string.as_str()),
         ];
 
         // set upper limit
         self.limiters
-            .set_static_limiter_upper_limit(deps.storage, &denom, &label, upper_limit)?;
+            .set_static_limiter_upper_limit(deps.storage, scope, &label, upper_limit)?;
 
         Ok(Response::new().add_attributes(attrs))
     }
@@ -555,6 +662,18 @@ impl Transmuter<'_> {
         let limiters = self.limiters.list_limiters(deps.storage)?;
 
         Ok(ListLimitersResponse { limiters })
+    }
+
+    #[sv::msg(query)]
+    fn list_asset_groups(
+        &self,
+        QueryCtx { deps, env: _ }: QueryCtx,
+    ) -> Result<ListAssetGroupsResponse, ContractError> {
+        let pool = self.pool.load(deps.storage)?;
+
+        Ok(ListAssetGroupsResponse {
+            asset_groups: pool.asset_groups,
+        })
     }
 
     #[sv::msg(query)]
@@ -701,18 +820,26 @@ impl Transmuter<'_> {
     }
 
     #[sv::msg(query)]
-    pub(crate) fn get_corrupted_denoms(
+    pub(crate) fn get_corrupted_scopes(
         &self,
         QueryCtx { deps, env: _ }: QueryCtx,
-    ) -> Result<GetCorrruptedDenomsResponse, ContractError> {
+    ) -> Result<GetCorrruptedScopesResponse, ContractError> {
         let pool = self.pool.load(deps.storage)?;
-        let corrupted_denoms = pool
+
+        let corrupted_assets = pool
             .corrupted_assets()
             .into_iter()
-            .map(|a| a.denom().to_string())
-            .collect();
+            .map(|a| Scope::denom(a.denom()));
 
-        Ok(GetCorrruptedDenomsResponse { corrupted_denoms })
+        let corrupted_asset_groups = pool
+            .asset_groups
+            .iter()
+            .filter(|(_, asset_group)| asset_group.is_corrupted())
+            .map(|(label, _)| Scope::asset_group(label));
+
+        Ok(GetCorrruptedScopesResponse {
+            corrupted_scopes: corrupted_assets.chain(corrupted_asset_groups).collect(),
+        })
     }
 
     // --- admin ---
@@ -825,6 +952,11 @@ pub struct ListLimitersResponse {
 }
 
 #[cw_serde]
+pub struct ListAssetGroupsResponse {
+    pub asset_groups: BTreeMap<String, AssetGroup>,
+}
+
+#[cw_serde]
 pub struct GetSharesResponse {
     pub shares: Uint128,
 }
@@ -870,8 +1002,8 @@ pub struct CalcInAmtGivenOutResponse {
 }
 
 #[cw_serde]
-pub struct GetCorrruptedDenomsResponse {
-    pub corrupted_denoms: Vec<String>,
+pub struct GetCorrruptedScopesResponse {
+    pub corrupted_scopes: Vec<Scope>,
 }
 
 #[cw_serde]
@@ -1003,6 +1135,21 @@ mod tests {
         let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
         execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
 
+        // Create asset group
+        let create_asset_group_msg = ContractExecMsg::Transmuter(ExecMsg::CreateAssetGroup {
+            label: "group1".to_string(),
+            denoms: vec!["uosmo".to_string(), "uion".to_string()],
+        });
+
+        let info = mock_info(admin, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info.clone(),
+            create_asset_group_msg,
+        )
+        .unwrap();
+
         // set limiters
         let change_limiter_params = LimiterParams::ChangeLimiter {
             window_config: WindowConfig {
@@ -1016,10 +1163,25 @@ mod tests {
             upper_limit: Decimal::percent(60),
         };
 
+        // Register limiter for the asset group
+        let register_group_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+            scope: Scope::AssetGroup("group1".to_string()),
+            label: "group_change_limiter".to_string(),
+            limiter_params: change_limiter_params.clone(),
+        });
+
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info.clone(),
+            register_group_limiter_msg,
+        )
+        .unwrap();
+
         let info = mock_info(admin, &[]);
         for denom in ["uosmo", "uion"] {
             let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: denom.to_string(),
+                scope: Scope::Denom(denom.to_string()),
                 label: "change_limiter".to_string(),
                 limiter_params: change_limiter_params.clone(),
             });
@@ -1033,7 +1195,7 @@ mod tests {
             .unwrap();
 
             let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: denom.to_string(),
+                scope: Scope::Denom(denom.to_string()),
                 label: "static_limiter".to_string(),
                 limiter_params: static_limiter_params.clone(),
             });
@@ -1067,12 +1229,18 @@ mod tests {
         execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
 
         for denom in ["uosmo", "uion"] {
-            assert_dirty_change_limiters_by_denom!(
-                denom,
+            assert_dirty_change_limiters_by_scope!(
+                &Scope::denom(denom),
                 Transmuter::default().limiters,
                 deps.as_ref().storage
             );
         }
+
+        assert_dirty_change_limiters_by_scope!(
+            &Scope::asset_group("group1"),
+            Transmuter::default().limiters,
+            deps.as_ref().storage
+        );
 
         // Add new assets
 
@@ -1139,13 +1307,20 @@ mod tests {
 
         // Reset change limiter states if new assets are added
         for denom in ["uosmo", "uion"] {
-            assert_reset_change_limiters_by_denom!(
-                denom,
+            assert_reset_change_limiters_by_scope!(
+                &Scope::denom(denom),
                 reset_at,
                 transmuter,
                 deps.as_ref().storage
             );
         }
+
+        assert_reset_change_limiters_by_scope!(
+            &Scope::asset_group("group1"),
+            reset_at,
+            transmuter,
+            deps.as_ref().storage
+        );
 
         env.block.time = env.block.time.plus_nanos(360);
 
@@ -1208,7 +1383,6 @@ mod tests {
         instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap();
 
         // Manually reply
-
         let res = reply(
             deps.as_mut(),
             env.clone(),
@@ -1246,8 +1420,8 @@ mod tests {
 
         // Mark corrupted assets by non-moderator
         let info = mock_info("someone", &[]);
-        let mark_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedAssets {
-            denoms: vec!["wbtc".to_string(), "tbtc".to_string()],
+        let mark_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedScopes {
+            scopes: vec![Scope::denom("wbtc"), Scope::denom("tbtc")],
         });
 
         let res = execute(
@@ -1264,12 +1438,12 @@ mod tests {
         let res = query(
             deps.as_ref(),
             env.clone(),
-            ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedDenoms {}),
+            ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedScopes {}),
         )
         .unwrap();
-        let GetCorrruptedDenomsResponse { corrupted_denoms } = from_json(res).unwrap();
+        let GetCorrruptedScopesResponse { corrupted_scopes } = from_json(res).unwrap();
 
-        assert_eq!(corrupted_denoms, Vec::<String>::new());
+        assert_eq!(corrupted_scopes, Vec::<Scope>::new());
 
         // The asset must not yet be removed
         let res = query(
@@ -1309,7 +1483,7 @@ mod tests {
         // set limiters
         for denom in ["wbtc", "tbtc", "nbtc", "stbtc"] {
             let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: denom.to_string(),
+                scope: Scope::Denom(denom.to_string()),
                 label: "change_limiter".to_string(),
                 limiter_params: change_limiter_params.clone(),
             });
@@ -1324,7 +1498,7 @@ mod tests {
             .unwrap();
 
             let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: denom.to_string(),
+                scope: Scope::Denom(denom.to_string()),
                 label: "static_limiter".to_string(),
                 limiter_params: static_limiter_params.clone(),
             });
@@ -1337,6 +1511,36 @@ mod tests {
             .unwrap();
         }
 
+        // Create asset group
+        let create_asset_group_msg = ContractExecMsg::Transmuter(ExecMsg::CreateAssetGroup {
+            label: "btc_group1".to_string(),
+            denoms: vec!["nbtc".to_string(), "stbtc".to_string()],
+        });
+
+        let info = mock_info(admin, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info.clone(),
+            create_asset_group_msg,
+        )
+        .unwrap();
+
+        // Register change limiter for the asset group
+        let register_group_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+            scope: Scope::AssetGroup("btc_group1".to_string()),
+            label: "group_change_limiter".to_string(),
+            limiter_params: change_limiter_params.clone(),
+        });
+
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info.clone(),
+            register_group_limiter_msg,
+        )
+        .unwrap();
+
         // exit pool a bit to make sure the limiters are dirty
         deps.querier
             .update_balance("someone", vec![Coin::new(1_000, alloyed_denom.clone())]);
@@ -1348,9 +1552,9 @@ mod tests {
         execute(deps.as_mut(), env.clone(), info.clone(), exit_pool_msg).unwrap();
 
         // Mark corrupted assets by moderator
-        let corrupted_denoms = vec!["wbtc".to_string(), "tbtc".to_string()];
-        let mark_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedAssets {
-            denoms: corrupted_denoms.clone(),
+        let corrupted_scopes = vec![Scope::denom("wbtc"), Scope::denom("tbtc")];
+        let mark_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedScopes {
+            scopes: corrupted_scopes.clone(),
         });
 
         let info = mock_info(moderator, &[]);
@@ -1368,12 +1572,15 @@ mod tests {
         let res = query(
             deps.as_ref(),
             env.clone(),
-            ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedDenoms {}),
+            ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedScopes {}),
         )
         .unwrap();
-        let res: GetCorrruptedDenomsResponse = from_json(res).unwrap();
+        let get_corrupted_scopes_response: GetCorrruptedScopesResponse = from_json(res).unwrap();
 
-        assert_eq!(res.corrupted_denoms, corrupted_denoms);
+        assert_eq!(
+            get_corrupted_scopes_response.corrupted_scopes,
+            corrupted_scopes
+        );
 
         // Check if the assets were removed
         let res = query(
@@ -1411,6 +1618,20 @@ mod tests {
         let info = mock_info("someone", &[]);
         execute(deps.as_mut(), env.clone(), info.clone(), exit_pool_msg).unwrap();
 
+        for denom in ["wbtc", "tbtc", "nbtc", "stbtc"] {
+            assert_dirty_change_limiters_by_scope!(
+                &Scope::denom(denom),
+                Transmuter::default().limiters,
+                deps.as_ref().storage
+            );
+        }
+
+        assert_dirty_change_limiters_by_scope!(
+            &Scope::asset_group("btc_group1"),
+            Transmuter::default().limiters,
+            deps.as_ref().storage
+        );
+
         let env = increase_block_height(&env, 1);
 
         deps.querier
@@ -1428,9 +1649,14 @@ mod tests {
 
         let env = increase_block_height(&env, 1);
 
-        for denom in corrupted_denoms {
-            let expected_err = ContractError::CorruptedAssetRelativelyIncreased {
-                denom: denom.clone(),
+        for scope in corrupted_scopes {
+            let expected_err = ContractError::CorruptedScopeRelativelyIncreased {
+                scope: scope.clone(),
+            };
+
+            let denom = match scope {
+                Scope::Denom(denom) => denom,
+                _ => unreachable!(),
             };
 
             // join with corrupted denom should fail
@@ -1507,7 +1733,7 @@ mod tests {
             let err = execute(deps.as_mut(), env.clone(), info, exit_pool_msg).unwrap_err();
             assert!(matches!(
                 err,
-                ContractError::CorruptedAssetRelativelyIncreased { .. }
+                ContractError::CorruptedScopeRelativelyIncreased { .. }
             ));
 
             let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
@@ -1523,7 +1749,7 @@ mod tests {
             let err = execute(deps.as_mut(), env.clone(), info, exit_pool_msg).unwrap_err();
             assert!(matches!(
                 err,
-                ContractError::CorruptedAssetRelativelyIncreased { .. }
+                ContractError::CorruptedScopeRelativelyIncreased { .. }
             ));
         }
 
@@ -1546,7 +1772,7 @@ mod tests {
 
         deps.querier.update_balance(
             "someone",
-            vec![Coin::new(1_000_000_000_000, alloyed_denom.clone())], // TODO: increase shares
+            vec![Coin::new(1_000_000_000_000, alloyed_denom.clone())],
         );
         let all_nbtc = total_liquidity_of("nbtc", &deps.storage);
         let force_redeem_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
@@ -1564,8 +1790,8 @@ mod tests {
 
         assert_eq!(
             err,
-            ContractError::CorruptedAssetRelativelyIncreased {
-                denom: "wbtc".to_string()
+            ContractError::CorruptedScopeRelativelyIncreased {
+                scope: Scope::denom("wbtc")
             }
         );
 
@@ -1613,24 +1839,31 @@ mod tests {
         assert_eq!(
             Transmuter::default()
                 .limiters
-                .list_limiters_by_denom(&deps.storage, "wbtc")
+                .list_limiters_by_scope(&deps.storage, &Scope::denom("wbtc"))
                 .unwrap(),
             vec![]
         );
 
         for denom in ["tbtc", "nbtc", "stbtc"] {
-            assert_reset_change_limiters_by_denom!(
-                denom,
+            assert_reset_change_limiters_by_scope!(
+                &Scope::denom(denom),
                 env.block.time,
                 Transmuter::default(),
                 deps.as_ref().storage
             );
         }
 
+        assert_reset_change_limiters_by_scope!(
+            &Scope::asset_group("btc_group1"),
+            env.block.time,
+            Transmuter::default(),
+            deps.as_ref().storage
+        );
+
         // try unmark nbtc should fail
         let unmark_corrupted_assets_msg =
-            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedAssets {
-                denoms: vec!["nbtc".to_string()],
+            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedScopes {
+                scopes: vec![Scope::denom("nbtc")],
             });
 
         let info = mock_info(moderator, &[]);
@@ -1651,8 +1884,8 @@ mod tests {
 
         // unmark tbtc by non moderator should fail
         let unmark_corrupted_assets_msg =
-            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedAssets {
-                denoms: vec!["tbtc".to_string()],
+            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedScopes {
+                scopes: vec![Scope::denom("tbtc")],
             });
 
         let info = mock_info("someone", &[]);
@@ -1668,8 +1901,8 @@ mod tests {
 
         // unmark tbtc
         let unmark_corrupted_assets_msg =
-            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedAssets {
-                denoms: vec!["tbtc".to_string()],
+            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedScopes {
+                scopes: vec![Scope::denom("tbtc")],
             });
 
         let info = mock_info(moderator, &[]);
@@ -1685,13 +1918,13 @@ mod tests {
         let res = query(
             deps.as_ref(),
             env.clone(),
-            ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedDenoms {}),
+            ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedScopes {}),
         )
         .unwrap();
 
-        let GetCorrruptedDenomsResponse { corrupted_denoms } = from_json(res).unwrap();
+        let GetCorrruptedScopesResponse { corrupted_scopes } = from_json(res).unwrap();
 
-        assert_eq!(corrupted_denoms, Vec::<String>::new());
+        assert_eq!(corrupted_scopes, Vec::<Scope>::new());
 
         // no liquidity or pool assets changes
         let GetTotalPoolLiquidityResponse {
@@ -1719,10 +1952,218 @@ mod tests {
         assert_eq!(
             Transmuter::default()
                 .limiters
-                .list_limiters_by_denom(&deps.storage, "tbtc")
+                .list_limiters_by_scope(&deps.storage, &Scope::denom("tbtc"))
                 .unwrap()
                 .len(),
             2
+        );
+    }
+
+    #[test]
+    fn test_corrupted_asset_group() {
+        let mut deps = mock_dependencies();
+
+        deps.querier.update_balance(
+            "admin",
+            vec![
+                Coin::new(1_000_000_000_000, "tbtc"),
+                Coin::new(1_000_000_000_000, "nbtc"),
+                Coin::new(1_000_000_000_000, "stbtc"),
+            ],
+        );
+
+        let env = mock_env();
+        let info = mock_info("admin", &[]);
+
+        // Initialize contract with asset group
+        let init_msg = InstantiateMsg {
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("tbtc"),
+                AssetConfig::from_denom_str("nbtc"),
+                AssetConfig::from_denom_str("stbtc"),
+            ],
+            alloyed_asset_subdenom: "btc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
+            admin: Some("admin".to_string()),
+            moderator: "moderator".to_string(),
+        };
+
+        instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap();
+
+        // Manually reply
+        let res = reply(
+            deps.as_mut(),
+            env.clone(),
+            Reply {
+                id: 1,
+                result: SubMsgResult::Ok(SubMsgResponse {
+                    events: vec![],
+                    data: Some(
+                        MsgCreateDenomResponse {
+                            new_token_denom: "btc".to_string(),
+                        }
+                        .into(),
+                    ),
+                }),
+            },
+        )
+        .unwrap();
+
+        let alloyed_denom = res
+            .attributes
+            .into_iter()
+            .find(|attr| attr.key == "alloyed_denom")
+            .unwrap()
+            .value;
+
+        deps.querier.update_balance(
+            "user",
+            vec![Coin::new(3_000_000_000_000, alloyed_denom.clone())],
+        );
+
+        // Create asset group
+        let create_group_msg = ContractExecMsg::Transmuter(ExecMsg::CreateAssetGroup {
+            label: "group1".to_string(),
+            denoms: vec!["tbtc".to_string(), "nbtc".to_string()],
+        });
+        execute(deps.as_mut(), env.clone(), info.clone(), create_group_msg).unwrap();
+
+        // Set change limiter for btc group
+        let info = mock_info("admin", &[]);
+        let set_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+            scope: Scope::asset_group("group1"),
+            label: "big_change_limiter".to_string(),
+            limiter_params: LimiterParams::ChangeLimiter {
+                window_config: WindowConfig {
+                    window_size: Uint64::from(3600000000000u64), // 1 hour in nanoseconds
+                    division_count: Uint64::from(6u64),
+                },
+                boundary_offset: Decimal::percent(20),
+            },
+        });
+        execute(deps.as_mut(), env.clone(), info.clone(), set_limiter_msg).unwrap();
+
+        // set change limiter for stbtc
+        let set_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+            scope: Scope::denom("stbtc"),
+            label: "big_change_limiter".to_string(),
+            limiter_params: LimiterParams::ChangeLimiter {
+                window_config: WindowConfig {
+                    window_size: Uint64::from(3600000000000u64), // 1 hour in nanoseconds
+                    division_count: Uint64::from(6u64),
+                },
+                boundary_offset: Decimal::percent(20),
+            },
+        });
+        execute(deps.as_mut(), env.clone(), info.clone(), set_limiter_msg).unwrap();
+
+        // Add some liquidity
+        let add_liquidity_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info(
+                "user",
+                &[
+                    Coin::new(1_000_000_000_000, "tbtc"),
+                    Coin::new(1_000_000_000_000, "nbtc"),
+                    Coin::new(1_000_000_000_000, "stbtc"),
+                ],
+            ),
+            add_liquidity_msg,
+        )
+        .unwrap();
+
+        // Assert dirty change limiters for the asset group
+        assert_dirty_change_limiters_by_scope!(
+            &Scope::asset_group("group1"),
+            &Transmuter::default().limiters,
+            &deps.storage
+        );
+
+        // Mark asset group as corrupted
+        let info = mock_info("moderator", &[]);
+        let mark_corrupted_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedScopes {
+            scopes: vec![Scope::asset_group("group1")],
+        });
+        execute(deps.as_mut(), env.clone(), info.clone(), mark_corrupted_msg).unwrap();
+
+        // Query corrupted scopes
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedScopes {}),
+        )
+        .unwrap();
+
+        let GetCorrruptedScopesResponse { corrupted_scopes } = from_json(res).unwrap();
+
+        assert_eq!(corrupted_scopes, vec![Scope::asset_group("group1")]);
+
+        // Exit pool with all corrupted assets
+        let env = increase_block_height(&env, 1);
+        let info = mock_info("user", &[]);
+        let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
+            tokens_out: vec![
+                Coin::new(1_000_000_000_000, "tbtc"),
+                Coin::new(1_000_000_000_000, "nbtc"),
+            ],
+        });
+        execute(deps.as_mut(), env.clone(), info.clone(), exit_pool_msg).unwrap();
+
+        // Assert reset change limiters for the asset group
+        assert_reset_change_limiters_by_scope!(
+            &Scope::asset_group("group1"),
+            env.block.time,
+            Transmuter::default(),
+            &deps.storage
+        );
+
+        // Query corrupted scopes again to ensure the asset group is no longer corrupted
+        let res = query(
+            deps.as_ref(),
+            env.clone(),
+            ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedScopes {}),
+        )
+        .unwrap();
+
+        let GetCorrruptedScopesResponse { corrupted_scopes } = from_json(res).unwrap();
+
+        assert!(
+            corrupted_scopes.is_empty(),
+            "Corrupted scopes should be empty after exiting pool"
+        );
+
+        let msg = ContractQueryMsg::Transmuter(QueryMsg::GetTotalPoolLiquidity {});
+        let res = query(deps.as_ref(), env.clone(), msg).unwrap();
+        let GetTotalPoolLiquidityResponse {
+            total_pool_liquidity,
+        } = from_json(res).unwrap();
+
+        assert_eq!(
+            total_pool_liquidity,
+            vec![Coin::new(1_000_000_000_000, "stbtc")]
+        );
+
+        // Assert that only one limiter remains for stbtc
+        let limiters = Transmuter::default()
+            .limiters
+            .list_limiters(&deps.storage)
+            .unwrap()
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            limiters,
+            vec![("denom::stbtc".to_string(), "big_change_limiter".to_string())]
+        );
+
+        // Assert reset change limiters for the individual assets
+        assert_reset_change_limiters_by_scope!(
+            &Scope::denom("stbtc"),
+            env.block.time,
+            Transmuter::default(),
+            &deps.storage
         );
     }
 
@@ -2206,7 +2647,7 @@ mod tests {
             mock_env(),
             mock_info(user, &[]),
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1h".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: WindowConfig {
@@ -2226,7 +2667,7 @@ mod tests {
             mock_env(),
             mock_info(user, &[]),
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1h".to_string(),
                 limiter_params: LimiterParams::StaticLimiter {
                     upper_limit: Decimal::percent(60),
@@ -2247,7 +2688,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1h".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: window_config_1h.clone(),
@@ -2259,8 +2700,8 @@ mod tests {
 
         let attrs = vec![
             attr("method", "register_limiter"),
-            attr("denom", "uosmo"),
             attr("label", "1h"),
+            attr("scope", "denom::uosmo"),
             attr("limiter_type", "change_limiter"),
             attr("window_size", "3600000000000"),
             attr("division_count", "5"),
@@ -2275,7 +2716,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: "invalid_denom".to_string(),
+                scope: Scope::Denom("invalid_denom".to_string()),
                 label: "1h".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: window_config_1h.clone(),
@@ -2300,7 +2741,7 @@ mod tests {
         assert_eq!(
             limiters.limiters,
             vec![(
-                (String::from("uosmo"), String::from("1h")),
+                (Scope::denom("uosmo").key(), String::from("1h")),
                 Limiter::ChangeLimiter(
                     ChangeLimiter::new(window_config_1h.clone(), Decimal::percent(1)).unwrap()
                 )
@@ -2316,7 +2757,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1w".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: window_config_1w.clone(),
@@ -2328,8 +2769,8 @@ mod tests {
 
         let attrs_1w = vec![
             attr("method", "register_limiter"),
-            attr("denom", "uosmo"),
             attr("label", "1w"),
+            attr("scope", "denom::uosmo"),
             attr("limiter_type", "change_limiter"),
             attr("window_size", "604800000000"),
             attr("division_count", "5"),
@@ -2347,13 +2788,13 @@ mod tests {
             limiters.limiters,
             vec![
                 (
-                    (String::from("uosmo"), String::from("1h")),
+                    (Scope::denom("uosmo").key(), String::from("1h")),
                     Limiter::ChangeLimiter(
                         ChangeLimiter::new(window_config_1h, Decimal::percent(1)).unwrap()
                     )
                 ),
                 (
-                    (String::from("uosmo"), String::from("1w")),
+                    (Scope::denom("uosmo").key(), String::from("1w")),
                     Limiter::ChangeLimiter(
                         ChangeLimiter::new(window_config_1w.clone(), Decimal::percent(1)).unwrap()
                     )
@@ -2367,7 +2808,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "static".to_string(),
                 limiter_params: LimiterParams::StaticLimiter {
                     upper_limit: Decimal::percent(60),
@@ -2378,8 +2819,8 @@ mod tests {
 
         let attrs = vec![
             attr("method", "register_limiter"),
-            attr("denom", "uosmo"),
             attr("label", "static"),
+            attr("scope", "denom::uosmo"),
             attr("limiter_type", "static_limiter"),
             attr("upper_limit", "0.6"),
         ];
@@ -2392,7 +2833,7 @@ mod tests {
             mock_env(),
             mock_info(user, &[]),
             ContractExecMsg::Transmuter(ExecMsg::DeregisterLimiter {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1h".to_string(),
             }),
         )
@@ -2406,7 +2847,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::DeregisterLimiter {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1h".to_string(),
             }),
         )
@@ -2414,7 +2855,7 @@ mod tests {
 
         let attrs = vec![
             attr("method", "deregister_limiter"),
-            attr("denom", "uosmo"),
+            attr("scope", "denom::uosmo"),
             attr("label", "1h"),
         ];
 
@@ -2429,13 +2870,13 @@ mod tests {
             limiters.limiters,
             vec![
                 (
-                    (String::from("uosmo"), String::from("1w")),
+                    (Scope::denom("uosmo").key(), String::from("1w")),
                     Limiter::ChangeLimiter(
                         ChangeLimiter::new(window_config_1w.clone(), Decimal::percent(1)).unwrap()
                     )
                 ),
                 (
-                    (String::from("uosmo"), String::from("static")),
+                    (Scope::denom("uosmo").key(), String::from("static")),
                     Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
                 )
             ]
@@ -2447,7 +2888,7 @@ mod tests {
             mock_env(),
             mock_info(user, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetChangeLimiterBoundaryOffset {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1w".to_string(),
                 boundary_offset: Decimal::zero(),
             }),
@@ -2462,7 +2903,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetChangeLimiterBoundaryOffset {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1h".to_string(),
                 boundary_offset: Decimal::zero(),
             }),
@@ -2472,7 +2913,7 @@ mod tests {
         assert_eq!(
             err,
             ContractError::LimiterDoesNotExist {
-                denom: "uosmo".to_string(),
+                scope: Scope::denom("uosmo"),
                 label: "1h".to_string()
             }
         );
@@ -2483,7 +2924,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetChangeLimiterBoundaryOffset {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1w".to_string(),
                 boundary_offset: Decimal::percent(10),
             }),
@@ -2492,7 +2933,7 @@ mod tests {
 
         let attrs = vec![
             attr("method", "set_change_limiter_boundary_offset"),
-            attr("denom", "uosmo"),
+            attr("scope", "denom::uosmo"),
             attr("label", "1w"),
             attr("boundary_offset", "0.1"),
         ];
@@ -2508,13 +2949,13 @@ mod tests {
             limiters.limiters,
             vec![
                 (
-                    (String::from("uosmo"), String::from("1w")),
+                    (Scope::denom("uosmo").key(), String::from("1w")),
                     Limiter::ChangeLimiter(
                         ChangeLimiter::new(window_config_1w.clone(), Decimal::percent(10)).unwrap()
                     )
                 ),
                 (
-                    (String::from("uosmo"), String::from("static")),
+                    (Scope::denom("uosmo").key(), String::from("static")),
                     Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
                 )
             ]
@@ -2526,7 +2967,7 @@ mod tests {
             mock_env(),
             mock_info(user, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetStaticLimiterUpperLimit {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "static".to_string(),
                 upper_limit: Decimal::percent(50),
             }),
@@ -2541,7 +2982,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetStaticLimiterUpperLimit {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "1h".to_string(),
                 upper_limit: Decimal::percent(50),
             }),
@@ -2551,7 +2992,7 @@ mod tests {
         assert_eq!(
             err,
             ContractError::LimiterDoesNotExist {
-                denom: "uosmo".to_string(),
+                scope: Scope::denom("uosmo"),
                 label: "1h".to_string()
             }
         );
@@ -2562,7 +3003,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetStaticLimiterUpperLimit {
-                denom: "uosmo".to_string(),
+                scope: Scope::denom("uosmo"),
                 label: "1w".to_string(),
                 upper_limit: Decimal::percent(50),
             }),
@@ -2583,7 +3024,7 @@ mod tests {
             mock_env(),
             mock_info(admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetStaticLimiterUpperLimit {
-                denom: "uosmo".to_string(),
+                scope: Scope::Denom("uosmo".to_string()),
                 label: "static".to_string(),
                 upper_limit: Decimal::percent(50),
             }),
@@ -2592,7 +3033,7 @@ mod tests {
 
         let attrs = vec![
             attr("method", "set_static_limiter_upper_limit"),
-            attr("denom", "uosmo"),
+            attr("scope", "denom::uosmo"),
             attr("label", "static"),
             attr("upper_limit", "0.5"),
         ];
@@ -2608,13 +3049,13 @@ mod tests {
             limiters.limiters,
             vec![
                 (
-                    (String::from("uosmo"), String::from("1w")),
+                    (Scope::denom("uosmo").key(), String::from("1w")),
                     Limiter::ChangeLimiter(
                         ChangeLimiter::new(window_config_1w, Decimal::percent(10)).unwrap()
                     )
                 ),
                 (
-                    (String::from("uosmo"), String::from("static")),
+                    (Scope::denom("uosmo").key(), String::from("static")),
                     Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(50)).unwrap())
                 )
             ]
@@ -3913,5 +4354,475 @@ mod tests {
                 ]
             })
         );
+    }
+
+    #[test]
+    fn test_asset_group() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let admin = "admin";
+
+        // Setup balance for each asset
+        deps.querier.update_balance(
+            env.contract.address.clone(),
+            vec![
+                Coin::new(1000000, "asset1"),
+                Coin::new(1000000, "asset2"),
+                Coin::new(1000000, "asset3"),
+            ],
+        );
+
+        // Initialize the contract
+        let instantiate_msg = InstantiateMsg {
+            admin: Some(admin.to_string()),
+            moderator: "moderator".to_string(),
+            pool_asset_configs: vec![
+                AssetConfig {
+                    denom: "asset1".to_string(),
+                    normalization_factor: Uint128::from(1000000u128),
+                },
+                AssetConfig {
+                    denom: "asset2".to_string(),
+                    normalization_factor: Uint128::from(1000000u128),
+                },
+                AssetConfig {
+                    denom: "asset3".to_string(),
+                    normalization_factor: Uint128::from(1000000u128),
+                },
+            ],
+            alloyed_asset_subdenom: "alloyed".to_string(),
+            alloyed_asset_normalization_factor: Uint128::from(1000000u128),
+        };
+
+        let info = mock_info(admin, &[]);
+        instantiate(deps.as_mut(), env.clone(), info.clone(), instantiate_msg).unwrap();
+
+        // Create asset group
+        let create_asset_group_msg = ContractExecMsg::Transmuter(ExecMsg::CreateAssetGroup {
+            label: "group1".to_string(),
+            denoms: vec!["asset1".to_string(), "asset2".to_string()],
+        });
+
+        // Test non-admin trying to create asset group
+        let non_admin_info = mock_info("non_admin", &[]);
+        let non_admin_create_msg = ContractExecMsg::Transmuter(ExecMsg::CreateAssetGroup {
+            label: "group1".to_string(),
+            denoms: vec!["asset1".to_string(), "asset2".to_string()],
+        });
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            non_admin_info,
+            non_admin_create_msg,
+        )
+        .unwrap_err();
+        assert_eq!(err, ContractError::Unauthorized {});
+
+        // Test admin creating asset group
+        let res = execute(deps.as_mut(), env.clone(), info, create_asset_group_msg).unwrap();
+
+        assert_eq!(
+            res.attributes,
+            vec![
+                attr("method", "create_asset_group"),
+                attr("label", "group1"),
+            ]
+        );
+
+        // List asset groups
+        let list_asset_groups_msg = ContractQueryMsg::Transmuter(QueryMsg::ListAssetGroups {});
+        let list_asset_groups_res: Result<ListAssetGroupsResponse, ContractError> =
+            query(deps.as_ref(), env.clone(), list_asset_groups_msg)
+                .map(|value| from_json(value).unwrap());
+
+        assert_eq!(
+            list_asset_groups_res,
+            Ok(ListAssetGroupsResponse {
+                asset_groups: BTreeMap::from([(
+                    "group1".to_string(),
+                    AssetGroup::new(vec!["asset1".to_string(), "asset2".to_string()]),
+                )]),
+            })
+        );
+
+        // Try setting limiter with non-existent group
+        let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+            label: "limiter1".to_string(),
+            scope: Scope::asset_group("group2"),
+            limiter_params: LimiterParams::ChangeLimiter {
+                window_config: WindowConfig {
+                    window_size: 86400u64.into(),
+                    division_count: 10u64.into(),
+                },
+                boundary_offset: Decimal::percent(10),
+            },
+        });
+
+        let register_limiter_info = mock_info("admin", &[]);
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            register_limiter_info.clone(),
+            register_limiter_msg.clone(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ContractError::AssetGroupNotFound { .. }));
+
+        // Create group2
+        let create_asset_group_msg2 = ContractExecMsg::Transmuter(ExecMsg::CreateAssetGroup {
+            label: "group2".to_string(),
+            denoms: vec!["asset3".to_string()],
+        });
+
+        let create_asset_group_info2 = mock_info("admin", &[]);
+        let res2 = execute(
+            deps.as_mut(),
+            env.clone(),
+            create_asset_group_info2,
+            create_asset_group_msg2,
+        )
+        .unwrap();
+
+        assert_eq!(
+            res2.attributes,
+            vec![
+                attr("method", "create_asset_group"),
+                attr("label", "group2"),
+            ]
+        );
+
+        // Verify group2 was created
+        let list_asset_groups_msg2 = ContractQueryMsg::Transmuter(QueryMsg::ListAssetGroups {});
+        let list_asset_groups_res2: Result<ListAssetGroupsResponse, ContractError> =
+            query(deps.as_ref(), env.clone(), list_asset_groups_msg2)
+                .map(|value| from_json(value).unwrap());
+
+        assert_eq!(
+            list_asset_groups_res2,
+            Ok(ListAssetGroupsResponse {
+                asset_groups: BTreeMap::from([
+                    (
+                        "group1".to_string(),
+                        AssetGroup::new(vec!["asset1".to_string(), "asset2".to_string()])
+                    ),
+                    (
+                        "group2".to_string(),
+                        AssetGroup::new(vec!["asset3".to_string()])
+                    ),
+                ]),
+            })
+        );
+
+        // Try to register limiter for group2
+        let res3 = execute(
+            deps.as_mut(),
+            env.clone(),
+            register_limiter_info,
+            register_limiter_msg,
+        )
+        .unwrap();
+
+        assert_eq!(
+            res3.attributes,
+            vec![
+                attr("method", "register_limiter"),
+                attr("label", "limiter1"),
+                attr("scope", "asset_group::group2"),
+                attr("limiter_type", "change_limiter"),
+                attr("window_size", "86400"),
+                attr("division_count", "10"),
+                attr("boundary_offset", "0.1"),
+            ]
+        );
+
+        // Verify limiter was registered
+        let list_limiters_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
+        let list_limiters_res: ListLimitersResponse =
+            from_json(query(deps.as_ref(), env.clone(), list_limiters_msg).unwrap()).unwrap();
+
+        assert_eq!(
+            list_limiters_res.limiters,
+            vec![(
+                (
+                    Scope::asset_group("group2").to_string(),
+                    "limiter1".to_string()
+                ),
+                Limiter::ChangeLimiter(
+                    ChangeLimiter::new(
+                        WindowConfig {
+                            window_size: 86400u64.into(),
+                            division_count: 10u64.into(),
+                        },
+                        Decimal::percent(10),
+                    )
+                    .unwrap()
+                )
+            )]
+        );
+
+        // Try to create a group with a non-existing asset
+        let create_invalid_group_msg = ContractExecMsg::Transmuter(ExecMsg::CreateAssetGroup {
+            label: "invalid_group".to_string(),
+            denoms: vec!["asset1".to_string(), "non_existing_asset".to_string()],
+        });
+
+        let admin_info = mock_info(admin, &[]);
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            admin_info,
+            create_invalid_group_msg,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::InvalidPoolAssetDenom {
+                denom: "non_existing_asset".to_string()
+            }
+        );
+
+        // Verify that the invalid group was not created
+        let list_asset_groups_msg = ContractQueryMsg::Transmuter(QueryMsg::ListAssetGroups {});
+        let list_asset_groups_res: ListAssetGroupsResponse =
+            from_json(query(deps.as_ref(), env.clone(), list_asset_groups_msg).unwrap()).unwrap();
+
+        assert_eq!(
+            list_asset_groups_res.asset_groups,
+            BTreeMap::from([
+                (
+                    "group1".to_string(),
+                    AssetGroup::new(vec!["asset1".to_string(), "asset2".to_string()])
+                ),
+                (
+                    "group2".to_string(),
+                    AssetGroup::new(vec!["asset3".to_string()])
+                ),
+            ])
+        );
+
+        // Test removing an asset group
+        let remove_group_msg = ContractExecMsg::Transmuter(ExecMsg::RemoveAssetGroup {
+            label: "group2".to_string(),
+        });
+
+        // Try to remove the group with a non-admin account
+        let non_admin_info = mock_info("non_admin", &[]);
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            non_admin_info,
+            remove_group_msg.clone(),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, ContractError::Unauthorized {});
+
+        // Remove the group with the admin account
+        let admin_info = mock_info(admin, &[]);
+        let res = execute(deps.as_mut(), env.clone(), admin_info, remove_group_msg).unwrap();
+
+        assert_eq!(
+            res.attributes,
+            vec![
+                attr("method", "remove_asset_group"),
+                attr("label", "group2"),
+            ]
+        );
+
+        // Verify that the group was removed
+        let list_asset_groups_msg = ContractQueryMsg::Transmuter(QueryMsg::ListAssetGroups {});
+        let list_asset_groups_res: ListAssetGroupsResponse =
+            from_json(query(deps.as_ref(), env.clone(), list_asset_groups_msg).unwrap()).unwrap();
+
+        assert_eq!(
+            list_asset_groups_res.asset_groups,
+            BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["asset1".to_string(), "asset2".to_string()])
+            )])
+        );
+
+        // Test that limiter1 is removed along with the asset group
+        let list_limiters_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
+        let list_limiters_res: ListLimitersResponse =
+            from_json(query(deps.as_ref(), env.clone(), list_limiters_msg).unwrap()).unwrap();
+
+        // Check that limiter1 is not in the list of limiters
+        assert_eq!(list_limiters_res.limiters, vec![]);
+
+        // Test removing a non-existing asset group
+        let remove_nonexistent_group_msg = ContractExecMsg::Transmuter(ExecMsg::RemoveAssetGroup {
+            label: "non_existent_group".to_string(),
+        });
+
+        let admin_info = mock_info(admin, &[]);
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            admin_info,
+            remove_nonexistent_group_msg,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::AssetGroupNotFound {
+                label: "non_existent_group".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_mark_corrupted_scopes() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let admin = "admin";
+        let moderator = "moderator";
+        let user = "user";
+
+        // Add supply for denoms using deps.querier.update_balance
+        deps.querier.update_balance(
+            env.contract.address.clone(),
+            vec![Coin::new(1000000, "asset1"), Coin::new(2000000, "asset2")],
+        );
+
+        // Initialize the contract
+        let init_msg = InstantiateMsg {
+            admin: Some(admin.to_string()),
+            moderator: moderator.to_string(),
+            pool_asset_configs: vec![
+                AssetConfig {
+                    denom: "asset1".to_string(),
+                    normalization_factor: Uint128::new(1),
+                },
+                AssetConfig {
+                    denom: "asset2".to_string(),
+                    normalization_factor: Uint128::new(1),
+                },
+            ],
+            alloyed_asset_subdenom: "alloyed".to_string(),
+            alloyed_asset_normalization_factor: Uint128::new(1),
+        };
+        let info = mock_info(admin, &[]);
+        instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
+
+        // Mark corrupted scopes
+        let mark_corrupted_scopes_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedScopes {
+            scopes: vec![Scope::Denom("asset1".to_string())],
+        });
+        let moderator_info = mock_info(moderator, &[]);
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            moderator_info.clone(),
+            mark_corrupted_scopes_msg,
+        )
+        .unwrap();
+
+        // Check the response
+        assert_eq!(
+            res.attributes,
+            vec![attr("method", "mark_corrupted_scopes")]
+        );
+
+        // Verify that the scope is marked as corrupted
+        // Query the contract to get the corrupted denoms
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedScopes {});
+        let query_res: GetCorrruptedScopesResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+
+        // Check that "asset1" is in the corrupted denoms list
+        assert_eq!(query_res.corrupted_scopes, vec![Scope::denom("asset1")]);
+
+        // Try to mark corrupted scopes as a non-moderator (should fail)
+        let user_info = mock_info(user, &[]);
+        let unauthorized_mark_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedScopes {
+            scopes: vec![Scope::denom("asset2")],
+        });
+        let err =
+            execute(deps.as_mut(), env.clone(), user_info, unauthorized_mark_msg).unwrap_err();
+        assert_eq!(err, ContractError::Unauthorized {});
+
+        // Test create_asset_group
+        let create_asset_group_msg = ContractExecMsg::Transmuter(ExecMsg::CreateAssetGroup {
+            label: "group1".to_string(),
+            denoms: vec!["asset1".to_string(), "asset2".to_string()],
+        });
+        let admin_info = mock_info(admin, &[]);
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            admin_info.clone(),
+            create_asset_group_msg,
+        )
+        .unwrap();
+
+        // Check the response
+        assert_eq!(
+            res.attributes,
+            vec![
+                attr("method", "create_asset_group"),
+                attr("label", "group1"),
+            ]
+        );
+
+        // Test mark_asset_group_as_corrupted
+        let moderator_info = mock_info(moderator, &[]);
+        let mark_group_corrupted_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedScopes {
+            scopes: vec![Scope::asset_group("group1")],
+        });
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            moderator_info.clone(),
+            mark_group_corrupted_msg,
+        )
+        .unwrap();
+
+        // Check the response
+        assert_eq!(
+            res.attributes,
+            vec![attr("method", "mark_corrupted_scopes"),]
+        );
+
+        // Verify that the asset group is marked as corrupted
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedScopes {});
+        let query_res: GetCorrruptedScopesResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+
+        // Check that both "asset1" and "asset2" are in the corrupted scopes list
+        assert_eq!(
+            query_res.corrupted_scopes,
+            vec![Scope::denom("asset1"), Scope::asset_group("group1")]
+        );
+
+        // Test unmark_corrupted_scopes for the asset group
+        let unmark_group_corrupted_msg =
+            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedScopes {
+                scopes: vec![Scope::asset_group("group1")],
+            });
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            moderator_info.clone(),
+            unmark_group_corrupted_msg,
+        )
+        .unwrap();
+
+        // Check the response
+        assert_eq!(
+            res.attributes,
+            vec![attr("method", "unmark_corrupted_scopes"),]
+        );
+
+        // Verify that the asset group is no longer marked as corrupted
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedScopes {});
+        let query_res: GetCorrruptedScopesResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+
+        // Check that the asset group is no longer in the corrupted scopes list
+        assert_eq!(query_res.corrupted_scopes, vec![Scope::denom("asset1")]);
     }
 }

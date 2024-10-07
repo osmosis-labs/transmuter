@@ -2,13 +2,13 @@ use std::{str::FromStr, vec};
 
 use crate::{
     asset::AssetConfig,
-    contract::sv::QueryMsg,
-    contract::sv::{ExecMsg, InstantiateMsg},
     contract::{
+        sv::{ExecMsg, InstantiateMsg, QueryMsg},
         GetShareDenomResponse, GetSharesResponse, GetTotalPoolLiquidityResponse,
         GetTotalSharesResponse, ListLimitersResponse,
     },
     limiter::{ChangeLimiter, Limiter, LimiterParams, StaticLimiter, WindowConfig},
+    scope::Scope,
     test::{
         modules::cosmwasm_pool::CosmwasmPool,
         test_env::{assert_contract_err, TestEnvBuilder},
@@ -992,7 +992,7 @@ fn test_limiters() {
     t.contract
         .execute(
             &ExecMsg::RegisterLimiter {
-                denom: AXL_USDC.to_string(),
+                scope: Scope::Denom(AXL_USDC.to_string()),
                 label: "1h".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: config_1h.clone(),
@@ -1007,7 +1007,7 @@ fn test_limiters() {
     t.contract
         .execute(
             &ExecMsg::RegisterLimiter {
-                denom: AXL_USDC.to_string(),
+                scope: Scope::Denom(AXL_USDC.to_string()),
                 label: "1w".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: config_1w.clone(),
@@ -1022,7 +1022,7 @@ fn test_limiters() {
     t.contract
         .execute(
             &ExecMsg::RegisterLimiter {
-                denom: COSMOS_USDC.to_string(),
+                scope: Scope::Denom(COSMOS_USDC.to_string()),
                 label: "1h".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: config_1h.clone(),
@@ -1037,7 +1037,7 @@ fn test_limiters() {
     t.contract
         .execute(
             &ExecMsg::RegisterLimiter {
-                denom: COSMOS_USDC.to_string(),
+                scope: Scope::Denom(COSMOS_USDC.to_string()),
                 label: "1w".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: config_1w.clone(),
@@ -1052,7 +1052,7 @@ fn test_limiters() {
     t.contract
         .execute(
             &ExecMsg::RegisterLimiter {
-                denom: COSMOS_USDC.to_string(),
+                scope: Scope::Denom(COSMOS_USDC.to_string()),
                 label: "static".to_string(),
                 limiter_params: LimiterParams::StaticLimiter {
                     upper_limit: Decimal::percent(55),
@@ -1070,29 +1070,29 @@ fn test_limiters() {
         limiters,
         vec![
             (
-                (AXL_USDC.to_string(), "1h".to_string()),
+                (Scope::denom(AXL_USDC).key(), "1h".to_string()),
                 Limiter::ChangeLimiter(
                     ChangeLimiter::new(config_1h.clone(), Decimal::percent(10)).unwrap()
                 )
             ),
             (
-                (AXL_USDC.to_string(), "1w".to_string()),
+                (Scope::denom(AXL_USDC).key(), "1w".to_string()),
                 Limiter::ChangeLimiter(
                     ChangeLimiter::new(config_1w.clone(), Decimal::percent(5)).unwrap()
                 )
             ),
             (
-                (COSMOS_USDC.to_string(), "1h".to_string()),
+                (Scope::denom(COSMOS_USDC).key(), "1h".to_string()),
                 Limiter::ChangeLimiter(
                     ChangeLimiter::new(config_1h, Decimal::percent(10)).unwrap()
                 )
             ),
             (
-                (COSMOS_USDC.to_string(), "1w".to_string()),
+                (Scope::denom(COSMOS_USDC).key(), "1w".to_string()),
                 Limiter::ChangeLimiter(ChangeLimiter::new(config_1w, Decimal::percent(5)).unwrap())
             ),
             (
-                (COSMOS_USDC.to_string(), "static".to_string()),
+                (Scope::denom(COSMOS_USDC).key(), "static".to_string()),
                 Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(55)).unwrap())
             ),
         ]
@@ -1130,7 +1130,7 @@ fn test_limiters() {
 
     assert_contract_err(
         ContractError::UpperLimitExceeded {
-            denom: AXL_USDC.to_string(),
+            scope: Scope::denom(AXL_USDC),
             upper_limit: Decimal::from_str("0.6").unwrap(),
             value: Decimal::from_str("0.600001").unwrap(),
         },
@@ -1155,7 +1155,7 @@ fn test_limiters() {
 
     assert_contract_err(
         ContractError::UpperLimitExceeded {
-            denom: COSMOS_USDC.to_string(),
+            scope: Scope::denom(COSMOS_USDC),
             upper_limit: Decimal::from_str("0.55").unwrap(),
             value: Decimal::from_str("0.550001").unwrap(),
         },
@@ -1193,7 +1193,7 @@ fn test_limiters() {
 
     assert_contract_err(
         ContractError::UpperLimitExceeded {
-            denom: AXL_USDC.to_string(),
+            scope: Scope::denom(AXL_USDC),
             upper_limit: Decimal::from_str("0.55").unwrap(),
             value: Decimal::from_str("0.5625").unwrap(),
         },
@@ -1212,7 +1212,7 @@ fn test_limiters() {
 
     assert_contract_err(
         ContractError::UpperLimitExceeded {
-            denom: AXL_USDC.to_string(),
+            scope: Scope::denom(AXL_USDC),
             upper_limit: Decimal::from_str("0.525034626038781163").unwrap(),
             value: Decimal::from_str("0.5416666666666666").unwrap(),
         },
@@ -1243,7 +1243,7 @@ fn test_limiters() {
 
     assert_contract_err(
         ContractError::UpperLimitExceeded {
-            denom: COSMOS_USDC.to_string(),
+            scope: Scope::denom(COSMOS_USDC),
             upper_limit: Decimal::from_str("0.65").unwrap(),
             value: Decimal::from_str("0.6875").unwrap(),
         },
@@ -1268,7 +1268,7 @@ fn test_limiters() {
 
     assert_contract_err(
         ContractError::UpperLimitExceeded {
-            denom: COSMOS_USDC.to_string(),
+            scope: Scope::denom(COSMOS_USDC),
             upper_limit: Decimal::from_str("0.575").unwrap(),
             value: Decimal::from_str("0.625").unwrap(),
         },
@@ -1343,7 +1343,7 @@ fn test_register_limiter_after_having_liquidity() {
     t.contract
         .execute(
             &ExecMsg::RegisterLimiter {
-                denom: COSMOS_USDC.to_string(),
+                scope: Scope::Denom(COSMOS_USDC.to_string()),
                 label: "static".to_string(),
                 limiter_params: LimiterParams::StaticLimiter {
                     upper_limit: Decimal::percent(60),
@@ -1371,7 +1371,7 @@ fn test_register_limiter_after_having_liquidity() {
 
     assert_contract_err(
         ContractError::UpperLimitExceeded {
-            denom: COSMOS_USDC.to_string(),
+            scope: Scope::denom(COSMOS_USDC),
             upper_limit: Decimal::from_str("0.6").unwrap(),
             value: Decimal::from_str("1").unwrap(),
         },
@@ -1441,7 +1441,7 @@ fn test_register_limiter_after_having_liquidity() {
 
     assert_contract_err(
         ContractError::UpperLimitExceeded {
-            denom: COSMOS_USDC.to_string(),
+            scope: Scope::denom(COSMOS_USDC),
             upper_limit: Decimal::from_str("0.6").unwrap(),
             value: Decimal::from_str("0.999995").unwrap(),
         },

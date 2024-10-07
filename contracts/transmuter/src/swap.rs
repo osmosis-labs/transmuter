@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
@@ -11,7 +11,9 @@ use serde::Serialize;
 use crate::{
     alloyed_asset::{swap_from_alloyed, swap_to_alloyed},
     contract::Transmuter,
-    transmuter_pool::{AmountConstraint, TransmuterPool},
+    corruptable::Corruptable,
+    scope::Scope,
+    transmuter_pool::{AmountConstraint, AssetGroup, TransmuterPool},
     ContractError,
 };
 
@@ -124,15 +126,21 @@ impl Transmuter<'_> {
             ContractError::ZeroValueOperation {}
         );
 
-        let prev_weights = pool.weights_map()?;
+        let prev_weights = pool.asset_weights()?.unwrap_or_default();
 
         pool.join_pool(&tokens_in)?;
 
         // check and update limiters only if pool assets are not zero
-        if let Some(updated_weights) = pool.weights()? {
+        if let Some(updated_weights) = pool.asset_weights()? {
+            let scope_value_pairs = construct_scope_value_pairs(
+                prev_weights,
+                updated_weights,
+                pool.asset_groups.clone(),
+            )?;
+
             self.limiters.check_limits_and_update(
                 deps.storage,
-                pair_weights_by_denom(prev_weights, updated_weights),
+                scope_value_pairs,
                 env.block.time,
             )?;
         }
@@ -272,6 +280,18 @@ impl Transmuter<'_> {
         }?
         .to_string();
 
+        let denoms_in_corrupted_asset_group = pool
+            .asset_groups
+            .iter()
+            .flat_map(|(_, asset_group)| {
+                if asset_group.is_corrupted() {
+                    asset_group.denoms().to_vec()
+                } else {
+                    vec![]
+                }
+            })
+            .collect::<Vec<_>>();
+
         let is_force_exit_corrupted_assets = tokens_out.iter().all(|coin| {
             let total_liquidity = pool
                 .get_pool_asset_by_denom(&coin.denom)
@@ -279,8 +299,11 @@ impl Transmuter<'_> {
                 .unwrap_or_default();
 
             let is_redeeming_total_liquidity = coin.amount == total_liquidity;
+            let is_under_corrupted_asset_group =
+                denoms_in_corrupted_asset_group.contains(&coin.denom);
 
-            pool.is_corrupted_asset(&coin.denom) && is_redeeming_total_liquidity
+            is_redeeming_total_liquidity
+                && (is_under_corrupted_asset_group || pool.is_corrupted_asset(&coin.denom))
         });
 
         // If all tokens out are corrupted assets and exit with all remaining liquidity
@@ -290,21 +313,38 @@ impl Transmuter<'_> {
 
             // change limiter needs reset if force redemption since it gets by passed
             // the current state will not be accurate
+
+            let asset_weights_iter = pool
+                .asset_weights()?
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(denom, weight)| (Scope::denom(&denom).key(), weight));
+            let asset_group_weights_iter = pool
+                .asset_group_weights()?
+                .into_iter()
+                .map(|(label, weight)| (Scope::asset_group(&label).key(), weight));
+
             self.limiters.reset_change_limiter_states(
                 deps.storage,
                 env.block.time,
-                pool.weights()?.unwrap_or_default(),
+                asset_weights_iter.chain(asset_group_weights_iter),
             )?;
         } else {
-            let prev_weights = pool.weights_map()?;
+            let prev_weights = pool.asset_weights()?.unwrap_or_default();
 
             pool.exit_pool(&tokens_out)?;
 
             // check and update limiters only if pool assets are not zero
-            if let Some(updated_weights) = pool.weights()? {
+            if let Some(updated_weights) = pool.asset_weights()? {
+                let scope_value_pairs = construct_scope_value_pairs(
+                    prev_weights,
+                    updated_weights,
+                    pool.asset_groups.clone(),
+                )?;
+
                 self.limiters.check_limits_and_update(
                     deps.storage,
-                    pair_weights_by_denom(prev_weights, updated_weights),
+                    scope_value_pairs,
                     env.block.time,
                 )?;
             }
@@ -345,7 +385,7 @@ impl Transmuter<'_> {
         env: Env,
     ) -> Result<Response, ContractError> {
         let pool = self.pool.load(deps.storage)?;
-        let prev_weights = pool.weights_map()?;
+        let prev_weights = pool.asset_weights()?.unwrap_or_default();
 
         let (mut pool, actual_token_out) =
             self.out_amt_given_in(deps.as_ref(), pool, token_in, token_out_denom)?;
@@ -360,10 +400,16 @@ impl Transmuter<'_> {
         );
 
         // check and update limiters only if pool assets are not zero
-        if let Some(updated_weights) = pool.weights()? {
+        if let Some(updated_weights) = pool.asset_weights()? {
+            let scope_value_pairs = construct_scope_value_pairs(
+                prev_weights,
+                updated_weights,
+                pool.asset_groups.clone(),
+            )?;
+
             self.limiters.check_limits_and_update(
                 deps.storage,
-                pair_weights_by_denom(prev_weights, updated_weights),
+                scope_value_pairs,
                 env.block.time,
             )?;
         }
@@ -397,7 +443,7 @@ impl Transmuter<'_> {
         env: Env,
     ) -> Result<Response, ContractError> {
         let pool = self.pool.load(deps.storage)?;
-        let prev_weights = pool.weights_map()?;
+        let prev_weights = pool.asset_weights()?.unwrap_or_default();
 
         let (mut pool, actual_token_in) = self.in_amt_given_out(
             deps.as_ref(),
@@ -415,10 +461,15 @@ impl Transmuter<'_> {
         );
 
         // check and update limiters only if pool assets are not zero
-        if let Some(updated_weights) = pool.weights()? {
+        if let Some(updated_weights) = pool.asset_weights()? {
+            let scope_value_pairs = construct_scope_value_pairs(
+                prev_weights,
+                updated_weights,
+                pool.asset_groups.clone(),
+            )?;
             self.limiters.check_limits_and_update(
                 deps.storage,
-                pair_weights_by_denom(prev_weights, updated_weights),
+                scope_value_pairs,
                 env.block.time,
             )?;
         }
@@ -585,11 +636,33 @@ impl Transmuter<'_> {
         storage: &mut dyn Storage,
         pool: &mut TransmuterPool,
     ) -> Result<(), ContractError> {
+        // remove corrupted assets
         for corrupted in pool.clone().corrupted_assets() {
             if corrupted.amount().is_zero() {
-                pool.remove_corrupted_asset(corrupted.denom())?;
+                pool.remove_asset(corrupted.denom())?;
                 self.limiters
-                    .uncheck_deregister_all_for_denom(storage, corrupted.denom())?;
+                    .uncheck_deregister_all_for_scope(storage, Scope::denom(corrupted.denom()))?;
+            }
+        }
+
+        // remove assets from asset groups
+        for (label, asset_group) in pool.clone().asset_groups {
+            // if asset group is corrupted
+            if asset_group.is_corrupted() {
+                // remove asset from pool if amount is zero.
+                // removing asset here will also remove it from the asset group
+                for denom in asset_group.denoms() {
+                    if pool.get_pool_asset_by_denom(denom)?.amount().is_zero() {
+                        pool.remove_asset(denom)?;
+                    }
+                }
+
+                // remove asset group is removed
+                // remove limiters for asset group as well
+                if pool.asset_groups.get(&label).is_none() {
+                    self.limiters
+                        .uncheck_deregister_all_for_scope(storage, Scope::asset_group(&label))?;
+                }
             }
         }
 
@@ -597,18 +670,49 @@ impl Transmuter<'_> {
     }
 }
 
-fn pair_weights_by_denom(
+fn construct_scope_value_pairs(
     prev_weights: BTreeMap<String, Decimal>,
-    updated_weights: Vec<(String, Decimal)>,
-) -> Vec<(String, (Decimal, Decimal))> {
-    let mut denom_weight_pairs = Vec::new();
+    updated_weights: BTreeMap<String, Decimal>,
+    asset_group: BTreeMap<String, AssetGroup>,
+) -> Result<Vec<(Scope, (Decimal, Decimal))>, StdError> {
+    let mut denom_weight_pairs: HashMap<Scope, (Decimal, Decimal)> = HashMap::new();
+    let mut asset_group_weight_pairs: HashMap<Scope, (Decimal, Decimal)> = HashMap::new();
 
-    for (denom, weight) in updated_weights {
-        let prev_weight = prev_weights.get(denom.as_str()).unwrap_or(&weight);
-        denom_weight_pairs.push((denom, (*prev_weight, weight)));
+    // Reverse index the asset groups
+    let mut asset_groups_of_denom = HashMap::new();
+    for (group, asset_group) in asset_group {
+        for denom in asset_group.into_denoms() {
+            asset_groups_of_denom
+                .entry(denom)
+                .or_insert_with(Vec::new)
+                .push(group.clone());
+        }
     }
 
-    denom_weight_pairs
+    for (denom, weight) in &updated_weights {
+        let prev_weight = prev_weights.get(denom.as_str()).unwrap_or(weight);
+        denom_weight_pairs.insert(Scope::denom(denom), (*prev_weight, *weight));
+
+        for group in asset_groups_of_denom.get(denom).unwrap_or(&vec![]) {
+            match asset_group_weight_pairs.get_mut(&Scope::asset_group(group)) {
+                Some((prev, curr)) => {
+                    *prev = prev.checked_add(*prev_weight)?;
+                    *curr = curr.checked_add(*weight)?;
+                }
+                None => {
+                    asset_group_weight_pairs
+                        .insert(Scope::asset_group(group), (*prev_weight, *weight));
+                }
+            }
+
+            // TODO: check for invalid cases like total weight is not 1, proptest it
+        }
+    }
+
+    Ok(denom_weight_pairs
+        .into_iter()
+        .chain(asset_group_weight_pairs.into_iter())
+        .collect())
 }
 
 /// Possible variants of swap, depending on the input and output tokens
@@ -695,7 +799,7 @@ pub enum BurnTarget {
 
 #[cfg(test)]
 mod tests {
-    use crate::{asset::Asset, limiter::LimiterParams};
+    use crate::{asset::Asset, corruptable::Corruptable, limiter::LimiterParams};
 
     use super::*;
     use cosmwasm_std::{
@@ -823,6 +927,7 @@ mod tests {
                         Asset::new(Uint128::from(1000u128), "denom1", 1u128).unwrap(),
                         Asset::new(Uint128::from(1000u128), "denom2", 10u128).unwrap(),
                     ],
+                    asset_groups: BTreeMap::new(),
                 },
             )
             .unwrap();
@@ -960,6 +1065,7 @@ mod tests {
                         Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
                         Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
                     ],
+                    asset_groups: BTreeMap::new(),
                 },
             )
             .unwrap();
@@ -1159,6 +1265,7 @@ mod tests {
                 Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(), // 1000000000000 * 10
                 Asset::new(Uint128::from(1000000000000u128), "denom3", 1u128).unwrap(), // 1000000000000 * 100
             ],
+            asset_groups: BTreeMap::new(),
         };
 
         let all_denoms = pool
@@ -1166,16 +1273,11 @@ mod tests {
             .pool_assets
             .into_iter()
             .map(|asset| asset.denom().to_string())
-            .collect::<Vec<_>>();
+            .collect::<Vec<String>>();
 
-        pool.mark_corrupted_assets(
-            corrupted_denoms
-                .iter()
-                .map(|denom| denom.to_string())
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )
-        .unwrap();
+        for denom in corrupted_denoms {
+            pool.mark_corrupted_asset(denom).unwrap();
+        }
 
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
 
@@ -1184,7 +1286,7 @@ mod tests {
                 .limiters
                 .register(
                     &mut deps.storage,
-                    denom.as_str(),
+                    Scope::denom(denom.as_str()),
                     "static",
                     LimiterParams::StaticLimiter {
                         upper_limit: Decimal::percent(100),
@@ -1219,7 +1321,7 @@ mod tests {
                 assert!(
                     transmuter
                         .limiters
-                        .list_limiters_by_denom(&deps.storage, denom.as_str())
+                        .list_limiters_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
                         .unwrap()
                         .is_empty(),
                     "must not contain limiter for {} since it's corrupted and drained",
@@ -1236,7 +1338,7 @@ mod tests {
                 assert!(
                     !transmuter
                         .limiters
-                        .list_limiters_by_denom(&deps.storage, denom.as_str())
+                        .list_limiters_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
                         .unwrap()
                         .is_empty(),
                     "must contain limiter for {} since it's not corrupted or not drained",
@@ -1266,6 +1368,7 @@ mod tests {
                 Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(), // 1000000000000 * 10
                 Asset::new(Uint128::from(1000000000000u128), "denom3", 1u128).unwrap(), // 1000000000000 * 100
             ],
+            asset_groups: BTreeMap::new(),
         };
 
         let all_denoms = pool
@@ -1275,7 +1378,7 @@ mod tests {
             .map(|asset| asset.denom().to_string())
             .collect::<Vec<_>>();
 
-        pool.mark_corrupted_assets(&["denom1".to_owned()]).unwrap();
+        pool.mark_corrupted_asset("denom1").unwrap();
 
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
 
@@ -1284,7 +1387,7 @@ mod tests {
                 .limiters
                 .register(
                     &mut deps.storage,
-                    denom.as_str(),
+                    Scope::denom(denom.as_str()),
                     "static",
                     LimiterParams::StaticLimiter {
                         upper_limit: Decimal::percent(100),
@@ -1324,7 +1427,10 @@ mod tests {
             .unique()
             .collect_vec();
 
-        assert_eq!(limiter_denoms, vec!["denom2", "denom3"]);
+        assert_eq!(
+            limiter_denoms,
+            vec![Scope::denom("denom2").key(), Scope::denom("denom3").key()]
+        );
     }
 
     #[test]
@@ -1347,6 +1453,7 @@ mod tests {
                 Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(), // 1000000000000 * 10
                 Asset::new(Uint128::from(1000000000000u128), "denom3", 1u128).unwrap(), // 1000000000000 * 100
             ],
+            asset_groups: BTreeMap::new(),
         };
 
         let all_denoms = pool
@@ -1356,7 +1463,7 @@ mod tests {
             .map(|asset| asset.denom().to_string())
             .collect::<Vec<_>>();
 
-        pool.mark_corrupted_assets(&["denom1".to_owned()]).unwrap();
+        pool.mark_corrupted_asset("denom1").unwrap();
 
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
 
@@ -1365,7 +1472,7 @@ mod tests {
                 .limiters
                 .register(
                     &mut deps.storage,
-                    denom.as_str(),
+                    Scope::denom(denom.as_str()),
                     "static",
                     LimiterParams::StaticLimiter {
                         upper_limit: Decimal::percent(100),
@@ -1405,7 +1512,10 @@ mod tests {
             .unique()
             .collect_vec();
 
-        assert_eq!(limiter_denoms, vec!["denom2", "denom3"]);
+        assert_eq!(
+            limiter_denoms,
+            vec![Scope::denom("denom2").key(), Scope::denom("denom3").key()]
+        );
     }
 
     #[rstest]
@@ -1489,6 +1599,7 @@ mod tests {
                         Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
                         Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
                     ],
+                    asset_groups: BTreeMap::new(),
                 },
             )
             .unwrap();
@@ -1586,6 +1697,7 @@ mod tests {
                         Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
                         Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
                     ],
+                    asset_groups: BTreeMap::new(),
                 },
             )
             .unwrap();
@@ -1600,5 +1712,277 @@ mod tests {
         );
 
         assert_eq!(res, expected_res);
+    }
+
+    #[rstest]
+    #[case::empty(
+        HashMap::from([]),
+        vec![],
+        vec![],
+    )]
+    #[case::no_asset_group(
+        HashMap::from([]),
+        vec![
+            ("eth.axl", (Decimal::percent(20), Decimal::percent(40))),
+            ("eth.wh", (Decimal::percent(60), Decimal::percent(40))),
+            ("wsteth.axl", (Decimal::percent(20), Decimal::percent(20))),
+        ],
+        vec![],
+    )]
+    #[case(
+        HashMap::from([
+            ("axelar", vec!["eth.axl", "wsteth.axl"]),
+            ("wormhole", vec!["eth.wh"]),
+        ]),
+        vec![
+            ("eth.axl", (Decimal::percent(20), Decimal::percent(40))),
+            ("wsteth.axl", (Decimal::percent(20), Decimal::percent(20))),
+            ("eth.wh", (Decimal::percent(60), Decimal::percent(40))),
+        ],
+        vec![
+            (Scope::asset_group("axelar"), (Decimal::percent(40), Decimal::percent(60))),
+            (Scope::asset_group("wormhole"), (Decimal::percent(60), Decimal::percent(40))),
+        ],
+    )]
+    fn test_construct_scope_value_pairs(
+        #[case] asset_groups: HashMap<&str, Vec<&str>>,
+        #[case] denom_weights: Vec<(&str, (Decimal, Decimal))>,
+        #[case] expected_asset_group_scopes: Vec<(Scope, (Decimal, Decimal))>,
+    ) {
+        let asset_groups = asset_groups
+            .into_iter()
+            .map(|(label, asset_group)| {
+                (
+                    label.to_string(),
+                    AssetGroup::new(
+                        asset_group
+                            .into_iter()
+                            .map(|asset| asset.to_string())
+                            .collect_vec(),
+                    ),
+                )
+            })
+            .collect::<BTreeMap<String, AssetGroup>>();
+
+        let prev_weights = denom_weights
+            .clone()
+            .into_iter()
+            .map(|(denom, (prev_weight, _))| (denom.to_string(), prev_weight))
+            .collect();
+
+        let updated_weights = denom_weights
+            .clone()
+            .into_iter()
+            .map(|(denom, (_, updated_weight))| (denom.to_string(), updated_weight))
+            .collect();
+
+        let mut scope_value_pairs =
+            construct_scope_value_pairs(prev_weights, updated_weights, asset_groups).unwrap();
+
+        let scope_denom_value_pairs = denom_weights
+            .into_iter()
+            .map(|(denom, weight_transition)| (Scope::denom(denom), weight_transition))
+            .collect_vec();
+
+        let mut expected_scope_value_pairs =
+            vec![scope_denom_value_pairs, expected_asset_group_scopes].concat();
+
+        // assert by disregrard order
+        scope_value_pairs.sort_by_key(|(scope, _)| scope.key());
+        expected_scope_value_pairs.sort_by_key(|(scope, _)| scope.key());
+
+        assert_eq!(scope_value_pairs, expected_scope_value_pairs);
+    }
+
+    #[test]
+    fn test_clean_up_drained_corrupted_assets_group() {
+        let sender = Addr::unchecked("addr1");
+        let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
+            sender.to_string().as_str(),
+            &[Coin::new(2000000000000u128, "alloyed")],
+        )]);
+
+        let transmuter = Transmuter::default();
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_normalization_factor(&mut deps.storage, 100u128.into())
+            .unwrap();
+
+        let init_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()])
+                    .mark_as_corrupted()
+                    .clone(),
+            )]),
+        };
+        transmuter.pool.save(&mut deps.storage, &init_pool).unwrap();
+
+        // Register limiters for group1
+        transmuter
+            .limiters
+            .register(
+                &mut deps.storage,
+                Scope::asset_group("group1"),
+                "1w",
+                LimiterParams::StaticLimiter {
+                    upper_limit: Decimal::percent(60),
+                },
+            )
+            .unwrap();
+
+        let mut pool = transmuter.pool.load(&deps.storage).unwrap();
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        pool = transmuter.pool.load(&deps.storage).unwrap();
+        assert_eq!(pool, init_pool);
+
+        pool.exit_pool(&[Coin::new(1000000000000u128, "denom2")])
+            .unwrap();
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        let expected_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom3".to_string()])
+                    .mark_as_corrupted()
+                    .clone(),
+            )]),
+        };
+        assert_eq!(pool, expected_pool);
+
+        // Check that the limiter for group1 is still registered
+        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
+        assert_eq!(limiters.len(), 1);
+
+        // Save the updated pool
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        pool.exit_pool(&[Coin::new(1000000000000u128, "denom3")])
+            .unwrap();
+
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        let expected_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::new(),
+        };
+        assert_eq!(pool, expected_pool);
+
+        // Check that the limiter for group1 is removed
+        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
+        assert_eq!(limiters.len(), 0);
+    }
+
+    #[test]
+    fn test_clean_up_drained_corrupted_assets_group_not_corrupted() {
+        let mut deps = mock_dependencies();
+        let transmuter = Transmuter::default();
+
+        // Initialize the pool with non-corrupted assets and groups
+        let init_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
+            )]),
+        };
+
+        transmuter.pool.save(&mut deps.storage, &init_pool).unwrap();
+
+        // Register a limiter for the group
+        transmuter
+            .limiters
+            .register(
+                &mut deps.storage,
+                Scope::asset_group("group1"),
+                "limiter1",
+                LimiterParams::StaticLimiter {
+                    upper_limit: Decimal::one(),
+                },
+            )
+            .unwrap();
+
+        let mut pool = transmuter.pool.load(&deps.storage).unwrap();
+        assert_eq!(pool, init_pool);
+
+        // Drain denom2 from the pool
+        pool.exit_pool(&[Coin::new(1000000000000u128, "denom2")])
+            .unwrap();
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        // Check that the pool remains unchanged
+        let expected_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::zero(), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
+            )]),
+        };
+        assert_eq!(pool, expected_pool);
+
+        // Check that the limiter for group1 is still registered
+        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
+        assert_eq!(limiters.len(), 1);
+
+        // Save the updated pool
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        // Drain denom3 from the pool
+        pool.exit_pool(&[Coin::new(1000000000000u128, "denom3")])
+            .unwrap();
+
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        // Check that the pool remains unchanged except for the drained assets
+        let expected_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::zero(), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::zero(), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
+            )]),
+        };
+        assert_eq!(pool, expected_pool);
+
+        // Check that the limiter for group1 is still registered
+        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
+        assert_eq!(limiters.len(), 1);
     }
 }
