@@ -27,14 +27,14 @@ macro_rules! test_swap {
         #[test]
         fn $test_name() {
             let app = osmosis_test_tube::OsmosisTestApp::new();
-            test_swap_success_case($setup(&app), $msg, $received);
+            test_swap_success_case(&$setup(&app), $msg, $received);
         }
     };
     ($test_name:ident [expect error] { setup = $setup:ident, msg = $msg:expr, err = $err:expr }) => {
         #[test]
         fn $test_name() {
             let app = osmosis_test_tube::OsmosisTestApp::new();
-            test_swap_failed_case($setup(&app), $msg, $err);
+            test_swap_failed_case(&$setup(&app), $msg, $err);
         }
     };
     ($test_name:ident [expect ok] { setup = $setup:expr, msgs = $msgs:expr, received = $received:expr }) => {
@@ -42,7 +42,7 @@ macro_rules! test_swap {
         fn $test_name() {
             for msg in $msgs {
                 let app = osmosis_test_tube::OsmosisTestApp::new();
-                test_swap_success_case($setup(&app), msg, $received);
+                test_swap_success_case(&$setup(&app), msg, $received);
             }
         }
     };
@@ -51,7 +51,7 @@ macro_rules! test_swap {
         fn $test_name() {
             for msg in $msgs {
                 let app = osmosis_test_tube::OsmosisTestApp::new();
-                test_swap_failed_case($setup(&app), msg, $err);
+                test_swap_failed_case(&$setup(&app), msg, $err);
             }
         }
     };
@@ -71,7 +71,7 @@ pub enum SwapMsg {
     },
 }
 
-fn assert_invariants(t: TestEnv, act: impl FnOnce(&TestEnv) -> String) {
+fn assert_invariants(t: &TestEnv, act: impl FnOnce(&TestEnv) -> String) {
     // store previous shares and pool assets
     let prev_shares = t
         .contract
@@ -159,7 +159,7 @@ fn lcm_normalization_factor(configs: &[AssetConfig]) -> Uint128 {
     lcm_from_iter(norm_factors).unwrap()
 }
 
-fn test_swap_success_case(t: TestEnv, msg: SwapMsg, received: Coin) {
+fn test_swap_success_case(t: &TestEnv, msg: SwapMsg, received: Coin) {
     assert_invariants(t, move |t| {
         let cp = CosmwasmPool::new(t.app);
         let bank = Bank::new(t.app);
@@ -422,7 +422,7 @@ pub fn test_swap_share_denom_success_case(t: &TestEnv, msg: SwapMsg, sent: Coin,
     );
 }
 
-fn test_swap_failed_case(t: TestEnv, msg: SwapMsg, err: ContractError) {
+fn test_swap_failed_case(t: &TestEnv, msg: SwapMsg, err: ContractError) {
     assert_invariants(t, move |t| {
         let cp = CosmwasmPool::new(t.app);
 
@@ -488,6 +488,7 @@ fn pool_with_single_lp(
         .collect::<Vec<Coin>>();
 
     let t = TestEnvBuilder::new()
+        .with_account("admin", non_zero_pool_assets.clone())
         .with_account("provider", non_zero_pool_assets.clone())
         .with_account(
             SWAPPER,
@@ -531,3 +532,5 @@ fn pool_with_single_lp(
 mod client_error;
 mod non_empty_pool;
 mod swap_share_denom;
+
+mod swap_with_asset_group_limiters;
