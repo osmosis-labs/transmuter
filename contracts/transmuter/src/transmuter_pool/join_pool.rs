@@ -43,7 +43,7 @@ impl TransmuterPool {
 
 #[cfg(test)]
 mod tests {
-    use cosmwasm_std::{OverflowError, OverflowOperation};
+    use cosmwasm_std::{coin, OverflowError, OverflowOperation};
 
     use crate::asset::Asset;
 
@@ -57,33 +57,30 @@ mod tests {
             TransmuterPool::new(Asset::unchecked_equal_assets(&[ETH_USDC, COSMOS_USDC])).unwrap();
 
         // join pool
-        pool.join_pool(&[Coin::new(1000, COSMOS_USDC)]).unwrap();
+        pool.join_pool(&[coin(1000, COSMOS_USDC)]).unwrap();
         assert_eq!(
             pool.pool_assets,
-            Asset::unchecked_equal_assets_from_coins(&[
-                Coin::new(0, ETH_USDC),
-                Coin::new(1000, COSMOS_USDC)
-            ])
+            Asset::unchecked_equal_assets_from_coins(&[coin(0, ETH_USDC), coin(1000, COSMOS_USDC)])
         );
 
         // join pool when not empty
-        pool.join_pool(&[Coin::new(20000, COSMOS_USDC)]).unwrap();
+        pool.join_pool(&[coin(20000, COSMOS_USDC)]).unwrap();
         assert_eq!(
             pool.pool_assets,
             Asset::unchecked_equal_assets_from_coins(&[
-                Coin::new(0, ETH_USDC),
-                Coin::new(21000, COSMOS_USDC)
+                coin(0, ETH_USDC),
+                coin(21000, COSMOS_USDC)
             ])
         );
 
         // join pool multiple tokens at once
-        pool.join_pool(&[Coin::new(1000, ETH_USDC), Coin::new(1000, COSMOS_USDC)])
+        pool.join_pool(&[coin(1000, ETH_USDC), coin(1000, COSMOS_USDC)])
             .unwrap();
         assert_eq!(
             pool.pool_assets,
             Asset::unchecked_equal_assets_from_coins(&[
-                Coin::new(1000, ETH_USDC),
-                Coin::new(22000, COSMOS_USDC)
+                coin(1000, ETH_USDC),
+                coin(22000, COSMOS_USDC)
             ])
         );
     }
@@ -94,7 +91,7 @@ mod tests {
             TransmuterPool::new(Asset::unchecked_equal_assets(&[ETH_USDC, COSMOS_USDC])).unwrap();
 
         assert_eq!(
-            pool.join_pool(&[Coin::new(1000, "urandom")]).unwrap_err(),
+            pool.join_pool(&[coin(1000, "urandom")]).unwrap_err(),
             ContractError::InvalidJoinPoolDenom {
                 denom: "urandom".to_string(),
                 expected_denom: vec![ETH_USDC.to_string(), COSMOS_USDC.to_string()]
@@ -103,7 +100,7 @@ mod tests {
         );
 
         assert_eq!(
-            pool.join_pool(&[Coin::new(1000, "urandom"), Coin::new(10000, COSMOS_USDC)])
+            pool.join_pool(&[coin(1000, "urandom"), coin(10000, COSMOS_USDC)])
                 .unwrap_err(),
             ContractError::InvalidJoinPoolDenom {
                 denom: "urandom".to_string(),
@@ -120,17 +117,12 @@ mod tests {
 
         assert_eq!(
             {
-                pool.join_pool(&[Coin::new(1, COSMOS_USDC)]).unwrap();
-                pool.join_pool(&[Coin::new(u128::MAX, COSMOS_USDC)])
-                    .unwrap_err()
+                pool.join_pool(&[coin(1, COSMOS_USDC)]).unwrap();
+                pool.join_pool(&[coin(u128::MAX, COSMOS_USDC)]).unwrap_err()
             },
-            ContractError::Std(StdError::Overflow {
-                source: OverflowError {
-                    operation: OverflowOperation::Add,
-                    operand1: 1.to_string(),
-                    operand2: u128::MAX.to_string()
-                }
-            }),
+            ContractError::Std(StdError::overflow(OverflowError::new(
+                OverflowOperation::Add
+            ))),
             "join pool overflow"
         );
     }

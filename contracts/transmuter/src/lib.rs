@@ -28,7 +28,7 @@ mod entry_points {
     use crate::migrations;
     use crate::sudo::SudoMsg;
 
-    const CONTRACT: Transmuter = Transmuter::default();
+    const CONTRACT: Transmuter = Transmuter::new();
 
     macro_rules! ensure_active_status {
         ($msg:expr, $deps:expr, $env:expr, except: $pattern:pat) => {

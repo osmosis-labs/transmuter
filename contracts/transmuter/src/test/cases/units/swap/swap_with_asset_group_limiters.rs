@@ -1,4 +1,4 @@
-use cosmwasm_std::{Coin, Decimal, Uint128, Uint64};
+use cosmwasm_std::{coin, Decimal, Uint128, Uint64};
 
 use crate::{
     asset::AssetConfig,
@@ -20,9 +20,9 @@ fn test_swap_with_asset_group_limiters() {
     let t = pool_with_single_lp(
         &app,
         vec![
-            Coin::new(REMAINING_DENOM0, "denom0"),
-            Coin::new(REMAINING_DENOM1, "denom1"),
-            Coin::new(REMAINING_DENOM2, "denom2"),
+            coin(REMAINING_DENOM0, "denom0"),
+            coin(REMAINING_DENOM1, "denom1"),
+            coin(REMAINING_DENOM2, "denom2"),
         ],
         vec![
             AssetConfig {
@@ -76,9 +76,9 @@ fn test_swap_with_asset_group_limiters() {
         SwapMsg::SwapExactAmountOut {
             token_in_denom: "denom0".to_string(),
             token_in_max_amount: Uint128::from(REMAINING_DENOM1),
-            token_out: Coin::new(REMAINING_DENOM1, "denom1".to_string()),
+            token_out: coin(REMAINING_DENOM1, "denom1".to_string()),
         },
-        Coin::new(REMAINING_DENOM1, "denom1".to_string()),
+        coin(REMAINING_DENOM1, "denom1".to_string()),
     );
 
     app.increase_time(5);
@@ -89,7 +89,7 @@ fn test_swap_with_asset_group_limiters() {
         SwapMsg::SwapExactAmountOut {
             token_in_denom: "denom0".to_string(),
             token_in_max_amount: Uint128::from(REMAINING_DENOM0),
-            token_out: Coin::new(REMAINING_DENOM0, "denom2".to_string()),
+            token_out: coin(REMAINING_DENOM0, "denom2".to_string()),
         },
         ContractError::UpperLimitExceeded {
             scope: Scope::asset_group("group1"),

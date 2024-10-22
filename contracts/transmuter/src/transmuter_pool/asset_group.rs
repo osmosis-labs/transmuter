@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{ensure, Decimal, Uint64};
@@ -99,11 +99,19 @@ impl TransmuterPool {
             }
         );
 
-        // ensure that all denoms are valid pool assets
+        // ensure that all denoms are valid pool assets and has no duplicated denoms
+        // ensuring no duplicated denoms also ensures that it's within MAX_POOL_ASSET_DENOMS limit
+        let mut denoms_set = HashSet::new();
         for denom in &denoms {
             ensure!(
                 self.has_denom(denom),
                 ContractError::InvalidPoolAssetDenom {
+                    denom: denom.clone()
+                }
+            );
+            ensure!(
+                denoms_set.insert(denom.clone()),
+                ContractError::DuplicatedPoolAssetDenom {
                     denom: denom.clone()
                 }
             );
@@ -240,6 +248,29 @@ mod tests {
         assert_eq!(
             weights.get("group2").unwrap(),
             &Decimal::raw(333333333333333333)
+        );
+    }
+
+    #[test]
+    fn test_create_asset_group_with_duplicated_denom() {
+        let mut pool = TransmuterPool::new(vec![
+            Asset::new(Uint128::new(100), "denom1", Uint128::new(1)).unwrap(),
+            Asset::new(Uint128::new(200), "denom2", Uint128::new(1)).unwrap(),
+        ])
+        .unwrap();
+
+        let err = pool
+            .create_asset_group(
+                "group1".to_string(),
+                vec!["denom1".to_string(), "denom1".to_string()],
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::DuplicatedPoolAssetDenom {
+                denom: "denom1".to_string()
+            }
         );
     }
 

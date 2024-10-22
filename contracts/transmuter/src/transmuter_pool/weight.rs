@@ -74,7 +74,7 @@ impl TransmuterPool {
 #[cfg(test)]
 mod tests {
     use crate::asset::Asset;
-    use cosmwasm_std::Coin;
+    use cosmwasm_std::coin;
     use rstest::rstest;
     use std::str::FromStr;
 
@@ -180,8 +180,8 @@ mod tests {
     fn test_all_ratios_when_total_pool_assets_is_zero() {
         let pool = TransmuterPool {
             pool_assets: Asset::unchecked_equal_assets_from_coins(&[
-                Coin::new(0, "axlusdc"),
-                Coin::new(0, "whusdc"),
+                coin(0, "axlusdc"),
+                coin(0, "whusdc"),
             ]),
             asset_groups: BTreeMap::new(),
         };

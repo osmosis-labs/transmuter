@@ -10,7 +10,7 @@ use crate::{
     test::{modules::cosmwasm_pool::CosmwasmPool, test_env::TransmuterContract},
 };
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{from_json, to_json_binary, Coin, Uint128};
+use cosmwasm_std::{coin, from_json, to_json_binary, Uint128};
 use osmosis_std::types::{
     cosmwasm::wasm::v1::{QueryRawContractStateRequest, QueryRawContractStateResponse},
     osmosis::cosmwasmpool::v1beta1::{
@@ -42,9 +42,9 @@ fn test_migrate_v2_to_v3() {
     let app = OsmosisTestApp::new();
     let signer = app
         .init_account(&[
-            Coin::new(100000, "denom1"),
-            Coin::new(100000, "denom2"),
-            Coin::new(10000000000000, "uosmo"),
+            coin(100000, "denom1"),
+            coin(100000, "denom2"),
+            coin(10000000000000, "uosmo"),
         ])
         .unwrap();
 
@@ -143,7 +143,8 @@ fn test_migrate_v2_to_v3() {
     assert_eq!(asset_configs, expected_asset_configs);
 
     let GetModeratorResponse { moderator } = t.query(&QueryMsg::GetModerator {}).unwrap();
-    assert_eq!(moderator, migrate_msg.moderator.unwrap());
+
+    assert_eq!(moderator.into_string(), migrate_msg.moderator.unwrap());
 }
 
 #[cw_serde]
@@ -157,9 +158,9 @@ fn test_migrate_v3_2(#[case] from_version: &str) {
     let app = OsmosisTestApp::new();
     let signer = app
         .init_account(&[
-            Coin::new(100000, "denom1"),
-            Coin::new(100000, "denom2"),
-            Coin::new(10000000000000, "uosmo"),
+            coin(100000, "denom1"),
+            coin(100000, "denom2"),
+            coin(10000000000000, "uosmo"),
         ])
         .unwrap();
 
@@ -283,9 +284,9 @@ fn test_migrate_v4_0_0() {
     let app = OsmosisTestApp::new();
     let signer = app
         .init_account(&[
-            Coin::new(100000, "denom1"),
-            Coin::new(100000, "denom2"),
-            Coin::new(10000000000000, "uosmo"),
+            coin(100000, "denom1"),
+            coin(100000, "denom2"),
+            coin(10000000000000, "uosmo"),
         ])
         .unwrap();
 

@@ -1,4 +1,4 @@
-use cosmwasm_std::{Coin, Uint128};
+use cosmwasm_std::{coin, Coin, Uint128};
 
 use osmosis_std::types::cosmos::bank::v1beta1::QueryBalanceRequest;
 use osmosis_std::types::osmosis::poolmanager::v1beta1::{
@@ -495,7 +495,7 @@ fn pool_with_single_lp(
             non_zero_pool_assets
                 .iter()
                 .filter(|coin| !coin.amount.is_zero())
-                .map(|coin| Coin::new(10000000000000000000000000, coin.denom.clone()))
+                .map(|c| coin(10000000000000000000000000, c.denom.clone()))
                 .collect(),
         )
         .with_instantiate_msg(crate::contract::sv::InstantiateMsg {

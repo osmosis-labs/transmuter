@@ -221,7 +221,7 @@ pub fn convert_amount(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cosmwasm_std::{testing::mock_dependencies_with_balances, Coin};
+    use cosmwasm_std::{coin, testing::mock_dependencies_with_balances};
 
     #[test]
     fn test_convert_amount() {
@@ -353,8 +353,8 @@ mod tests {
     #[test]
     fn test_checked_init_asset() {
         let deps = mock_dependencies_with_balances(&[
-            ("addr1", &[Coin::new(1, "denom1")]),
-            ("addr2", &[Coin::new(1, "denom2")]),
+            ("addr1", &[coin(1, "denom1")]),
+            ("addr2", &[coin(1, "denom2")]),
         ]);
 
         // denom1

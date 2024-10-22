@@ -275,7 +275,7 @@ impl TransmuterPool {
 #[cfg(test)]
 mod tests {
     use crate::asset::Asset;
-    use cosmwasm_std::{Coin, Uint128};
+    use cosmwasm_std::{coin, Uint128};
 
     use super::*;
 
@@ -283,10 +283,10 @@ mod tests {
     fn test_mark_corrupted_assets() {
         let mut pool = TransmuterPool {
             pool_assets: Asset::unchecked_equal_assets_from_coins(&[
-                Coin::new(100000000, "asset1"),
-                Coin::new(99999999, "asset2"),
-                Coin::new(1, "asset3"),
-                Coin::new(0, "asset4"),
+                coin(100000000, "asset1"),
+                coin(99999999, "asset2"),
+                coin(1, "asset3"),
+                coin(0, "asset4"),
             ]),
             asset_groups: BTreeMap::new(),
         };
@@ -312,10 +312,10 @@ mod tests {
         assert_eq!(
             pool.pool_assets,
             Asset::unchecked_equal_assets_from_coins(&[
-                Coin::new(100000000, "asset1"),
-                Coin::new(99999999, "asset2"),
-                Coin::new(1, "asset3"),
-                Coin::new(0, "asset4"),
+                coin(100000000, "asset1"),
+                coin(99999999, "asset2"),
+                coin(1, "asset3"),
+                coin(0, "asset4"),
             ])
             .into_iter()
             .map(|asset| {
@@ -341,10 +341,10 @@ mod tests {
         assert_eq!(
             pool.pool_assets,
             Asset::unchecked_equal_assets_from_coins(&[
-                Coin::new(100000000, "asset1"),
-                Coin::new(99999999, "asset2"),
-                Coin::new(1, "asset3"),
-                Coin::new(0, "asset4"),
+                coin(100000000, "asset1"),
+                coin(99999999, "asset2"),
+                coin(1, "asset3"),
+                coin(0, "asset4"),
             ])
             .into_iter()
             .map(|asset| {
@@ -372,10 +372,10 @@ mod tests {
     fn test_enforce_corrupted_asset_protocol() {
         let mut pool = TransmuterPool {
             pool_assets: Asset::unchecked_equal_assets_from_coins(&[
-                Coin::new(99999999, "asset1"),
-                Coin::new(100000000, "asset2"),
-                Coin::new(1, "asset3"),
-                Coin::new(0, "asset4"),
+                coin(99999999, "asset1"),
+                coin(100000000, "asset2"),
+                coin(1, "asset3"),
+                coin(0, "asset4"),
             ]),
             asset_groups: BTreeMap::new(),
         };
@@ -447,10 +447,10 @@ mod tests {
         // reset the pool because pure rust test will not reset state on error
         let mut pool = TransmuterPool {
             pool_assets: Asset::unchecked_equal_assets_from_coins(&[
-                Coin::new(99999999, "asset1"),
-                Coin::new(100000000, "asset2"),
-                Coin::new(1, "asset3"),
-                Coin::new(0, "asset4"),
+                coin(99999999, "asset1"),
+                coin(100000000, "asset2"),
+                coin(1, "asset3"),
+                coin(0, "asset4"),
             ]),
             asset_groups: BTreeMap::new(),
         };
@@ -476,10 +476,10 @@ mod tests {
         assert_eq!(
             pool.pool_assets,
             Asset::unchecked_equal_assets_from_coins(&[
-                Coin::new(99999997, "asset1"),
-                Coin::new(99999999, "asset2"),
-                Coin::new(1, "asset3"),
-                Coin::new(0, "asset4"),
+                coin(99999997, "asset1"),
+                coin(99999999, "asset2"),
+                coin(1, "asset3"),
+                coin(0, "asset4"),
             ])
             .into_iter()
             .map(|asset| {
@@ -613,9 +613,9 @@ mod tests {
     fn test_remove_corrupted_asset() {
         let mut pool = TransmuterPool {
             pool_assets: Asset::unchecked_equal_assets_from_coins(&[
-                Coin::new(100, "asset1"),
-                Coin::new(200, "asset2"),
-                Coin::new(300, "asset3"),
+                coin(100, "asset1"),
+                coin(200, "asset2"),
+                coin(300, "asset3"),
             ]),
             asset_groups: BTreeMap::from_iter(vec![(
                 "group1".to_string(),

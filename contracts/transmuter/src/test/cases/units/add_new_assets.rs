@@ -1,4 +1,4 @@
-use cosmwasm_std::{Coin, Uint128};
+use cosmwasm_std::{coin, Uint128};
 use osmosis_test_tube::OsmosisTestApp;
 
 use crate::{
@@ -15,10 +15,10 @@ fn test_add_new_assets() {
 
     // create denom
     app.init_account(&[
-        Coin::new(1, "denom1"),
-        Coin::new(1, "denom2"),
-        Coin::new(1, "denom3"),
-        Coin::new(1, "denom4"),
+        coin(1, "denom1"),
+        coin(1, "denom2"),
+        coin(1, "denom3"),
+        coin(1, "denom4"),
     ])
     .unwrap();
 
@@ -81,10 +81,10 @@ fn test_add_new_assets() {
     assert_eq!(
         total_pool_liquidity,
         vec![
-            Coin::new(0, "denom1"),
-            Coin::new(0, "denom2"),
-            Coin::new(0, "denom3"),
-            Coin::new(0, "denom4"),
+            coin(0, "denom1"),
+            coin(0, "denom2"),
+            coin(0, "denom3"),
+            coin(0, "denom4"),
         ]
     );
 

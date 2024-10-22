@@ -320,13 +320,13 @@ pub enum LimiterParams {
     },
 }
 
-pub struct Limiters<'a> {
+pub struct Limiters {
     /// Map of (scope, label) -> Limiter
-    limiters: Map<'a, (&'a str, &'a str), Limiter>,
+    limiters: Map<(&'static str, &'static str), Limiter>,
 }
 
-impl<'a> Limiters<'a> {
-    pub const fn new(limiters_namespace: &'a str) -> Self {
+impl Limiters {
+    pub const fn new(limiters_namespace: &'static str) -> Self {
         Self {
             limiters: Map::new(limiters_namespace),
         }
@@ -1362,9 +1362,7 @@ mod tests {
 
             assert_eq!(
                 err,
-                ContractError::DivideByZeroError(DivideByZeroError::new(Uint64::from(
-                    604_800_000_000u64
-                )))
+                ContractError::DivideByZeroError(DivideByZeroError::new())
             );
         }
 

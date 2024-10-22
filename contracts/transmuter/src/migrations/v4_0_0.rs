@@ -40,15 +40,14 @@ pub fn execute_migration(deps: DepsMut) -> Result<Response, ContractError> {
     );
 
     // add asset groups to the pool
-    let pool_v3: TransmuterPoolV3 =
-        Item::<'_, TransmuterPoolV3>::new(key::POOL).load(deps.storage)?;
+    let pool_v3: TransmuterPoolV3 = Item::<TransmuterPoolV3>::new(key::POOL).load(deps.storage)?;
 
     let pool_v4 = TransmuterPool {
         pool_assets: pool_v3.pool_assets,
         asset_groups: BTreeMap::new(),
     };
 
-    Item::<'_, TransmuterPool>::new(key::POOL).save(deps.storage, &pool_v4)?;
+    Item::<TransmuterPool>::new(key::POOL).save(deps.storage, &pool_v4)?;
 
     // Set the contract version to the target version after successful migration
     cw2::set_contract_version(deps.storage, CONTRACT_NAME, TO_VERSION)?;
@@ -113,7 +112,7 @@ mod tests {
 
         let res = execute_migration(deps.as_mut()).unwrap();
 
-        let pool = Item::<'_, TransmuterPool>::new(key::POOL)
+        let pool = Item::<TransmuterPool>::new(key::POOL)
             .load(&deps.storage)
             .unwrap();
 

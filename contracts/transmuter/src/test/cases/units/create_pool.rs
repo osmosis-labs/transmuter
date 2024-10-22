@@ -7,7 +7,7 @@ use crate::{
         IsActiveResponse,
     },
 };
-use cosmwasm_std::{Coin, Uint128};
+use cosmwasm_std::{coin, Uint128};
 use osmosis_test_tube::OsmosisTestApp;
 
 use crate::test::test_env::TestEnvBuilder;
@@ -17,7 +17,7 @@ fn test_create_pool() {
     let app = OsmosisTestApp::new();
 
     // create denom
-    app.init_account(&[Coin::new(1, "denom1"), Coin::new(1, "denom2")])
+    app.init_account(&[coin(1, "denom1"), coin(1, "denom2")])
         .unwrap();
 
     let t = TestEnvBuilder::new()
@@ -52,10 +52,7 @@ fn test_create_pool() {
 
     assert_eq!(
         total_pool_liquidity,
-        vec![
-            Coin::new(0, "denom1".to_string()),
-            Coin::new(0, "denom2".to_string())
-        ]
+        vec![coin(0, "denom1".to_string()), coin(0, "denom2".to_string())]
     );
 
     // get total shares

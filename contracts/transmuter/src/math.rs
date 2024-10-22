@@ -176,7 +176,7 @@ mod tests {
         5u128,
         20u128,
         0u128,
-        Err(MathError::DivideByZeroError(DivideByZeroError { operand: String::from("100")}))
+        Err(MathError::DivideByZeroError(DivideByZeroError::new()))
     )]
     #[case(
         1000u128,

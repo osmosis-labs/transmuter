@@ -4,8 +4,8 @@ use cw_storage_plus::Item;
 
 use crate::ContractError;
 
-pub struct Admin<'a> {
-    state: Item<'a, AdminState>,
+pub struct Admin {
+    state: Item<AdminState>,
 }
 
 /// State of the admin to be stored in the contract storage
@@ -15,8 +15,8 @@ pub enum AdminState {
     Transferring { current: Addr, candidate: Addr },
 }
 
-impl<'a> Admin<'a> {
-    pub const fn new(namespace: &'a str) -> Self {
+impl Admin {
+    pub const fn new(namespace: &'static str) -> Self {
         Self {
             state: Item::new(namespace),
         }

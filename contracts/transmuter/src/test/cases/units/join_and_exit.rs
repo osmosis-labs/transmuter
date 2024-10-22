@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cosmwasm_std::{attr, Coin, Uint128};
+use cosmwasm_std::{attr, coin, Coin, Uint128};
 use itertools::Itertools;
 use osmosis_test_tube::{Account, OsmosisTestApp};
 
@@ -24,40 +24,34 @@ fn test_join_pool_with_single_lp_should_update_shares_and_liquidity_properly() {
 
     let cases = vec![
         Case {
-            funds: vec![Coin::new(1, "denoma")],
+            funds: vec![coin(1, "denoma")],
         },
         Case {
-            funds: vec![Coin::new(1, "denomb")],
+            funds: vec![coin(1, "denomb")],
         },
         Case {
-            funds: vec![Coin::new(100, "denoma")],
+            funds: vec![coin(100, "denoma")],
         },
         Case {
-            funds: vec![Coin::new(100, "denomb")],
+            funds: vec![coin(100, "denomb")],
         },
         Case {
-            funds: vec![Coin::new(100_000_000_000_000, "denoma")],
+            funds: vec![coin(100_000_000_000_000, "denoma")],
         },
         Case {
-            funds: vec![Coin::new(100_000_000_000_000, "denomb")],
+            funds: vec![coin(100_000_000_000_000, "denomb")],
         },
         Case {
-            funds: vec![Coin::new(u128::MAX, "denoma")],
+            funds: vec![coin(u128::MAX, "denoma")],
         },
         Case {
-            funds: vec![Coin::new(u128::MAX, "denomb")],
+            funds: vec![coin(u128::MAX, "denomb")],
         },
         Case {
-            funds: vec![
-                Coin::new(999_999_999, "denoma"),
-                Coin::new(999_999_999, "denomb"),
-            ],
+            funds: vec![coin(999_999_999, "denoma"), coin(999_999_999, "denomb")],
         },
         Case {
-            funds: vec![
-                Coin::new(12_000_000_000, "denoma"),
-                Coin::new(999_999_999, "denomb"),
-            ],
+            funds: vec![coin(12_000_000_000, "denoma"), coin(999_999_999, "denomb")],
         },
     ];
 
@@ -84,7 +78,7 @@ fn test_join_pool_with_single_lp_should_update_shares_and_liquidity_properly() {
 
         // make supply non-zero
         for denom in missing_denoms {
-            app.init_account(&[Coin::new(1, denom)]).unwrap();
+            app.init_account(&[coin(1, denom)]).unwrap();
         }
 
         let t = TestEnvBuilder::new()
@@ -161,41 +155,32 @@ fn test_join_pool_should_update_shares_and_liquidity_properly() {
     let cases = vec![
         Case {
             joins: vec![
-                ("addr1", vec![Coin::new(1, "denoma")]),
-                ("addr2", vec![Coin::new(1, "denomb")]),
+                ("addr1", vec![coin(1, "denoma")]),
+                ("addr2", vec![coin(1, "denomb")]),
             ],
         },
         Case {
-            joins: vec![("addr1", vec![Coin::new(u128::MAX, "denoma")])],
+            joins: vec![("addr1", vec![coin(u128::MAX, "denoma")])],
         },
         Case {
-            joins: vec![("addr1", vec![Coin::new(u128::MAX, "denomb")])],
+            joins: vec![("addr1", vec![coin(u128::MAX, "denomb")])],
         },
         Case {
             joins: vec![
-                ("addr1", vec![Coin::new(100_000, "denoma")]),
-                ("addr2", vec![Coin::new(999_999_999, "denomb")]),
-                ("addr3", vec![Coin::new(1, "denoma")]),
-                ("addr4", vec![Coin::new(2, "denomb")]),
+                ("addr1", vec![coin(100_000, "denoma")]),
+                ("addr2", vec![coin(999_999_999, "denomb")]),
+                ("addr3", vec![coin(1, "denoma")]),
+                ("addr4", vec![coin(2, "denomb")]),
             ],
         },
         Case {
             joins: vec![
-                (
-                    "addr1",
-                    vec![Coin::new(100_000, "denoma"), Coin::new(999, "denomb")],
-                ),
+                ("addr1", vec![coin(100_000, "denoma"), coin(999, "denomb")]),
                 (
                     "addr2",
-                    vec![
-                        Coin::new(999_999_999, "denoma"),
-                        Coin::new(999_999_999, "denomb"),
-                    ],
+                    vec![coin(999_999_999, "denoma"), coin(999_999_999, "denomb")],
                 ),
-                (
-                    "addr3",
-                    vec![Coin::new(1, "denoma"), Coin::new(1, "denomb")],
-                ),
+                ("addr3", vec![coin(1, "denoma"), coin(1, "denomb")]),
             ],
         },
     ];
@@ -224,7 +209,7 @@ fn test_join_pool_should_update_shares_and_liquidity_properly() {
 
         // make supply non-zero
         for denom in missing_denoms {
-            app.init_account(&[Coin::new(1, denom)]).unwrap();
+            app.init_account(&[coin(1, denom)]).unwrap();
         }
 
         for (acc, funds) in case.joins.clone() {
@@ -318,28 +303,28 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
 
     let cases = vec![
         Case {
-            join: vec![Coin::new(1, "denoma")],
-            exit: vec![Coin::new(1, "denoma")],
+            join: vec![coin(1, "denoma")],
+            exit: vec![coin(1, "denoma")],
         },
         Case {
-            join: vec![Coin::new(100_000, "denoma"), Coin::new(1, "denomb")],
-            exit: vec![Coin::new(100_000, "denoma")],
+            join: vec![coin(100_000, "denoma"), coin(1, "denomb")],
+            exit: vec![coin(100_000, "denoma")],
         },
         Case {
-            join: vec![Coin::new(1, "denoma"), Coin::new(100_000, "denomb")],
-            exit: vec![Coin::new(100_000, "denomb")],
+            join: vec![coin(1, "denoma"), coin(100_000, "denomb")],
+            exit: vec![coin(100_000, "denomb")],
         },
         Case {
-            join: vec![Coin::new(u128::MAX, "denoma")],
-            exit: vec![Coin::new(u128::MAX, "denoma")],
+            join: vec![coin(u128::MAX, "denoma")],
+            exit: vec![coin(u128::MAX, "denoma")],
         },
         Case {
-            join: vec![Coin::new(u128::MAX, "denoma")],
-            exit: vec![Coin::new(u128::MAX - 1, "denoma")],
+            join: vec![coin(u128::MAX, "denoma")],
+            exit: vec![coin(u128::MAX - 1, "denoma")],
         },
         Case {
-            join: vec![Coin::new(u128::MAX, "denoma")],
-            exit: vec![Coin::new(u128::MAX - 100_000_000, "denoma")],
+            join: vec![coin(u128::MAX, "denoma")],
+            exit: vec![coin(u128::MAX - 100_000_000, "denoma")],
         },
     ];
 
@@ -350,10 +335,7 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
             .with_account("instantiator", vec![])
             .with_account(
                 "addr1",
-                vec![
-                    Coin::new(u128::MAX, "denoma"),
-                    Coin::new(u128::MAX, "denomb"),
-                ],
+                vec![coin(u128::MAX, "denoma"), coin(u128::MAX, "denomb")],
             )
             .with_instantiate_msg(InstantiateMsg {
                 pool_asset_configs: vec![
@@ -455,6 +437,7 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
             vec![
                 attr("burn_from_address", t.accounts["addr1"].address()),
                 attr("amount", format!("{}{}", exit_amount, share_denom)),
+                attr("msg_index", "0"),
             ]
         );
 
@@ -509,7 +492,7 @@ fn test_exit_pool_less_than_their_shares_should_update_shares_and_liquidity_prop
                     .exit
                     .iter()
                     .find(|coin| coin.denom == curr.denom)
-                    .unwrap_or(&Coin::new(0, curr.denom))
+                    .unwrap_or(&coin(0, curr.denom))
                     .amount;
                 assert_eq!(curr.amount, prev.amount - exit_amount);
             });
@@ -526,23 +509,23 @@ fn test_exit_pool_greater_than_their_shares_should_fail() {
 
     let cases = vec![
         Case {
-            join: vec![Coin::new(1, "denoma")],
-            exit: vec![Coin::new(2, "denoma")],
+            join: vec![coin(1, "denoma")],
+            exit: vec![coin(2, "denoma")],
         },
         Case {
-            join: vec![Coin::new(100_000_000, "denoma")],
-            exit: vec![Coin::new(100_000_001, "denoma")],
+            join: vec![coin(100_000_000, "denoma")],
+            exit: vec![coin(100_000_001, "denoma")],
         },
         Case {
-            join: vec![Coin::new(u128::MAX - 1, "denoma")],
-            exit: vec![Coin::new(u128::MAX, "denoma")],
+            join: vec![coin(u128::MAX - 1, "denoma")],
+            exit: vec![coin(u128::MAX, "denoma")],
         },
         Case {
             join: vec![
-                Coin::new(u128::MAX - 100_000_000, "denoma"),
-                Coin::new(99_999_999, "denomb"),
+                coin(u128::MAX - 100_000_000, "denoma"),
+                coin(99_999_999, "denomb"),
             ],
-            exit: vec![Coin::new(u128::MAX, "denoma")],
+            exit: vec![coin(u128::MAX, "denoma")],
         },
     ];
 
@@ -550,7 +533,7 @@ fn test_exit_pool_greater_than_their_shares_should_fail() {
         let app = OsmosisTestApp::new();
 
         // create denom
-        app.init_account(&[Coin::new(1, "denoma"), Coin::new(1, "denomb")])
+        app.init_account(&[coin(1, "denoma"), coin(1, "denomb")])
             .unwrap();
 
         let t = TestEnvBuilder::new()
@@ -605,8 +588,8 @@ fn test_exit_pool_greater_than_their_shares_should_fail() {
 fn test_exit_pool_within_shares_but_over_joined_denom_amount() {
     let app = OsmosisTestApp::new();
     let t = TestEnvBuilder::new()
-        .with_account("instantiator", vec![Coin::new(100_000_000, "denoma")])
-        .with_account("addr1", vec![Coin::new(200_000_000, "denomb")])
+        .with_account("instantiator", vec![coin(100_000_000, "denoma")])
+        .with_account("addr1", vec![coin(200_000_000, "denomb")])
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_configs: vec![
                 AssetConfig::from_denom_str("denoma"),
@@ -622,7 +605,7 @@ fn test_exit_pool_within_shares_but_over_joined_denom_amount() {
     t.contract
         .execute(
             &ExecMsg::JoinPool {},
-            &[Coin::new(100_000_000, "denoma")],
+            &[coin(100_000_000, "denoma")],
             &t.accounts["instantiator"],
         )
         .unwrap();
@@ -630,7 +613,7 @@ fn test_exit_pool_within_shares_but_over_joined_denom_amount() {
     t.contract
         .execute(
             &ExecMsg::JoinPool {},
-            &[Coin::new(200_000_000, "denomb")],
+            &[coin(200_000_000, "denomb")],
             &t.accounts["addr1"],
         )
         .unwrap();
@@ -638,10 +621,7 @@ fn test_exit_pool_within_shares_but_over_joined_denom_amount() {
     t.contract
         .execute(
             &ExecMsg::ExitPool {
-                tokens_out: vec![
-                    Coin::new(100_000_000, "denoma"),
-                    Coin::new(100_000_000, "denomb"),
-                ],
+                tokens_out: vec![coin(100_000_000, "denoma"), coin(100_000_000, "denomb")],
             },
             &[],
             &t.accounts["addr1"],

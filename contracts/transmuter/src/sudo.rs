@@ -176,8 +176,9 @@ mod tests {
         swap::{SwapExactAmountInResponseData, SwapExactAmountOutResponseData},
     };
     use cosmwasm_std::{
-        testing::{mock_dependencies, mock_env, mock_info, MOCK_CONTRACT_ADDR},
-        to_json_binary, BankMsg, Reply, SubMsgResponse, SubMsgResult,
+        coin,
+        testing::{message_info, mock_dependencies, mock_env, mock_info, MOCK_CONTRACT_ADDR},
+        to_json_binary, BankMsg, Binary, Reply, SubMsgResponse, SubMsgResult,
     };
     use osmosis_std::types::osmosis::tokenfactory::v1beta1::{
         MsgBurn, MsgCreateDenomResponse, MsgMint,
@@ -186,15 +187,16 @@ mod tests {
     #[test]
     fn test_swap_exact_amount_in() {
         let mut deps = mock_dependencies();
+        let someone = deps.api.addr_make("someone");
+        let admin = deps.api.addr_make("admin");
+        let user = deps.api.addr_make("user");
+        let moderator = deps.api.addr_make("moderator");
 
         // make denom has non-zero total supply
-        deps.querier.update_balance(
-            "someone",
-            vec![Coin::new(1, "axlusdc"), Coin::new(1, "whusdc")],
-        );
+        deps.querier
+            .bank
+            .update_balance(&someone, vec![coin(1, "axlusdc"), coin(1, "whusdc")]);
 
-        let admin = "admin";
-        let user = "user";
         let init_msg = InstantiateMsg {
             pool_asset_configs: vec![
                 AssetConfig::from_denom_str("axlusdc"),
@@ -203,10 +205,10 @@ mod tests {
             alloyed_asset_subdenom: "uusdc".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.to_string()),
-            moderator: "moderator".to_string(),
+            moderator: moderator.to_string(),
         };
         let env = mock_env();
-        let info = mock_info(admin, &[]);
+        let info = message_info(&admin, &[]);
 
         // Instantiate the contract.
         instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
@@ -227,7 +229,10 @@ mod tests {
                         }
                         .into(),
                     ),
+                    msg_responses: vec![],
                 }),
+                payload: Binary::new(vec![]),
+                gas_used: 0,
             },
         )
         .unwrap();
@@ -236,11 +241,11 @@ mod tests {
         execute(
             deps.as_mut(),
             env.clone(),
-            mock_info(
-                user,
+            message_info(
+                &user,
                 &[
-                    Coin::new(1_000_000_000_000, "axlusdc"),
-                    Coin::new(1_000_000_000_000, "whusdc"),
+                    coin(1_000_000_000_000, "axlusdc"),
+                    coin(1_000_000_000_000, "whusdc"),
                 ],
             ),
             join_pool_msg,
@@ -250,7 +255,7 @@ mod tests {
         // Test swap exact amount in with 0 amount in should error with ZeroValueOperation
         let swap_msg = SudoMsg::SwapExactAmountIn {
             sender: user.to_string(),
-            token_in: Coin::new(0, "axlusdc".to_string()),
+            token_in: coin(0, "axlusdc".to_string()),
             token_out_denom: "whusdc".to_string(),
             token_out_min_amount: Uint128::from(0u128),
             swap_fee: Decimal::zero(),
@@ -262,7 +267,7 @@ mod tests {
         // Test swap exact amount in with only pool assets
         let swap_msg = SudoMsg::SwapExactAmountIn {
             sender: user.to_string(),
-            token_in: Coin::new(500, "axlusdc".to_string()),
+            token_in: coin(500, "axlusdc".to_string()),
             token_out_denom: "whusdc".to_string(),
             token_out_min_amount: Uint128::from(500u128),
             swap_fee: Decimal::zero(),
@@ -274,7 +279,7 @@ mod tests {
             .add_attribute("method", "swap_exact_amount_in")
             .add_message(BankMsg::Send {
                 to_address: user.to_string(),
-                amount: vec![Coin::new(500, "whusdc".to_string())],
+                amount: vec![coin(500, "whusdc".to_string())],
             })
             .set_data(
                 to_json_binary(&SwapExactAmountInResponseData {
@@ -287,10 +292,11 @@ mod tests {
 
         // Test swap with token in as alloyed asset
         deps.querier
-            .update_balance(MOCK_CONTRACT_ADDR, vec![Coin::new(500, alloyed_denom)]);
+            .bank
+            .update_balance(MOCK_CONTRACT_ADDR, vec![coin(500, alloyed_denom)]);
         let swap_msg = SudoMsg::SwapExactAmountIn {
             sender: user.to_string(),
-            token_in: Coin::new(500, alloyed_denom),
+            token_in: coin(500, alloyed_denom),
             token_out_denom: "whusdc".to_string(),
             token_out_min_amount: Uint128::from(500u128),
             swap_fee: Decimal::zero(),
@@ -301,13 +307,13 @@ mod tests {
         let expected = Response::new()
             .add_attribute("method", "swap_exact_amount_in")
             .add_message(MsgBurn {
-                amount: Some(Coin::new(500, alloyed_denom).into()),
+                amount: Some(coin(500, alloyed_denom).into()),
                 sender: env.contract.address.to_string(),
                 burn_from_address: env.contract.address.to_string(),
             })
             .add_message(BankMsg::Send {
                 to_address: user.to_string(),
-                amount: vec![Coin::new(500, "whusdc".to_string())],
+                amount: vec![coin(500, "whusdc".to_string())],
             })
             .set_data(
                 to_json_binary(&SwapExactAmountInResponseData {
@@ -321,7 +327,7 @@ mod tests {
         // Test swap with token out as alloyed asset
         let swap_msg = SudoMsg::SwapExactAmountIn {
             sender: user.to_string(),
-            token_in: Coin::new(500, "whusdc".to_string()),
+            token_in: coin(500, "whusdc".to_string()),
             token_out_denom: alloyed_denom.to_string(),
             token_out_min_amount: Uint128::from(500u128),
             swap_fee: Decimal::zero(),
@@ -333,7 +339,7 @@ mod tests {
             .add_attribute("method", "swap_exact_amount_in")
             .add_message(MsgMint {
                 sender: env.contract.address.to_string(),
-                amount: Some(Coin::new(500, alloyed_denom).into()),
+                amount: Some(coin(500, alloyed_denom).into()),
                 mint_to_address: user.to_string(),
             })
             .set_data(
@@ -348,7 +354,7 @@ mod tests {
         // Test case for ensure token_out amount is greater than or equal to token_out_min_amount
         let swap_msg = SudoMsg::SwapExactAmountIn {
             sender: user.to_string(),
-            token_in: Coin::new(500, "whusdc".to_string()),
+            token_in: coin(500, "whusdc".to_string()),
             token_out_denom: "axlusdc".to_string(),
             token_out_min_amount: Uint128::from(1000u128), // set min amount greater than token_in
             swap_fee: Decimal::zero(),
@@ -367,7 +373,7 @@ mod tests {
         // Test case for ensure token_out amount is greater than or equal to token_out_min_amount but token_in is alloyed asset
         let swap_msg = SudoMsg::SwapExactAmountIn {
             sender: user.to_string(),
-            token_in: Coin::new(500, alloyed_denom.to_string()),
+            token_in: coin(500, alloyed_denom.to_string()),
             token_out_denom: "axlusdc".to_string(),
             token_out_min_amount: Uint128::from(1000u128), // set min amount greater than token_in
             swap_fee: Decimal::zero(),
@@ -386,7 +392,7 @@ mod tests {
         // Test case for ensure token_out amount is greater than or equal to token_out_min_amount but token_out is alloyed asset
         let swap_msg = SudoMsg::SwapExactAmountIn {
             sender: user.to_string(),
-            token_in: Coin::new(500, "whusdc".to_string()),
+            token_in: coin(500, "whusdc".to_string()),
             token_out_denom: alloyed_denom.to_string(),
             token_out_min_amount: Uint128::from(1000u128), // set min amount greater than token_in
             swap_fee: Decimal::zero(),
@@ -406,15 +412,16 @@ mod tests {
     #[test]
     fn test_swap_exact_token_out() {
         let mut deps = mock_dependencies();
+        let admin = deps.api.addr_make("admin");
+        let user = deps.api.addr_make("user");
+        let someone = deps.api.addr_make("someone");
+        let moderator = deps.api.addr_make("moderator");
 
         // make denom has non-zero total supply
-        deps.querier.update_balance(
-            "someone",
-            vec![Coin::new(1, "axlusdc"), Coin::new(1, "whusdc")],
-        );
+        deps.querier
+            .bank
+            .update_balance(&someone, vec![coin(1, "axlusdc"), coin(1, "whusdc")]);
 
-        let admin = "admin";
-        let user = "user";
         let init_msg = InstantiateMsg {
             pool_asset_configs: vec![
                 AssetConfig::from_denom_str("axlusdc"),
@@ -423,10 +430,10 @@ mod tests {
             alloyed_asset_subdenom: "uusdc".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
             admin: Some(admin.to_string()),
-            moderator: "moderator".to_string(),
+            moderator: moderator.to_string(),
         };
         let env = mock_env();
-        let info = mock_info(admin, &[]);
+        let info = message_info(&admin, &[]);
 
         // Instantiate the contract.
         instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
@@ -447,7 +454,10 @@ mod tests {
                         }
                         .into(),
                     ),
+                    msg_responses: vec![],
                 }),
+                payload: Binary::new(vec![]),
+                gas_used: 0,
             },
         )
         .unwrap();
@@ -456,11 +466,11 @@ mod tests {
         execute(
             deps.as_mut(),
             env.clone(),
-            mock_info(
-                user,
+            message_info(
+                &user,
                 &[
-                    Coin::new(1_000_000_000_000, "axlusdc"),
-                    Coin::new(1_000_000_000_000, "whusdc"),
+                    coin(1_000_000_000_000, "axlusdc"),
+                    coin(1_000_000_000_000, "whusdc"),
                 ],
             ),
             join_pool_msg,
@@ -471,7 +481,7 @@ mod tests {
         let swap_msg = SudoMsg::SwapExactAmountOut {
             sender: user.to_string(),
             token_in_denom: "whusdc".to_string(),
-            token_out: Coin::new(0, "axlusdc".to_string()),
+            token_out: coin(0, "axlusdc".to_string()),
             token_in_max_amount: Uint128::from(0u128),
             swap_fee: Decimal::zero(),
         };
@@ -484,7 +494,7 @@ mod tests {
             sender: user.to_string(),
             token_in_denom: "axlusdc".to_string(),
             token_in_max_amount: Uint128::from(500u128),
-            token_out: Coin::new(500, "whusdc".to_string()),
+            token_out: coin(500, "whusdc".to_string()),
             swap_fee: Decimal::zero(),
         };
 
@@ -494,7 +504,7 @@ mod tests {
             .add_attribute("method", "swap_exact_amount_out")
             .add_message(BankMsg::Send {
                 to_address: user.to_string(),
-                amount: vec![Coin::new(500, "whusdc".to_string())],
+                amount: vec![coin(500, "whusdc".to_string())],
             })
             .set_data(
                 to_json_binary(&SwapExactAmountOutResponseData {
@@ -507,13 +517,14 @@ mod tests {
 
         // Test swap with token in as alloyed asset
         deps.querier
-            .update_balance(MOCK_CONTRACT_ADDR, vec![Coin::new(500, alloyed_denom)]);
+            .bank
+            .update_balance(MOCK_CONTRACT_ADDR, vec![coin(500, alloyed_denom)]);
 
         let swap_msg = SudoMsg::SwapExactAmountOut {
             sender: user.to_string(),
             token_in_denom: alloyed_denom.to_string(),
             token_in_max_amount: Uint128::from(500u128),
-            token_out: Coin::new(500, "whusdc".to_string()),
+            token_out: coin(500, "whusdc".to_string()),
             swap_fee: Decimal::zero(),
         };
 
@@ -522,13 +533,13 @@ mod tests {
         let expected = Response::new()
             .add_attribute("method", "swap_exact_amount_out")
             .add_message(MsgBurn {
-                amount: Some(Coin::new(500, alloyed_denom).into()),
+                amount: Some(coin(500, alloyed_denom).into()),
                 sender: env.contract.address.to_string(),
                 burn_from_address: env.contract.address.to_string(),
             })
             .add_message(BankMsg::Send {
                 to_address: user.to_string(),
-                amount: vec![Coin::new(500, "whusdc".to_string())],
+                amount: vec![coin(500, "whusdc".to_string())],
             })
             .set_data(
                 to_json_binary(&SwapExactAmountOutResponseData {
@@ -544,7 +555,7 @@ mod tests {
             sender: user.to_string(),
             token_in_denom: "whusdc".to_string(),
             token_in_max_amount: Uint128::from(500u128),
-            token_out: Coin::new(500, alloyed_denom.to_string()),
+            token_out: coin(500, alloyed_denom.to_string()),
             swap_fee: Decimal::zero(),
         };
 
@@ -554,7 +565,7 @@ mod tests {
             .add_attribute("method", "swap_exact_amount_out")
             .add_message(MsgMint {
                 sender: env.contract.address.to_string(),
-                amount: Some(Coin::new(500, alloyed_denom).into()),
+                amount: Some(coin(500, alloyed_denom).into()),
                 mint_to_address: user.to_string(),
             })
             .set_data(
@@ -571,7 +582,7 @@ mod tests {
             sender: user.to_string(),
             token_in_denom: "whusdc".to_string(),
             token_in_max_amount: Uint128::from(500u128), // set max amount less than token_out
-            token_out: Coin::new(1000, "axlusdc".to_string()),
+            token_out: coin(1000, "axlusdc".to_string()),
             swap_fee: Decimal::zero(),
         };
 
@@ -590,7 +601,7 @@ mod tests {
             sender: user.to_string(),
             token_in_denom: alloyed_denom.to_string(),
             token_in_max_amount: Uint128::from(500u128), // set max amount less than token_out
-            token_out: Coin::new(1000, "axlusdc".to_string()),
+            token_out: coin(1000, "axlusdc".to_string()),
             swap_fee: Decimal::zero(),
         };
 
@@ -609,7 +620,7 @@ mod tests {
             sender: user.to_string(),
             token_in_denom: "whusdc".to_string(),
             token_in_max_amount: Uint128::from(500u128), // set max amount less than token_out
-            token_out: Coin::new(1000, alloyed_denom.to_string()),
+            token_out: coin(1000, alloyed_denom.to_string()),
             swap_fee: Decimal::zero(),
         };
 
