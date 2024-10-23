@@ -55,7 +55,7 @@ transmuter_math = {version = "1.0.0", path = "../../packages/transmuter_math"}
 
 [dev-dependencies]
 itertools = "0.13.0"
-osmosis-test-tube = {path = "../../../test-tube/packages/osmosis-test-tube"}
+osmosis-test-tube = "26.0.1"
 rstest = "0.23.0"
 
 [lints.rust]
