@@ -2,12 +2,12 @@
 authors = ["Supanat Potiwarakorn <supanat.ptk@gmail.com>"]
 edition = "2021"
 name = "transmuter"
-version = "3.2.0"
+version = "4.0.0"
 
 exclude = [
-    # Those files are rust-optimizer artifacts. You might want to commit them for convenience but they should not be part of the source code publication.
-    "contract.wasm",
-    "hash.txt",
+  # Those files are rust-optimizer artifacts. You might want to commit them for convenience but they should not be part of the source code publication.
+  "contract.wasm",
+  "hash.txt",
 ]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -29,8 +29,7 @@ rpath = false
 [features]
 # skip integration test for cases like running `cargo mutants`
 skip-integration-test = []
-# for more explicit tests, cargo test --features=backtraces
-backtraces = ["cosmwasm-std/backtraces"]
+
 # use library feature to disable all instantiate/execute/query exports
 library = []
 
@@ -42,25 +41,25 @@ optimize = """docker run --rm -v "$(pwd)":/code \
 """
 
 [dependencies]
-cosmwasm-schema = { workspace = true }
-cosmwasm-std = { workspace = true, features = ["cosmwasm_1_1"] }
+cosmwasm-schema = {workspace = true}
+cosmwasm-std = {workspace = true, features = ["cosmwasm_1_1"]}
 cosmwasm-storage = "1.3.1"
-cw-storage-plus = "1.1.0"
-cw2 = "1.1.0"
-osmosis-std = "0.22.0"
+cw-storage-plus = "2.0.0"
+cw2 = "2.0.0"
+osmosis-std = "0.26.0"
 schemars = "0.8.12"
-serde = { version = "1.0.183", default-features = false, features = ["derive"] }
-sylvia = "0.10.1"
-thiserror = { version = "1.0.44" }
-transmuter_math = { version = "1.0.0", path = "../../packages/transmuter_math" }
+serde = {version = "1.0.183", default-features = false, features = ["derive"]}
+sylvia = "1.2.1"
+thiserror = {version = "1.0.44"}
+transmuter_math = {version = "1.0.0", path = "../../packages/transmuter_math"}
 
 [dev-dependencies]
-itertools = "0.12.0"
-osmosis-test-tube = "22.1.0"
-rstest = "0.18.2"
+itertools = "0.13.0"
+osmosis-test-tube = "26.0.1"
+rstest = "0.23.0"
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = [
-    'cfg(tarpaulin)',
-    'cfg(tarpaulin_include)',
-] }
+unexpected_cfgs = {level = "warn", check-cfg = [
+  'cfg(tarpaulin)',
+  'cfg(tarpaulin_include)',
+]}

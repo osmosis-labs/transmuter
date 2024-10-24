@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env, Response,
-    StdError, Storage, Uint128,
+    coin, ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env,
+    Response, StdError, Storage, Uint128,
 };
 use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
 use serde::Serialize;
@@ -11,14 +11,16 @@ use serde::Serialize;
 use crate::{
     alloyed_asset::{swap_from_alloyed, swap_to_alloyed},
     contract::Transmuter,
-    transmuter_pool::{AmountConstraint, TransmuterPool},
+    corruptable::Corruptable,
+    scope::Scope,
+    transmuter_pool::{AmountConstraint, AssetGroup, TransmuterPool},
     ContractError,
 };
 
 /// Swap fee is hardcoded to zero intentionally.
 pub const SWAP_FEE: Decimal = Decimal::zero();
 
-impl Transmuter<'_> {
+impl Transmuter {
     /// Getting the [SwapVariant] of the swap operation
     /// assuming the swap token is not
     pub fn swap_variant(
@@ -98,7 +100,7 @@ impl Transmuter<'_> {
                     token_out_amount,
                     self.alloyed_asset.get_normalization_factor(deps.storage)?,
                 )?;
-                let tokens_in = vec![Coin::new(in_amount.u128(), token_in_denom)];
+                let tokens_in = vec![coin(in_amount.u128(), token_in_denom)];
 
                 let response = set_data_if_sudo(
                     response,
@@ -124,15 +126,21 @@ impl Transmuter<'_> {
             ContractError::ZeroValueOperation {}
         );
 
-        let prev_weights = pool.weights_map()?;
+        let prev_weights = pool.asset_weights()?.unwrap_or_default();
 
         pool.join_pool(&tokens_in)?;
 
         // check and update limiters only if pool assets are not zero
-        if let Some(updated_weights) = pool.weights()? {
+        if let Some(updated_weights) = pool.asset_weights()? {
+            let scope_value_pairs = construct_scope_value_pairs(
+                prev_weights,
+                updated_weights,
+                pool.asset_groups.clone(),
+            )?;
+
             self.limiters.check_limits_and_update(
                 deps.storage,
-                pair_weights_by_denom(prev_weights, updated_weights),
+                scope_value_pairs,
                 env.block.time,
             )?;
         }
@@ -143,7 +151,7 @@ impl Transmuter<'_> {
 
         self.pool.save(deps.storage, &pool)?;
 
-        let alloyed_asset_out = Coin::new(
+        let alloyed_asset_out = coin(
             out_amount.u128(),
             self.alloyed_asset.get_alloyed_denom(deps.storage)?,
         );
@@ -194,7 +202,7 @@ impl Transmuter<'_> {
                     },
                 )?;
 
-                let tokens_out = vec![Coin::new(out_amount.u128(), token_out_denom)];
+                let tokens_out = vec![coin(out_amount.u128(), token_out_denom)];
 
                 (token_in_amount, tokens_out, response)
             }
@@ -272,6 +280,18 @@ impl Transmuter<'_> {
         }?
         .to_string();
 
+        let denoms_in_corrupted_asset_group = pool
+            .asset_groups
+            .iter()
+            .flat_map(|(_, asset_group)| {
+                if asset_group.is_corrupted() {
+                    asset_group.denoms().to_vec()
+                } else {
+                    vec![]
+                }
+            })
+            .collect::<Vec<_>>();
+
         let is_force_exit_corrupted_assets = tokens_out.iter().all(|coin| {
             let total_liquidity = pool
                 .get_pool_asset_by_denom(&coin.denom)
@@ -279,8 +299,11 @@ impl Transmuter<'_> {
                 .unwrap_or_default();
 
             let is_redeeming_total_liquidity = coin.amount == total_liquidity;
+            let is_under_corrupted_asset_group =
+                denoms_in_corrupted_asset_group.contains(&coin.denom);
 
-            pool.is_corrupted_asset(&coin.denom) && is_redeeming_total_liquidity
+            is_redeeming_total_liquidity
+                && (is_under_corrupted_asset_group || pool.is_corrupted_asset(&coin.denom))
         });
 
         // If all tokens out are corrupted assets and exit with all remaining liquidity
@@ -290,21 +313,38 @@ impl Transmuter<'_> {
 
             // change limiter needs reset if force redemption since it gets by passed
             // the current state will not be accurate
+
+            let asset_weights_iter = pool
+                .asset_weights()?
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(denom, weight)| (Scope::denom(&denom).key(), weight));
+            let asset_group_weights_iter = pool
+                .asset_group_weights()?
+                .into_iter()
+                .map(|(label, weight)| (Scope::asset_group(&label).key(), weight));
+
             self.limiters.reset_change_limiter_states(
                 deps.storage,
                 env.block.time,
-                pool.weights()?.unwrap_or_default(),
+                asset_weights_iter.chain(asset_group_weights_iter),
             )?;
         } else {
-            let prev_weights = pool.weights_map()?;
+            let prev_weights = pool.asset_weights()?.unwrap_or_default();
 
             pool.exit_pool(&tokens_out)?;
 
             // check and update limiters only if pool assets are not zero
-            if let Some(updated_weights) = pool.weights()? {
+            if let Some(updated_weights) = pool.asset_weights()? {
+                let scope_value_pairs = construct_scope_value_pairs(
+                    prev_weights,
+                    updated_weights,
+                    pool.asset_groups.clone(),
+                )?;
+
                 self.limiters.check_limits_and_update(
                     deps.storage,
-                    pair_weights_by_denom(prev_weights, updated_weights),
+                    scope_value_pairs,
                     env.block.time,
                 )?;
             }
@@ -319,7 +359,7 @@ impl Transmuter<'_> {
             amount: tokens_out,
         };
 
-        let alloyed_asset_to_burn = Coin::new(
+        let alloyed_asset_to_burn = coin(
             in_amount.u128(),
             self.alloyed_asset.get_alloyed_denom(deps.storage)?,
         )
@@ -345,7 +385,7 @@ impl Transmuter<'_> {
         env: Env,
     ) -> Result<Response, ContractError> {
         let pool = self.pool.load(deps.storage)?;
-        let prev_weights = pool.weights_map()?;
+        let prev_weights = pool.asset_weights()?.unwrap_or_default();
 
         let (mut pool, actual_token_out) =
             self.out_amt_given_in(deps.as_ref(), pool, token_in, token_out_denom)?;
@@ -360,10 +400,16 @@ impl Transmuter<'_> {
         );
 
         // check and update limiters only if pool assets are not zero
-        if let Some(updated_weights) = pool.weights()? {
+        if let Some(updated_weights) = pool.asset_weights()? {
+            let scope_value_pairs = construct_scope_value_pairs(
+                prev_weights,
+                updated_weights,
+                pool.asset_groups.clone(),
+            )?;
+
             self.limiters.check_limits_and_update(
                 deps.storage,
-                pair_weights_by_denom(prev_weights, updated_weights),
+                scope_value_pairs,
                 env.block.time,
             )?;
         }
@@ -397,7 +443,7 @@ impl Transmuter<'_> {
         env: Env,
     ) -> Result<Response, ContractError> {
         let pool = self.pool.load(deps.storage)?;
-        let prev_weights = pool.weights_map()?;
+        let prev_weights = pool.asset_weights()?.unwrap_or_default();
 
         let (mut pool, actual_token_in) = self.in_amt_given_out(
             deps.as_ref(),
@@ -415,10 +461,15 @@ impl Transmuter<'_> {
         );
 
         // check and update limiters only if pool assets are not zero
-        if let Some(updated_weights) = pool.weights()? {
+        if let Some(updated_weights) = pool.asset_weights()? {
+            let scope_value_pairs = construct_scope_value_pairs(
+                prev_weights,
+                updated_weights,
+                pool.asset_groups.clone(),
+            )?;
             self.limiters.check_limits_and_update(
                 deps.storage,
-                pair_weights_by_denom(prev_weights, updated_weights),
+                scope_value_pairs,
                 env.block.time,
             )?;
         }
@@ -463,7 +514,7 @@ impl Transmuter<'_> {
                     token_out.amount,
                     self.alloyed_asset.get_normalization_factor(deps.storage)?,
                 )?;
-                let token_in = Coin::new(token_in_amount.u128(), token_in_denom);
+                let token_in = coin(token_in_amount.u128(), token_in_denom);
                 pool.join_pool(&[token_in.clone()])?;
                 (pool, token_in)
             }
@@ -477,7 +528,7 @@ impl Transmuter<'_> {
                     self.alloyed_asset.get_normalization_factor(deps.storage)?,
                     vec![(token_out.clone(), token_out_norm_factor)],
                 )?;
-                let token_in = Coin::new(token_in_amount.u128(), token_in_denom);
+                let token_in = coin(token_in_amount.u128(), token_in_denom);
                 pool.exit_pool(&[token_out])?;
                 (pool, token_in)
             }
@@ -523,7 +574,7 @@ impl Transmuter<'_> {
                     Uint128::zero(),
                     self.alloyed_asset.get_normalization_factor(deps.storage)?,
                 )?;
-                let token_out = Coin::new(token_out_amount.u128(), token_out_denom);
+                let token_out = coin(token_out_amount.u128(), token_out_denom);
                 pool.join_pool(&[token_in])?;
                 (pool, token_out)
             }
@@ -538,7 +589,7 @@ impl Transmuter<'_> {
                     token_out_norm_factor,
                     Uint128::zero(),
                 )?;
-                let token_out = Coin::new(token_out_amount.u128(), token_out_denom);
+                let token_out = coin(token_out_amount.u128(), token_out_denom);
                 pool.exit_pool(&[token_out.clone()])?;
                 (pool, token_out)
             }
@@ -585,11 +636,33 @@ impl Transmuter<'_> {
         storage: &mut dyn Storage,
         pool: &mut TransmuterPool,
     ) -> Result<(), ContractError> {
+        // remove corrupted assets
         for corrupted in pool.clone().corrupted_assets() {
             if corrupted.amount().is_zero() {
-                pool.remove_corrupted_asset(corrupted.denom())?;
+                pool.remove_asset(corrupted.denom())?;
                 self.limiters
-                    .uncheck_deregister_all_for_denom(storage, corrupted.denom())?;
+                    .uncheck_deregister_all_for_scope(storage, Scope::denom(corrupted.denom()))?;
+            }
+        }
+
+        // remove assets from asset groups
+        for (label, asset_group) in pool.clone().asset_groups {
+            // if asset group is corrupted
+            if asset_group.is_corrupted() {
+                // remove asset from pool if amount is zero.
+                // removing asset here will also remove it from the asset group
+                for denom in asset_group.denoms() {
+                    if pool.get_pool_asset_by_denom(denom)?.amount().is_zero() {
+                        pool.remove_asset(denom)?;
+                    }
+                }
+
+                // remove asset group is removed
+                // remove limiters for asset group as well
+                if pool.asset_groups.get(&label).is_none() {
+                    self.limiters
+                        .uncheck_deregister_all_for_scope(storage, Scope::asset_group(&label))?;
+                }
             }
         }
 
@@ -597,18 +670,49 @@ impl Transmuter<'_> {
     }
 }
 
-fn pair_weights_by_denom(
+fn construct_scope_value_pairs(
     prev_weights: BTreeMap<String, Decimal>,
-    updated_weights: Vec<(String, Decimal)>,
-) -> Vec<(String, (Decimal, Decimal))> {
-    let mut denom_weight_pairs = Vec::new();
+    updated_weights: BTreeMap<String, Decimal>,
+    asset_group: BTreeMap<String, AssetGroup>,
+) -> Result<Vec<(Scope, (Decimal, Decimal))>, StdError> {
+    let mut denom_weight_pairs: HashMap<Scope, (Decimal, Decimal)> = HashMap::new();
+    let mut asset_group_weight_pairs: HashMap<Scope, (Decimal, Decimal)> = HashMap::new();
 
-    for (denom, weight) in updated_weights {
-        let prev_weight = prev_weights.get(denom.as_str()).unwrap_or(&weight);
-        denom_weight_pairs.push((denom, (*prev_weight, weight)));
+    // Reverse index the asset groups
+    let mut asset_groups_of_denom = HashMap::new();
+    for (group, asset_group) in asset_group {
+        for denom in asset_group.into_denoms() {
+            asset_groups_of_denom
+                .entry(denom)
+                .or_insert_with(Vec::new)
+                .push(group.clone());
+        }
     }
 
-    denom_weight_pairs
+    for (denom, weight) in &updated_weights {
+        let prev_weight = prev_weights.get(denom.as_str()).unwrap_or(weight);
+        denom_weight_pairs.insert(Scope::denom(denom), (*prev_weight, *weight));
+
+        for group in asset_groups_of_denom.get(denom).unwrap_or(&vec![]) {
+            match asset_group_weight_pairs.get_mut(&Scope::asset_group(group)) {
+                Some((prev, curr)) => {
+                    *prev = prev.checked_add(*prev_weight)?;
+                    *curr = curr.checked_add(*weight)?;
+                }
+                None => {
+                    asset_group_weight_pairs
+                        .insert(Scope::asset_group(group), (*prev_weight, *weight));
+                }
+            }
+
+            // TODO: check for invalid cases like total weight is not 1, proptest it
+        }
+    }
+
+    Ok(denom_weight_pairs
+        .into_iter()
+        .chain(asset_group_weight_pairs.into_iter())
+        .collect())
 }
 
 /// Possible variants of swap, depending on the input and output tokens
@@ -695,7 +799,7 @@ pub enum BurnTarget {
 
 #[cfg(test)]
 mod tests {
-    use crate::{asset::Asset, limiter::LimiterParams};
+    use crate::{asset::Asset, corruptable::Corruptable, limiter::LimiterParams};
 
     use super::*;
     use cosmwasm_std::{
@@ -722,7 +826,7 @@ mod tests {
         #[case] res: Result<SwapVariant, ContractError>,
     ) {
         let mut deps = cosmwasm_std::testing::mock_dependencies();
-        let transmuter = Transmuter::default();
+        let transmuter = Transmuter::new();
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -735,21 +839,21 @@ mod tests {
     #[case(
         Entrypoint::Exec,
         SwapToAlloyedConstraint::ExactIn {
-            tokens_in: &[Coin::new(100, "denom1")],
+            tokens_in: &[coin(100, "denom1")],
             token_out_min_amount: Uint128::one(),
         },
         Addr::unchecked("addr1"),
         Ok(Response::new()
             .add_message(MsgMint {
                 sender: MOCK_CONTRACT_ADDR.to_string(),
-                amount: Some(Coin::new(10000u128, "alloyed").into()),
+                amount: Some(coin(10000u128, "alloyed").into()),
                 mint_to_address: "addr1".to_string()
             })),
     )]
     #[case(
         Entrypoint::Sudo,
         SwapToAlloyedConstraint::ExactIn {
-            tokens_in: &[Coin::new(100, "denom1")],
+            tokens_in: &[coin(100, "denom1")],
             token_out_min_amount: Uint128::one(),
         },
         Addr::unchecked("addr1"),
@@ -759,7 +863,7 @@ mod tests {
             }).unwrap())
             .add_message(MsgMint {
                 sender: MOCK_CONTRACT_ADDR.to_string(),
-                amount: Some(Coin::new(10000u128, "alloyed").into()),
+                amount: Some(coin(10000u128, "alloyed").into()),
                 mint_to_address: "addr1".to_string()
             })),
     )]
@@ -774,7 +878,7 @@ mod tests {
         Ok(Response::new()
             .add_message(MsgMint {
                 sender: MOCK_CONTRACT_ADDR.to_string(),
-                amount: Some(Coin::new(10000u128, "alloyed").into()),
+                amount: Some(coin(10000u128, "alloyed").into()),
                 mint_to_address: "addr1".to_string()
             })),
     )]
@@ -792,7 +896,7 @@ mod tests {
             }).unwrap())
             .add_message(MsgMint {
                 sender: MOCK_CONTRACT_ADDR.to_string(),
-                amount: Some(Coin::new(10000u128, "alloyed").into()),
+                amount: Some(coin(10000u128, "alloyed").into()),
                 mint_to_address: "addr1".to_string()
             })),
     )]
@@ -803,7 +907,7 @@ mod tests {
         #[case] expected_res: Result<Response, ContractError>,
     ) {
         let mut deps = mock_dependencies();
-        let transmuter = Transmuter::default();
+        let transmuter = Transmuter::new();
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -823,6 +927,7 @@ mod tests {
                         Asset::new(Uint128::from(1000u128), "denom1", 1u128).unwrap(),
                         Asset::new(Uint128::from(1000u128), "denom2", 10u128).unwrap(),
                     ],
+                    asset_groups: BTreeMap::new(),
                 },
             )
             .unwrap();
@@ -851,12 +956,12 @@ mod tests {
         Ok(Response::new()
             .add_message(MsgBurn {
                 sender: MOCK_CONTRACT_ADDR.to_string(),
-                amount: Some(Coin::new(100u128, "alloyed").into()),
+                amount: Some(coin(100u128, "alloyed").into()),
                 burn_from_address: "addr1".to_string()
             })
             .add_message(BankMsg::Send {
                 to_address: "addr1".to_string(),
-                amount: vec![Coin::new(1u128, "denom1")]
+                amount: vec![coin(1u128, "denom1")]
             }))
     )]
     #[case(
@@ -871,12 +976,12 @@ mod tests {
         Ok(Response::new()
             .add_message(MsgBurn {
                 sender: MOCK_CONTRACT_ADDR.to_string(),
-                amount: Some(Coin::new(100u128, "alloyed").into()),
+                amount: Some(coin(100u128, "alloyed").into()),
                 burn_from_address: MOCK_CONTRACT_ADDR.to_string()
             })
             .add_message(BankMsg::Send {
                 to_address: "addr1".to_string(),
-                amount: vec![Coin::new(1u128, "denom1")]
+                amount: vec![coin(1u128, "denom1")]
             })
             .set_data(to_json_binary(&SwapExactAmountInResponseData {
                 token_out_amount: Uint128::from(1u128)
@@ -885,7 +990,7 @@ mod tests {
     #[case(
         Entrypoint::Exec,
         SwapFromAlloyedConstraint::ExactOut {
-            tokens_out: &[Coin::new(1u128, "denom1")],
+            tokens_out: &[coin(1u128, "denom1")],
             token_in_max_amount: Uint128::from(100u128),
         },
         BurnTarget::SenderAccount,
@@ -893,18 +998,18 @@ mod tests {
         Ok(Response::new()
             .add_message(MsgBurn {
                 sender: MOCK_CONTRACT_ADDR.to_string(),
-                amount: Some(Coin::new(100u128, "alloyed").into()),
+                amount: Some(coin(100u128, "alloyed").into()),
                 burn_from_address: "addr1".to_string()
             })
             .add_message(BankMsg::Send {
                 to_address: "addr1".to_string(),
-                amount: vec![Coin::new(1u128, "denom1")]
+                amount: vec![coin(1u128, "denom1")]
             }))
     )]
     #[case(
         Entrypoint::Sudo,
         SwapFromAlloyedConstraint::ExactOut {
-            tokens_out: &[Coin::new(1u128, "denom1")],
+            tokens_out: &[coin(1u128, "denom1")],
             token_in_max_amount: Uint128::from(100u128),
         },
         BurnTarget::SentFunds,
@@ -912,12 +1017,12 @@ mod tests {
         Ok(Response::new()
             .add_message(MsgBurn {
                 sender: MOCK_CONTRACT_ADDR.to_string(),
-                amount: Some(Coin::new(100u128, "alloyed").into()),
+                amount: Some(coin(100u128, "alloyed").into()),
                 burn_from_address: MOCK_CONTRACT_ADDR.to_string()
             })
             .add_message(BankMsg::Send {
                 to_address: "addr1".to_string(),
-                amount: vec![Coin::new(1u128, "denom1")]
+                amount: vec![coin(1u128, "denom1")]
             })
             .set_data(to_json_binary(&SwapExactAmountOutResponseData {
                 token_in_amount: Uint128::from(100u128)
@@ -937,10 +1042,10 @@ mod tests {
 
         let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
             alloyed_holder.as_str(),
-            &[Coin::new(110000000000000u128, "alloyed")],
+            &[coin(110000000000000u128, "alloyed")],
         )]);
 
-        let transmuter = Transmuter::default();
+        let transmuter = Transmuter::new();
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -960,6 +1065,7 @@ mod tests {
                         Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
                         Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
                     ],
+                    asset_groups: BTreeMap::new(),
                 },
             )
             .unwrap();
@@ -986,7 +1092,7 @@ mod tests {
     #[case(
         Entrypoint::Sudo,
         SwapFromAlloyedConstraint::ExactOut {
-            tokens_out: &[Coin::new(1000000000000u128, "denom1")],
+            tokens_out: &[coin(1000000000000u128, "denom1")],
             token_in_max_amount: Uint128::from(100000000000000u128),
         },
         vec!["denom1"],
@@ -996,12 +1102,12 @@ mod tests {
         Ok(Response::new()
             .add_message(MsgBurn {
                 sender: MOCK_CONTRACT_ADDR.to_string(),
-                amount: Some(Coin::new(100000000000000u128, "alloyed").into()),
+                amount: Some(coin(100000000000000u128, "alloyed").into()),
                 burn_from_address: MOCK_CONTRACT_ADDR.to_string()
             })
             .add_message(BankMsg::Send {
                 to_address: "addr1".to_string(),
-                amount: vec![Coin::new(1000000000000u128, "denom1")]
+                amount: vec![coin(1000000000000u128, "denom1")]
             })
             .set_data(to_json_binary(&SwapExactAmountOutResponseData {
                 token_in_amount: Uint128::from(100000000000000u128)
@@ -1021,12 +1127,12 @@ mod tests {
         Ok(Response::new()
             .add_message(MsgBurn {
                 sender: MOCK_CONTRACT_ADDR.to_string(),
-                amount: Some(Coin::new(100000000000000u128, "alloyed").into()),
+                amount: Some(coin(100000000000000u128, "alloyed").into()),
                 burn_from_address: MOCK_CONTRACT_ADDR.to_string()
             })
             .add_message(BankMsg::Send {
                 to_address: "addr1".to_string(),
-                amount: vec![Coin::new(1000000000000u128, "denom1")]
+                amount: vec![coin(1000000000000u128, "denom1")]
             })
             .set_data(to_json_binary(&SwapExactAmountInResponseData {
                 token_out_amount: 1000000000000u128.into(),
@@ -1046,18 +1152,18 @@ mod tests {
         Ok(Response::new()
             .add_message(MsgBurn {
                 sender: MOCK_CONTRACT_ADDR.to_string(),
-                amount: Some(Coin::new(100000000000000u128, "alloyed").into()),
+                amount: Some(coin(100000000000000u128, "alloyed").into()),
                 burn_from_address: "addr1".to_string()
             })
             .add_message(BankMsg::Send {
                 to_address: "addr1".to_string(),
-                amount: vec![Coin::new(1000000000000u128, "denom1")]
+                amount: vec![coin(1000000000000u128, "denom1")]
             }))
     )]
     #[case(
         Entrypoint::Exec,
         SwapFromAlloyedConstraint::ExactOut {
-            tokens_out: &[Coin::new(1000000000000u128, "denom1")],
+            tokens_out: &[coin(1000000000000u128, "denom1")],
             token_in_max_amount: Uint128::from(100000000000000u128),
         },
         vec!["denom1"],
@@ -1067,18 +1173,18 @@ mod tests {
         Ok(Response::new()
             .add_message(MsgBurn {
                 sender: MOCK_CONTRACT_ADDR.to_string(),
-                amount: Some(Coin::new(100000000000000u128, "alloyed").into()),
+                amount: Some(coin(100000000000000u128, "alloyed").into()),
                 burn_from_address: "addr1".to_string()
             })
             .add_message(BankMsg::Send {
                 to_address: "addr1".to_string(),
-                amount: vec![Coin::new(1000000000000u128, "denom1")]
+                amount: vec![coin(1000000000000u128, "denom1")]
             }))
     )]
     #[case(
         Entrypoint::Sudo,
         SwapFromAlloyedConstraint::ExactOut {
-            tokens_out: &[Coin::new(1000000000000u128, "denom1"), Coin::new(1000000000000u128, "denom2")],
+            tokens_out: &[coin(1000000000000u128, "denom1"), coin(1000000000000u128, "denom2")],
             token_in_max_amount: Uint128::from(110000000000000u128),
         },
         vec!["denom1", "denom2"],
@@ -1088,12 +1194,12 @@ mod tests {
         Ok(Response::new()
             .add_message(MsgBurn {
                 sender: MOCK_CONTRACT_ADDR.to_string(),
-                amount: Some(Coin::new(110000000000000u128, "alloyed").into()),
+                amount: Some(coin(110000000000000u128, "alloyed").into()),
                 burn_from_address: MOCK_CONTRACT_ADDR.to_string()
             })
             .add_message(BankMsg::Send {
                 to_address: "addr1".to_string(),
-                amount: vec![Coin::new(1000000000000u128, "denom1"), Coin::new(1000000000000u128, "denom2")]
+                amount: vec![coin(1000000000000u128, "denom1"), coin(1000000000000u128, "denom2")]
             })
             .set_data(to_json_binary(&SwapExactAmountOutResponseData {
                 token_in_amount: Uint128::from(110000000000000u128),
@@ -1102,7 +1208,7 @@ mod tests {
     #[case(
         Entrypoint::Sudo,
         SwapFromAlloyedConstraint::ExactOut {
-            tokens_out: &[Coin::new(1000000000000u128, "denom1"), Coin::new(500000000000u128, "denom2")],
+            tokens_out: &[coin(1000000000000u128, "denom1"), coin(500000000000u128, "denom2")],
             token_in_max_amount: Uint128::from(105000000000000u128),
         },
         vec!["denom1", "denom2"],
@@ -1112,12 +1218,12 @@ mod tests {
         Ok(Response::new()
             .add_message(MsgBurn {
                 sender: MOCK_CONTRACT_ADDR.to_string(),
-                amount: Some(Coin::new(105000000000000u128, "alloyed").into()),
+                amount: Some(coin(105000000000000u128, "alloyed").into()),
                 burn_from_address: MOCK_CONTRACT_ADDR.to_string()
             })
             .add_message(BankMsg::Send {
                 to_address: "addr1".to_string(),
-                amount: vec![Coin::new(1000000000000u128, "denom1"), Coin::new(500000000000u128, "denom2")],
+                amount: vec![coin(1000000000000u128, "denom1"), coin(500000000000u128, "denom2")],
             })
             .set_data(to_json_binary(&SwapExactAmountOutResponseData {
                 token_in_amount: Uint128::from(105000000000000u128),
@@ -1139,10 +1245,10 @@ mod tests {
 
         let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
             alloyed_holder.as_str(),
-            &[Coin::new(210000000000000u128, "alloyed")],
+            &[coin(210000000000000u128, "alloyed")],
         )]);
 
-        let transmuter = Transmuter::default();
+        let transmuter = Transmuter::new();
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -1159,6 +1265,7 @@ mod tests {
                 Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(), // 1000000000000 * 10
                 Asset::new(Uint128::from(1000000000000u128), "denom3", 1u128).unwrap(), // 1000000000000 * 100
             ],
+            asset_groups: BTreeMap::new(),
         };
 
         let all_denoms = pool
@@ -1166,16 +1273,11 @@ mod tests {
             .pool_assets
             .into_iter()
             .map(|asset| asset.denom().to_string())
-            .collect::<Vec<_>>();
+            .collect::<Vec<String>>();
 
-        pool.mark_corrupted_assets(
-            corrupted_denoms
-                .iter()
-                .map(|denom| denom.to_string())
-                .collect::<Vec<_>>()
-                .as_slice(),
-        )
-        .unwrap();
+        for denom in corrupted_denoms {
+            pool.mark_corrupted_asset(denom).unwrap();
+        }
 
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
 
@@ -1184,7 +1286,7 @@ mod tests {
                 .limiters
                 .register(
                     &mut deps.storage,
-                    denom.as_str(),
+                    Scope::denom(denom.as_str()),
                     "static",
                     LimiterParams::StaticLimiter {
                         upper_limit: Decimal::percent(100),
@@ -1219,7 +1321,7 @@ mod tests {
                 assert!(
                     transmuter
                         .limiters
-                        .list_limiters_by_denom(&deps.storage, denom.as_str())
+                        .list_limiters_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
                         .unwrap()
                         .is_empty(),
                     "must not contain limiter for {} since it's corrupted and drained",
@@ -1236,7 +1338,7 @@ mod tests {
                 assert!(
                     !transmuter
                         .limiters
-                        .list_limiters_by_denom(&deps.storage, denom.as_str())
+                        .list_limiters_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
                         .unwrap()
                         .is_empty(),
                     "must contain limiter for {} since it's not corrupted or not drained",
@@ -1249,7 +1351,7 @@ mod tests {
     #[test]
     fn test_swap_non_alloyed_exact_amount_in_with_corrupted_assets() {
         let mut deps = mock_dependencies();
-        let transmuter = Transmuter::default();
+        let transmuter = Transmuter::new();
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -1266,6 +1368,7 @@ mod tests {
                 Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(), // 1000000000000 * 10
                 Asset::new(Uint128::from(1000000000000u128), "denom3", 1u128).unwrap(), // 1000000000000 * 100
             ],
+            asset_groups: BTreeMap::new(),
         };
 
         let all_denoms = pool
@@ -1275,7 +1378,7 @@ mod tests {
             .map(|asset| asset.denom().to_string())
             .collect::<Vec<_>>();
 
-        pool.mark_corrupted_assets(&["denom1".to_owned()]).unwrap();
+        pool.mark_corrupted_asset("denom1").unwrap();
 
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
 
@@ -1284,7 +1387,7 @@ mod tests {
                 .limiters
                 .register(
                     &mut deps.storage,
-                    denom.as_str(),
+                    Scope::denom(denom.as_str()),
                     "static",
                     LimiterParams::StaticLimiter {
                         upper_limit: Decimal::percent(100),
@@ -1324,13 +1427,16 @@ mod tests {
             .unique()
             .collect_vec();
 
-        assert_eq!(limiter_denoms, vec!["denom2", "denom3"]);
+        assert_eq!(
+            limiter_denoms,
+            vec![Scope::denom("denom2").key(), Scope::denom("denom3").key()]
+        );
     }
 
     #[test]
     fn test_swap_non_alloyed_exact_amount_out_with_corrupted_assets() {
         let mut deps = mock_dependencies();
-        let transmuter = Transmuter::default();
+        let transmuter = Transmuter::new();
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -1347,6 +1453,7 @@ mod tests {
                 Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(), // 1000000000000 * 10
                 Asset::new(Uint128::from(1000000000000u128), "denom3", 1u128).unwrap(), // 1000000000000 * 100
             ],
+            asset_groups: BTreeMap::new(),
         };
 
         let all_denoms = pool
@@ -1356,7 +1463,7 @@ mod tests {
             .map(|asset| asset.denom().to_string())
             .collect::<Vec<_>>();
 
-        pool.mark_corrupted_assets(&["denom1".to_owned()]).unwrap();
+        pool.mark_corrupted_asset("denom1").unwrap();
 
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
 
@@ -1365,7 +1472,7 @@ mod tests {
                 .limiters
                 .register(
                     &mut deps.storage,
-                    denom.as_str(),
+                    Scope::denom(denom.as_str()),
                     "static",
                     LimiterParams::StaticLimiter {
                         upper_limit: Decimal::percent(100),
@@ -1405,40 +1512,43 @@ mod tests {
             .unique()
             .collect_vec();
 
-        assert_eq!(limiter_denoms, vec!["denom2", "denom3"]);
+        assert_eq!(
+            limiter_denoms,
+            vec![Scope::denom("denom2").key(), Scope::denom("denom3").key()]
+        );
     }
 
     #[rstest]
     #[case(
-        Coin::new(100u128, "denom1"),
+        coin(100u128, "denom1"),
         "denom2",
         1000u128,
         Addr::unchecked("addr1"),
         Ok(Response::new()
             .add_message(BankMsg::Send {
                 to_address: "addr1".to_string(),
-                amount: vec![Coin::new(1000u128, "denom2")]
+                amount: vec![coin(1000u128, "denom2")]
             })
             .set_data(to_json_binary(&SwapExactAmountInResponseData {
                 token_out_amount: Uint128::from(1000u128)
             }).unwrap()))
     )]
     #[case(
-        Coin::new(100u128, "denom2"),
+        coin(100u128, "denom2"),
         "denom1",
         10u128,
         Addr::unchecked("addr1"),
         Ok(Response::new()
             .add_message(BankMsg::Send {
                 to_address: "addr1".to_string(),
-                amount: vec![Coin::new(10u128, "denom1")]
+                amount: vec![coin(10u128, "denom1")]
             })
             .set_data(to_json_binary(&SwapExactAmountInResponseData {
                 token_out_amount: Uint128::from(10u128)
             }).unwrap()))
     )]
     #[case(
-        Coin::new(100u128, "denom2"),
+        coin(100u128, "denom2"),
         "denom1",
         100u128,
         Addr::unchecked("addr1"),
@@ -1448,13 +1558,13 @@ mod tests {
         })
     )]
     #[case(
-        Coin::new(100000000001u128, "denom1"),
+        coin(100000000001u128, "denom1"),
         "denom2",
         1000000000010u128,
         Addr::unchecked("addr1"),
         Err(ContractError::InsufficientPoolAsset {
-            required: Coin::new(1000000000010u128, "denom2"),
-            available: Coin::new(1000000000000u128, "denom2"),
+            required: coin(1000000000010u128, "denom2"),
+            available: coin(1000000000000u128, "denom2"),
         })
     )]
     fn test_swap_non_alloyed_exact_amount_in(
@@ -1466,10 +1576,10 @@ mod tests {
     ) {
         let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
             sender.to_string().as_str(),
-            &[Coin::new(2000000000000u128, "alloyed")],
+            &[coin(2000000000000u128, "alloyed")],
         )]);
 
-        let transmuter = Transmuter::default();
+        let transmuter = Transmuter::new();
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -1489,6 +1599,7 @@ mod tests {
                         Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
                         Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
                     ],
+                    asset_groups: BTreeMap::new(),
                 },
             )
             .unwrap();
@@ -1509,12 +1620,12 @@ mod tests {
     #[case(
         "denom1",
         100u128,
-        Coin::new(1000u128, "denom2"),
+        coin(1000u128, "denom2"),
         Addr::unchecked("addr1"),
         Ok(Response::new()
             .add_message(BankMsg::Send {
                 to_address: "addr1".to_string(),
-                amount: vec![Coin::new(1000u128, "denom2")]
+                amount: vec![coin(1000u128, "denom2")]
             })
             .set_data(to_json_binary(&SwapExactAmountOutResponseData {
                 token_in_amount: 100u128.into()
@@ -1523,12 +1634,12 @@ mod tests {
     #[case(
         "denom2",
         100u128,
-        Coin::new(10u128, "denom1"),
+        coin(10u128, "denom1"),
         Addr::unchecked("addr1"),
         Ok(Response::new()
             .add_message(BankMsg::Send {
                 to_address: "addr1".to_string(),
-                amount: vec![Coin::new(10u128, "denom1")]
+                amount: vec![coin(10u128, "denom1")]
             })
             .set_data(to_json_binary(&SwapExactAmountOutResponseData {
                 token_in_amount: 100u128.into()
@@ -1537,7 +1648,7 @@ mod tests {
     #[case(
         "denom2",
         100u128,
-        Coin::new(100u128, "denom1"),
+        coin(100u128, "denom1"),
         Addr::unchecked("addr1"),
         Err(ContractError::ExcessiveRequiredTokenIn {
             limit: 100u128.into(),
@@ -1547,11 +1658,11 @@ mod tests {
     #[case(
         "denom1",
         100000000001u128,
-        Coin::new(1000000000010u128, "denom2"),
+        coin(1000000000010u128, "denom2"),
         Addr::unchecked("addr1"),
         Err(ContractError::InsufficientPoolAsset {
-            required: Coin::new(1000000000010u128, "denom2"),
-            available: Coin::new(1000000000000u128, "denom2"),
+            required: coin(1000000000010u128, "denom2"),
+            available: coin(1000000000000u128, "denom2"),
         })
     )]
     fn test_swap_non_alloyed_exact_amount_out(
@@ -1563,10 +1674,10 @@ mod tests {
     ) {
         let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
             sender.to_string().as_str(),
-            &[Coin::new(2000000000000u128, "alloyed")],
+            &[coin(2000000000000u128, "alloyed")],
         )]);
 
-        let transmuter = Transmuter::default();
+        let transmuter = Transmuter::new();
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -1586,6 +1697,7 @@ mod tests {
                         Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
                         Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
                     ],
+                    asset_groups: BTreeMap::new(),
                 },
             )
             .unwrap();
@@ -1600,5 +1712,277 @@ mod tests {
         );
 
         assert_eq!(res, expected_res);
+    }
+
+    #[rstest]
+    #[case::empty(
+        HashMap::from([]),
+        vec![],
+        vec![],
+    )]
+    #[case::no_asset_group(
+        HashMap::from([]),
+        vec![
+            ("eth.axl", (Decimal::percent(20), Decimal::percent(40))),
+            ("eth.wh", (Decimal::percent(60), Decimal::percent(40))),
+            ("wsteth.axl", (Decimal::percent(20), Decimal::percent(20))),
+        ],
+        vec![],
+    )]
+    #[case(
+        HashMap::from([
+            ("axelar", vec!["eth.axl", "wsteth.axl"]),
+            ("wormhole", vec!["eth.wh"]),
+        ]),
+        vec![
+            ("eth.axl", (Decimal::percent(20), Decimal::percent(40))),
+            ("wsteth.axl", (Decimal::percent(20), Decimal::percent(20))),
+            ("eth.wh", (Decimal::percent(60), Decimal::percent(40))),
+        ],
+        vec![
+            (Scope::asset_group("axelar"), (Decimal::percent(40), Decimal::percent(60))),
+            (Scope::asset_group("wormhole"), (Decimal::percent(60), Decimal::percent(40))),
+        ],
+    )]
+    fn test_construct_scope_value_pairs(
+        #[case] asset_groups: HashMap<&str, Vec<&str>>,
+        #[case] denom_weights: Vec<(&str, (Decimal, Decimal))>,
+        #[case] expected_asset_group_scopes: Vec<(Scope, (Decimal, Decimal))>,
+    ) {
+        let asset_groups = asset_groups
+            .into_iter()
+            .map(|(label, asset_group)| {
+                (
+                    label.to_string(),
+                    AssetGroup::new(
+                        asset_group
+                            .into_iter()
+                            .map(|asset| asset.to_string())
+                            .collect_vec(),
+                    ),
+                )
+            })
+            .collect::<BTreeMap<String, AssetGroup>>();
+
+        let prev_weights = denom_weights
+            .clone()
+            .into_iter()
+            .map(|(denom, (prev_weight, _))| (denom.to_string(), prev_weight))
+            .collect();
+
+        let updated_weights = denom_weights
+            .clone()
+            .into_iter()
+            .map(|(denom, (_, updated_weight))| (denom.to_string(), updated_weight))
+            .collect();
+
+        let mut scope_value_pairs =
+            construct_scope_value_pairs(prev_weights, updated_weights, asset_groups).unwrap();
+
+        let scope_denom_value_pairs = denom_weights
+            .into_iter()
+            .map(|(denom, weight_transition)| (Scope::denom(denom), weight_transition))
+            .collect_vec();
+
+        let mut expected_scope_value_pairs =
+            vec![scope_denom_value_pairs, expected_asset_group_scopes].concat();
+
+        // assert by disregrard order
+        scope_value_pairs.sort_by_key(|(scope, _)| scope.key());
+        expected_scope_value_pairs.sort_by_key(|(scope, _)| scope.key());
+
+        assert_eq!(scope_value_pairs, expected_scope_value_pairs);
+    }
+
+    #[test]
+    fn test_clean_up_drained_corrupted_assets_group() {
+        let sender = Addr::unchecked("addr1");
+        let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
+            sender.to_string().as_str(),
+            &[coin(2000000000000u128, "alloyed")],
+        )]);
+
+        let transmuter = Transmuter::new();
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_normalization_factor(&mut deps.storage, 100u128.into())
+            .unwrap();
+
+        let init_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()])
+                    .mark_as_corrupted()
+                    .clone(),
+            )]),
+        };
+        transmuter.pool.save(&mut deps.storage, &init_pool).unwrap();
+
+        // Register limiters for group1
+        transmuter
+            .limiters
+            .register(
+                &mut deps.storage,
+                Scope::asset_group("group1"),
+                "1w",
+                LimiterParams::StaticLimiter {
+                    upper_limit: Decimal::percent(60),
+                },
+            )
+            .unwrap();
+
+        let mut pool = transmuter.pool.load(&deps.storage).unwrap();
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        pool = transmuter.pool.load(&deps.storage).unwrap();
+        assert_eq!(pool, init_pool);
+
+        pool.exit_pool(&[coin(1000000000000u128, "denom2")])
+            .unwrap();
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        let expected_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom3".to_string()])
+                    .mark_as_corrupted()
+                    .clone(),
+            )]),
+        };
+        assert_eq!(pool, expected_pool);
+
+        // Check that the limiter for group1 is still registered
+        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
+        assert_eq!(limiters.len(), 1);
+
+        // Save the updated pool
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        pool.exit_pool(&[coin(1000000000000u128, "denom3")])
+            .unwrap();
+
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        let expected_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::new(),
+        };
+        assert_eq!(pool, expected_pool);
+
+        // Check that the limiter for group1 is removed
+        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
+        assert_eq!(limiters.len(), 0);
+    }
+
+    #[test]
+    fn test_clean_up_drained_corrupted_assets_group_not_corrupted() {
+        let mut deps = mock_dependencies();
+        let transmuter = Transmuter::new();
+
+        // Initialize the pool with non-corrupted assets and groups
+        let init_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
+            )]),
+        };
+
+        transmuter.pool.save(&mut deps.storage, &init_pool).unwrap();
+
+        // Register a limiter for the group
+        transmuter
+            .limiters
+            .register(
+                &mut deps.storage,
+                Scope::asset_group("group1"),
+                "limiter1",
+                LimiterParams::StaticLimiter {
+                    upper_limit: Decimal::one(),
+                },
+            )
+            .unwrap();
+
+        let mut pool = transmuter.pool.load(&deps.storage).unwrap();
+        assert_eq!(pool, init_pool);
+
+        // Drain denom2 from the pool
+        pool.exit_pool(&[coin(1000000000000u128, "denom2")])
+            .unwrap();
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        // Check that the pool remains unchanged
+        let expected_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::zero(), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
+            )]),
+        };
+        assert_eq!(pool, expected_pool);
+
+        // Check that the limiter for group1 is still registered
+        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
+        assert_eq!(limiters.len(), 1);
+
+        // Save the updated pool
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        // Drain denom3 from the pool
+        pool.exit_pool(&[coin(1000000000000u128, "denom3")])
+            .unwrap();
+
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        // Check that the pool remains unchanged except for the drained assets
+        let expected_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::zero(), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::zero(), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
+            )]),
+        };
+        assert_eq!(pool, expected_pool);
+
+        // Check that the limiter for group1 is still registered
+        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
+        assert_eq!(limiters.len(), 1);
     }
 }

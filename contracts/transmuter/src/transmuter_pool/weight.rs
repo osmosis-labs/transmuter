@@ -20,7 +20,7 @@ impl TransmuterPool {
     ///
     /// If total pool asset amount is zero, returns None to signify that
     /// it makes no sense to calculate ratios, but not an error.
-    pub fn weights(&self) -> Result<Option<Vec<(String, Decimal)>>, ContractError> {
+    pub fn asset_weights(&self) -> Result<Option<BTreeMap<String, Decimal>>, ContractError> {
         let std_norm_factor = lcm_from_iter(
             self.pool_assets
                 .iter()
@@ -51,10 +51,6 @@ impl TransmuterPool {
         Ok(Some(ratios))
     }
 
-    pub fn weights_map(&self) -> Result<BTreeMap<String, Decimal>, ContractError> {
-        Ok(self.weights()?.unwrap_or_default().into_iter().collect())
-    }
-
     fn normalized_asset_values(
         &self,
         std_norm_factor: Uint128,
@@ -78,7 +74,7 @@ impl TransmuterPool {
 #[cfg(test)]
 mod tests {
     use crate::asset::Asset;
-    use cosmwasm_std::Coin;
+    use cosmwasm_std::coin;
     use rstest::rstest;
     use std::str::FromStr;
 
@@ -171,22 +167,26 @@ mod tests {
             .into_iter()
             .map(|asset| asset.unwrap())
             .collect();
-        let pool = TransmuterPool { pool_assets };
+        let pool = TransmuterPool {
+            pool_assets,
+            asset_groups: BTreeMap::new(),
+        };
 
-        let ratios = pool.weights().unwrap();
-        assert_eq!(ratios, Some(expected));
+        let ratios = pool.asset_weights().unwrap();
+        assert_eq!(ratios, Some(expected.into_iter().collect()));
     }
 
     #[test]
     fn test_all_ratios_when_total_pool_assets_is_zero() {
         let pool = TransmuterPool {
             pool_assets: Asset::unchecked_equal_assets_from_coins(&[
-                Coin::new(0, "axlusdc"),
-                Coin::new(0, "whusdc"),
+                coin(0, "axlusdc"),
+                coin(0, "whusdc"),
             ]),
+            asset_groups: BTreeMap::new(),
         };
 
-        let ratios = pool.weights().unwrap();
+        let ratios = pool.asset_weights().unwrap();
         assert_eq!(ratios, None);
     }
 }

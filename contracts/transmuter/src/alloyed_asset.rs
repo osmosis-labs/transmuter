@@ -10,15 +10,15 @@ use crate::{
 /// and since the pool is a 1:1 multi-asset pool, it act
 /// as a composite of the underlying assets and assume 1:1
 /// value to the underlying assets.
-pub struct AlloyedAsset<'a> {
-    alloyed_denom: Item<'a, String>,
-    normalization_factor: Item<'a, Uint128>,
+pub struct AlloyedAsset {
+    alloyed_denom: Item<String>,
+    normalization_factor: Item<Uint128>,
 }
 
-impl<'a> AlloyedAsset<'a> {
+impl AlloyedAsset {
     pub const fn new(
-        alloyed_denom_namespace: &'a str,
-        normalization_factor_namespace: &'a str,
+        alloyed_denom_namespace: &'static str,
+        normalization_factor_namespace: &'static str,
     ) -> Self {
         Self {
             alloyed_denom: Item::new(alloyed_denom_namespace),
@@ -211,7 +211,7 @@ pub mod swap_from_alloyed {
 
 #[cfg(test)]
 mod tests {
-    use cosmwasm_std::testing::mock_dependencies;
+    use cosmwasm_std::{coin, testing::mock_dependencies};
 
     use super::*;
 
@@ -226,7 +226,7 @@ mod tests {
             .set_alloyed_denom(&mut deps.storage, &alloyed_denom)
             .unwrap();
 
-        deps.querier.update_balance(
+        deps.querier.bank.update_balance(
             "osmo1addr1",
             vec![Coin {
                 denom: alloyed_denom.clone(),
@@ -234,7 +234,7 @@ mod tests {
             }],
         );
 
-        deps.querier.update_balance(
+        deps.querier.bank.update_balance(
             "osmo1addr2",
             vec![Coin {
                 denom: alloyed_denom.clone(),
@@ -275,7 +275,7 @@ mod tests {
 
         // same normalization factor
         let amount = AlloyedAsset::amount_from(
-            &[(Coin::new(100, "ua"), Uint128::one())],
+            &[(coin(100, "ua"), Uint128::one())],
             Uint128::one(),
             Rounding::Up,
         )
@@ -286,8 +286,8 @@ mod tests {
         // different normalization factor
         let amount = AlloyedAsset::amount_from(
             &[
-                (Coin::new(100, "ua"), Uint128::from(2u128)),
-                (Coin::new(100, "ub"), Uint128::from(3u128)),
+                (coin(100, "ua"), Uint128::from(2u128)),
+                (coin(100, "ub"), Uint128::from(3u128)),
             ],
             Uint128::one(),
             Rounding::Up,
@@ -297,8 +297,8 @@ mod tests {
 
         let amount = AlloyedAsset::amount_from(
             &[
-                (Coin::new(100, "ua"), Uint128::from(2u128)),
-                (Coin::new(100, "ub"), Uint128::from(3u128)),
+                (coin(100, "ua"), Uint128::from(2u128)),
+                (coin(100, "ub"), Uint128::from(3u128)),
             ],
             Uint128::one(),
             Rounding::Down,

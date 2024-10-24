@@ -5,7 +5,7 @@ use crate::{
     ContractError,
 };
 
-use cosmwasm_std::{to_json_binary, Coin};
+use cosmwasm_std::{coin, to_json_binary, Coin};
 use osmosis_std::types::{
     cosmos::bank::v1beta1::QueryAllBalancesRequest,
     cosmwasm::wasm::v1::MsgExecuteContractResponse,
@@ -45,12 +45,13 @@ impl<'a> TestEnv<'a> {
             .query_all_balances(&QueryAllBalancesRequest {
                 address: self.accounts.get(account).unwrap().address(),
                 pagination: None,
+                resolve_denom: false,
             })
             .unwrap()
             .balances
             .into_iter()
-            .map(|coin| Coin::new(coin.amount.parse().unwrap(), coin.denom))
-            .filter(|coin| !ignore_denoms.contains(&coin.denom.as_str()))
+            .map(|c| coin(c.amount.parse().unwrap(), c.denom))
+            .filter(|c| !ignore_denoms.contains(&c.denom.as_str()))
             .collect();
 
         assert_eq!(account_balances, expected_balances);
@@ -61,11 +62,12 @@ impl<'a> TestEnv<'a> {
             .query_all_balances(&QueryAllBalancesRequest {
                 address: self.contract.contract_addr.clone(),
                 pagination: None,
+                resolve_denom: false,
             })
             .unwrap()
             .balances
             .into_iter()
-            .map(|coin| Coin::new(coin.amount.parse().unwrap(), coin.denom))
+            .map(|c| coin(c.amount.parse().unwrap(), c.denom))
             .collect();
 
         assert_eq!(contract_balances, expected_balances);
@@ -108,7 +110,7 @@ impl TestEnvBuilder {
             .map(|(account, balance)| {
                 let balance: Vec<_> = balance
                     .into_iter()
-                    .chain(vec![Coin::new(1000000000000, "uosmo")])
+                    .chain(vec![coin(1000000000000, "uosmo")])
                     .collect();
 
                 (account, app.init_account(&balance).unwrap())
@@ -116,7 +118,7 @@ impl TestEnvBuilder {
             .collect();
 
         let creator = app
-            .init_account(&[Coin::new(1000000000000000u128, "uosmo")])
+            .init_account(&[coin(1000000000000000u128, "uosmo")])
             .unwrap();
 
         let instantiate_msg = self.instantiate_msg.expect("instantiate msg not set");

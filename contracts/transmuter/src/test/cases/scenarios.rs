@@ -2,20 +2,20 @@ use std::{str::FromStr, vec};
 
 use crate::{
     asset::AssetConfig,
-    contract::sv::QueryMsg,
-    contract::sv::{ExecMsg, InstantiateMsg},
     contract::{
+        sv::{ExecMsg, InstantiateMsg, QueryMsg},
         GetShareDenomResponse, GetSharesResponse, GetTotalPoolLiquidityResponse,
         GetTotalSharesResponse, ListLimitersResponse,
     },
     limiter::{ChangeLimiter, Limiter, LimiterParams, StaticLimiter, WindowConfig},
+    scope::Scope,
     test::{
         modules::cosmwasm_pool::CosmwasmPool,
         test_env::{assert_contract_err, TestEnvBuilder},
     },
     ContractError,
 };
-use cosmwasm_std::{Coin, Decimal, Uint128, Uint64};
+use cosmwasm_std::{coin, Decimal, Uint128, Uint64};
 
 use osmosis_std::types::{
     cosmos::bank::v1beta1::MsgSend,
@@ -40,14 +40,14 @@ fn test_join_pool() {
         .with_account(
             "provider_1",
             vec![
-                Coin::new(2_000, COSMOS_USDC),
-                Coin::new(2_000, AXL_USDC),
-                Coin::new(2_000, "urandom"),
+                coin(2_000, COSMOS_USDC),
+                coin(2_000, AXL_USDC),
+                coin(2_000, "urandom"),
             ],
         )
         .with_account(
             "provider_2",
-            vec![Coin::new(2_000, COSMOS_USDC), Coin::new(2_000, AXL_USDC)],
+            vec![coin(2_000, COSMOS_USDC), coin(2_000, AXL_USDC)],
         )
         .with_account("moderator", vec![])
         .with_instantiate_msg(InstantiateMsg {
@@ -71,7 +71,7 @@ fn test_join_pool() {
     assert_contract_err(ContractError::AtLeastSingleTokenExpected {}, err);
 
     // fail to join pool with denom that is not in the pool
-    let tokens_in = vec![Coin::new(1_000, "urandom")];
+    let tokens_in = vec![coin(1_000, "urandom")];
     let err = t
         .contract
         .execute(&ExecMsg::JoinPool {}, &tokens_in, &t.accounts["provider_1"])
@@ -86,7 +86,7 @@ fn test_join_pool() {
     );
 
     // join pool with correct pool's denom should added to the contract's balance and update state
-    let tokens_in = vec![Coin::new(1_000, COSMOS_USDC)];
+    let tokens_in = vec![coin(1_000, COSMOS_USDC)];
 
     t.contract
         .execute(&ExecMsg::JoinPool {}, &tokens_in, &t.accounts["provider_1"])
@@ -105,7 +105,7 @@ fn test_join_pool() {
 
     assert_eq!(
         total_pool_liquidity,
-        vec![Coin::new(0, AXL_USDC), tokens_in[0].clone()]
+        vec![coin(0, AXL_USDC), tokens_in[0].clone()]
     );
 
     // check shares
@@ -125,13 +125,13 @@ fn test_join_pool() {
     assert_eq!(total_shares, tokens_in[0].amount);
 
     // join pool with multiple correct pool's denom should added to the contract's balance and update state
-    let tokens_in = vec![Coin::new(1_000, AXL_USDC), Coin::new(1_000, COSMOS_USDC)];
+    let tokens_in = vec![coin(1_000, AXL_USDC), coin(1_000, COSMOS_USDC)];
     t.contract
         .execute(&ExecMsg::JoinPool {}, &tokens_in, &t.accounts["provider_1"])
         .unwrap();
 
     // check contract balances
-    t.assert_contract_balances(&[Coin::new(1_000, AXL_USDC), Coin::new(2_000, COSMOS_USDC)]);
+    t.assert_contract_balances(&[coin(1_000, AXL_USDC), coin(2_000, COSMOS_USDC)]);
 
     // check pool balance
     let GetTotalPoolLiquidityResponse {
@@ -143,7 +143,7 @@ fn test_join_pool() {
 
     assert_eq!(
         total_pool_liquidity,
-        vec![Coin::new(1_000, AXL_USDC), Coin::new(2_000, COSMOS_USDC)]
+        vec![coin(1_000, AXL_USDC), coin(2_000, COSMOS_USDC)]
     );
 
     // check shares
@@ -163,13 +163,13 @@ fn test_join_pool() {
     assert_eq!(total_shares, Uint128::new(3000));
 
     // join pool with another provider with multiple correct pool's denom should added to the contract's balance and update state
-    let tokens_in = vec![Coin::new(2_000, AXL_USDC), Coin::new(2_000, COSMOS_USDC)];
+    let tokens_in = vec![coin(2_000, AXL_USDC), coin(2_000, COSMOS_USDC)];
     t.contract
         .execute(&ExecMsg::JoinPool {}, &tokens_in, &t.accounts["provider_2"])
         .unwrap();
 
     // check contract balances
-    t.assert_contract_balances(&[Coin::new(3_000, AXL_USDC), Coin::new(4_000, COSMOS_USDC)]);
+    t.assert_contract_balances(&[coin(3_000, AXL_USDC), coin(4_000, COSMOS_USDC)]);
 
     // check pool balance
     let GetTotalPoolLiquidityResponse {
@@ -181,7 +181,7 @@ fn test_join_pool() {
 
     assert_eq!(
         total_pool_liquidity,
-        vec![Coin::new(3_000, AXL_USDC), Coin::new(4_000, COSMOS_USDC)]
+        vec![coin(3_000, AXL_USDC), coin(4_000, COSMOS_USDC)]
     );
 
     // check shares
@@ -211,13 +211,13 @@ fn test_swap() {
         .with_account(
             "alice",
             vec![
-                Coin::new(1_500, AXL_USDC),
-                Coin::new(1_000, COSMOS_USDC),
-                Coin::new(1_000, "urandom2"),
+                coin(1_500, AXL_USDC),
+                coin(1_000, COSMOS_USDC),
+                coin(1_000, "urandom2"),
             ],
         )
-        .with_account("bob", vec![Coin::new(29_902, AXL_USDC)])
-        .with_account("provider", vec![Coin::new(200_000, COSMOS_USDC)])
+        .with_account("bob", vec![coin(29_902, AXL_USDC)])
+        .with_account("provider", vec![coin(200_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_configs: vec![
                 AssetConfig::from_denom_str(AXL_USDC),
@@ -231,7 +231,7 @@ fn test_swap() {
         .build(&app);
 
     // join pool
-    let tokens_in = vec![Coin::new(100_000, COSMOS_USDC)];
+    let tokens_in = vec![coin(100_000, COSMOS_USDC)];
 
     // join pool with send tokens should not update pool balance
     bank.send(
@@ -248,7 +248,7 @@ fn test_swap() {
         .swap_exact_amount_in(
             MsgSwapExactAmountIn {
                 sender: t.accounts["alice"].address(),
-                token_in: Some(Coin::new(1_500, AXL_USDC).into()),
+                token_in: Some(coin(1_500, AXL_USDC).into()),
                 routes: vec![SwapAmountInRoute {
                     pool_id: t.contract.pool_id,
                     token_out_denom: COSMOS_USDC.to_string(),
@@ -261,8 +261,8 @@ fn test_swap() {
 
     assert_contract_err(
         ContractError::InsufficientPoolAsset {
-            required: Coin::new(1_500, COSMOS_USDC),
-            available: Coin::new(0, COSMOS_USDC),
+            required: coin(1_500, COSMOS_USDC),
+            available: coin(0, COSMOS_USDC),
         },
         err,
     );
@@ -277,7 +277,7 @@ fn test_swap() {
         .swap_exact_amount_in(
             MsgSwapExactAmountIn {
                 sender: t.accounts["alice"].address(),
-                token_in: Some(Coin::new(1_000, COSMOS_USDC).into()),
+                token_in: Some(coin(1_000, COSMOS_USDC).into()),
                 routes: vec![SwapAmountInRoute {
                     pool_id: t.contract.pool_id,
                     token_out_denom: "urandom".to_string(),
@@ -300,7 +300,7 @@ fn test_swap() {
         .swap_exact_amount_in(
             MsgSwapExactAmountIn {
                 sender: t.accounts["alice"].address(),
-                token_in: Some(Coin::new(1_000, COSMOS_USDC).into()),
+                token_in: Some(coin(1_000, COSMOS_USDC).into()),
                 routes: vec![SwapAmountInRoute {
                     pool_id: t.contract.pool_id,
                     token_out_denom: "urandom2".to_string(),
@@ -333,6 +333,7 @@ fn test_swap() {
                 pool_id: t.contract.pool_id,
                 token_in: format!("1500{AXL_USDC}"),
                 routes: routes.clone(),
+                sender: t.accounts["alice"].address(),
             },
         )
         .unwrap();
@@ -340,7 +341,7 @@ fn test_swap() {
     assert_eq!(token_out_amount, "1500");
 
     // swap with correct token_in should succeed this time
-    let token_in = Coin::new(1_500, AXL_USDC);
+    let token_in = coin(1_500, AXL_USDC);
     cp.swap_exact_amount_in(
         MsgSwapExactAmountIn {
             sender: t.accounts["alice"].address(),
@@ -354,8 +355,8 @@ fn test_swap() {
 
     // check balances
     t.assert_contract_balances(&[
-        Coin::new(1_500, AXL_USDC),
-        Coin::new(100_000 + 100_000 - 1_500, COSMOS_USDC), // +100_000 due to bank send
+        coin(1_500, AXL_USDC),
+        coin(100_000 + 100_000 - 1_500, COSMOS_USDC), // +100_000 due to bank send
     ]);
 
     let GetTotalPoolLiquidityResponse {
@@ -367,25 +368,19 @@ fn test_swap() {
 
     assert_eq!(
         total_pool_liquidity,
-        vec![
-            Coin::new(1_500, AXL_USDC),
-            Coin::new(100_000 - 1_500, COSMOS_USDC)
-        ]
+        vec![coin(1_500, AXL_USDC), coin(100_000 - 1_500, COSMOS_USDC)]
     );
 
     // +1_000 due to existing alice balance
     t.assert_account_balances(
         "alice",
-        vec![
-            Coin::new(1_500 + 1_000, COSMOS_USDC),
-            Coin::new(1_000, "urandom2"),
-        ],
+        vec![coin(1_500 + 1_000, COSMOS_USDC), coin(1_000, "urandom2")],
         vec!["uosmo"],
     );
 
     // swap again with another user
     // swap with correct token_in should succeed this time
-    let token_in = Coin::new(29_902, AXL_USDC);
+    let token_in = coin(29_902, AXL_USDC);
     cp.swap_exact_amount_in(
         MsgSwapExactAmountIn {
             sender: t.accounts["bob"].address(),
@@ -402,8 +397,8 @@ fn test_swap() {
 
     // check balances
     t.assert_contract_balances(&[
-        Coin::new(1_500 + 29_902, AXL_USDC),
-        Coin::new(100_000 + 100_000 - 1_500 - 29_902, COSMOS_USDC), // +100_000 due to bank send
+        coin(1_500 + 29_902, AXL_USDC),
+        coin(100_000 + 100_000 - 1_500 - 29_902, COSMOS_USDC), // +100_000 due to bank send
     ]);
 
     let GetTotalPoolLiquidityResponse {
@@ -416,15 +411,15 @@ fn test_swap() {
     assert_eq!(
         total_pool_liquidity,
         vec![
-            Coin::new(1_500 + 29_902, AXL_USDC),
-            Coin::new(100_000 - 1_500 - 29_902, COSMOS_USDC)
+            coin(1_500 + 29_902, AXL_USDC),
+            coin(100_000 - 1_500 - 29_902, COSMOS_USDC)
         ]
     );
 
-    t.assert_account_balances("bob", vec![Coin::new(29_902, COSMOS_USDC)], vec!["uosmo"]);
+    t.assert_account_balances("bob", vec![coin(29_902, COSMOS_USDC)], vec!["uosmo"]);
 
     // swap back with `SwapExactAmountOut`
-    let token_out = Coin::new(1_500, AXL_USDC);
+    let token_out = coin(1_500, AXL_USDC);
 
     cp.swap_exact_amount_out(
         MsgSwapExactAmountOut {
@@ -449,23 +444,20 @@ fn test_swap() {
 
     assert_eq!(
         total_pool_liquidity,
-        vec![
-            Coin::new(29_902, AXL_USDC),
-            Coin::new(100_000 - 29_902, COSMOS_USDC),
-        ]
+        vec![coin(29_902, AXL_USDC), coin(100_000 - 29_902, COSMOS_USDC),]
     );
 
     // check balances
     t.assert_contract_balances(&[
-        Coin::new(29_902, AXL_USDC),
-        Coin::new(100_000 + 100_000 - 29_902, COSMOS_USDC),
+        coin(29_902, AXL_USDC),
+        coin(100_000 + 100_000 - 29_902, COSMOS_USDC),
     ]);
 
     t.assert_account_balances(
         "bob",
         vec![
-            Coin::new(1_500, AXL_USDC),
-            Coin::new(29_902 - 1_500, COSMOS_USDC), // +100_000 due to bank send
+            coin(1_500, AXL_USDC),
+            coin(29_902 - 1_500, COSMOS_USDC), // +100_000 due to bank send
         ],
         vec!["uosmo"],
     );
@@ -477,9 +469,9 @@ fn test_exit_pool() {
     let cp = CosmwasmPool::new(&app);
 
     let t = TestEnvBuilder::new()
-        .with_account("user", vec![Coin::new(1_500, AXL_USDC)])
-        .with_account("provider_1", vec![Coin::new(100_000, COSMOS_USDC)])
-        .with_account("provider_2", vec![Coin::new(100_000, COSMOS_USDC)])
+        .with_account("user", vec![coin(1_500, AXL_USDC)])
+        .with_account("provider_1", vec![coin(100_000, COSMOS_USDC)])
+        .with_account("provider_2", vec![coin(100_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_configs: vec![
                 AssetConfig::from_denom_str(AXL_USDC),
@@ -496,7 +488,7 @@ fn test_exit_pool() {
     t.contract
         .execute(
             &ExecMsg::JoinPool {},
-            &[Coin::new(100_000, COSMOS_USDC)],
+            &[coin(100_000, COSMOS_USDC)],
             &t.accounts["provider_1"],
         )
         .unwrap();
@@ -504,13 +496,13 @@ fn test_exit_pool() {
     t.contract
         .execute(
             &ExecMsg::JoinPool {},
-            &[Coin::new(100_000, COSMOS_USDC)],
+            &[coin(100_000, COSMOS_USDC)],
             &t.accounts["provider_2"],
         )
         .unwrap();
 
     // swap to build up token_in
-    let token_in = Coin::new(1_500, AXL_USDC);
+    let token_in = coin(1_500, AXL_USDC);
 
     cp.swap_exact_amount_in(
         MsgSwapExactAmountIn {
@@ -531,7 +523,7 @@ fn test_exit_pool() {
         .contract
         .execute(
             &ExecMsg::ExitPool {
-                tokens_out: vec![Coin::new(1_500, AXL_USDC)],
+                tokens_out: vec![coin(1_500, AXL_USDC)],
             },
             &[],
             &t.accounts["user"],
@@ -550,7 +542,7 @@ fn test_exit_pool() {
     t.contract
         .execute(
             &ExecMsg::ExitPool {
-                tokens_out: vec![Coin::new(500, AXL_USDC)],
+                tokens_out: vec![coin(500, AXL_USDC)],
             },
             &[],
             &t.accounts["provider_1"],
@@ -575,8 +567,8 @@ fn test_exit_pool() {
 
     // check balances
     t.assert_contract_balances(&[
-        Coin::new(1500 - 500, AXL_USDC),
-        Coin::new(200_000 - 1500, COSMOS_USDC),
+        coin(1500 - 500, AXL_USDC),
+        coin(200_000 - 1500, COSMOS_USDC),
     ]);
 
     let GetTotalPoolLiquidityResponse {
@@ -589,8 +581,8 @@ fn test_exit_pool() {
     assert_eq!(
         total_pool_liquidity,
         vec![
-            Coin::new(1500 - 500, AXL_USDC),
-            Coin::new(200_000 - 1500, COSMOS_USDC)
+            coin(1500 - 500, AXL_USDC),
+            coin(200_000 - 1500, COSMOS_USDC)
         ]
     );
 
@@ -598,7 +590,7 @@ fn test_exit_pool() {
     t.contract
         .execute(
             &ExecMsg::ExitPool {
-                tokens_out: vec![Coin::new(1_000, AXL_USDC), Coin::new(99_000, COSMOS_USDC)],
+                tokens_out: vec![coin(1_000, AXL_USDC), coin(99_000, COSMOS_USDC)],
             },
             &[],
             &t.accounts["provider_2"],
@@ -622,7 +614,7 @@ fn test_exit_pool() {
     assert_eq!(total_shares, Uint128::new(200_000 - 500 - 1000 - 99_000));
 
     // check balances
-    t.assert_contract_balances(&[Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)]);
+    t.assert_contract_balances(&[coin(200_000 - 1500 - 99_000, COSMOS_USDC)]);
 
     let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
@@ -634,8 +626,8 @@ fn test_exit_pool() {
     assert_eq!(
         total_pool_liquidity,
         vec![
-            Coin::new(0, AXL_USDC),
-            Coin::new(200_000 - 1500 - 99_000, COSMOS_USDC)
+            coin(0, AXL_USDC),
+            coin(200_000 - 1500 - 99_000, COSMOS_USDC)
         ]
     );
 
@@ -644,7 +636,7 @@ fn test_exit_pool() {
         .contract
         .execute(
             &ExecMsg::ExitPool {
-                tokens_out: vec![Coin::new(1, AXL_USDC)],
+                tokens_out: vec![coin(1, AXL_USDC)],
             },
             &[],
             &t.accounts["provider_2"],
@@ -664,7 +656,7 @@ fn test_exit_pool() {
         .contract
         .execute(
             &ExecMsg::ExitPool {
-                tokens_out: vec![Coin::new(1, AXL_USDC)],
+                tokens_out: vec![coin(1, AXL_USDC)],
             },
             &[],
             &t.accounts["provider_1"],
@@ -673,8 +665,8 @@ fn test_exit_pool() {
 
     assert_contract_err(
         ContractError::InsufficientPoolAsset {
-            required: Coin::new(1, AXL_USDC),
-            available: Coin::new(0, AXL_USDC),
+            required: coin(1, AXL_USDC),
+            available: coin(0, AXL_USDC),
         },
         err,
     );
@@ -686,9 +678,9 @@ fn test_3_pool_swap() {
     let cp = CosmwasmPool::new(&app);
 
     let t = TestEnvBuilder::new()
-        .with_account("alice", vec![Coin::new(1_500, AXL_USDC)])
-        .with_account("bob", vec![Coin::new(1_500, AXL_DAI)])
-        .with_account("provider", vec![Coin::new(100_000, COSMOS_USDC)])
+        .with_account("alice", vec![coin(1_500, AXL_USDC)])
+        .with_account("bob", vec![coin(1_500, AXL_DAI)])
+        .with_account("provider", vec![coin(100_000, COSMOS_USDC)])
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_configs: vec![
                 AssetConfig::from_denom_str(AXL_USDC),
@@ -710,7 +702,7 @@ fn test_3_pool_swap() {
     t.contract
         .execute(
             &ExecMsg::JoinPool {},
-            &[Coin::new(100_000, COSMOS_USDC)],
+            &[coin(100_000, COSMOS_USDC)],
             &t.accounts["provider"],
         )
         .unwrap();
@@ -726,7 +718,7 @@ fn test_3_pool_swap() {
     assert_eq!(shares, Uint128::new(100_000));
 
     // check contract balances
-    t.assert_contract_balances(&[Coin::new(100_000, COSMOS_USDC)]);
+    t.assert_contract_balances(&[coin(100_000, COSMOS_USDC)]);
 
     // check provider balances
     t.assert_account_balances("provider", vec![], vec!["uosmo", &share_denom]);
@@ -742,9 +734,9 @@ fn test_3_pool_swap() {
     assert_eq!(
         total_pool_liquidity,
         vec![
-            Coin::new(0, AXL_USDC),
-            Coin::new(0, AXL_DAI),
-            Coin::new(100_000, COSMOS_USDC)
+            coin(0, AXL_USDC),
+            coin(0, AXL_DAI),
+            coin(100_000, COSMOS_USDC)
         ]
     );
 
@@ -754,7 +746,7 @@ fn test_3_pool_swap() {
         .swap_exact_amount_in(
             MsgSwapExactAmountIn {
                 sender: t.accounts["alice"].address(),
-                token_in: Some(Coin::new(1_000, AXL_USDC).into()),
+                token_in: Some(coin(1_000, AXL_USDC).into()),
                 routes: vec![SwapAmountInRoute {
                     pool_id: t.contract.pool_id,
                     token_out_denom: AXL_DAI.to_string(),
@@ -767,8 +759,8 @@ fn test_3_pool_swap() {
 
     assert_contract_err(
         ContractError::InsufficientPoolAsset {
-            required: Coin::new(1_000, AXL_DAI),
-            available: Coin::new(0, AXL_DAI),
+            required: coin(1_000, AXL_DAI),
+            available: coin(0, AXL_DAI),
         },
         err,
     );
@@ -777,7 +769,7 @@ fn test_3_pool_swap() {
     cp.swap_exact_amount_in(
         MsgSwapExactAmountIn {
             sender: t.accounts["alice"].address(),
-            token_in: Some(Coin::new(1_000, AXL_USDC).into()),
+            token_in: Some(coin(1_000, AXL_USDC).into()),
             routes: vec![SwapAmountInRoute {
                 pool_id: t.contract.pool_id,
                 token_out_denom: COSMOS_USDC.to_string(),
@@ -789,12 +781,12 @@ fn test_3_pool_swap() {
     .unwrap();
 
     // check contract balances
-    t.assert_contract_balances(&[Coin::new(1_000, AXL_USDC), Coin::new(99_000, COSMOS_USDC)]);
+    t.assert_contract_balances(&[coin(1_000, AXL_USDC), coin(99_000, COSMOS_USDC)]);
 
     // check alice balance
     t.assert_account_balances(
         "alice",
-        vec![Coin::new(500, AXL_USDC), Coin::new(1_000, COSMOS_USDC)],
+        vec![coin(500, AXL_USDC), coin(1_000, COSMOS_USDC)],
         vec!["uosmo", "ucosm"],
     );
 
@@ -809,9 +801,9 @@ fn test_3_pool_swap() {
     assert_eq!(
         total_pool_liquidity,
         vec![
-            Coin::new(1_000, AXL_USDC),
-            Coin::new(0, AXL_DAI),
-            Coin::new(99_000, COSMOS_USDC)
+            coin(1_000, AXL_USDC),
+            coin(0, AXL_DAI),
+            coin(99_000, COSMOS_USDC)
         ]
     );
 
@@ -820,7 +812,7 @@ fn test_3_pool_swap() {
     cp.swap_exact_amount_in(
         MsgSwapExactAmountIn {
             sender: t.accounts["bob"].address(),
-            token_in: Some(Coin::new(1_000, AXL_DAI).into()),
+            token_in: Some(coin(1_000, AXL_DAI).into()),
             routes: vec![SwapAmountInRoute {
                 pool_id: t.contract.pool_id,
                 token_out_denom: AXL_USDC.to_string(),
@@ -832,12 +824,12 @@ fn test_3_pool_swap() {
     .unwrap();
 
     // check contract balances
-    t.assert_contract_balances(&[Coin::new(1_000, AXL_DAI), Coin::new(99_000, COSMOS_USDC)]);
+    t.assert_contract_balances(&[coin(1_000, AXL_DAI), coin(99_000, COSMOS_USDC)]);
 
     // check bob balances
     t.assert_account_balances(
         "bob",
-        vec![Coin::new(500, AXL_DAI), Coin::new(1_000, AXL_USDC)],
+        vec![coin(500, AXL_DAI), coin(1_000, AXL_USDC)],
         vec!["uosmo"],
     );
 
@@ -852,9 +844,9 @@ fn test_3_pool_swap() {
     assert_eq!(
         total_pool_liquidity,
         vec![
-            Coin::new(0, AXL_USDC),
-            Coin::new(1_000, AXL_DAI),
-            Coin::new(99_000, COSMOS_USDC)
+            coin(0, AXL_USDC),
+            coin(1_000, AXL_DAI),
+            coin(99_000, COSMOS_USDC)
         ]
     );
 
@@ -862,7 +854,7 @@ fn test_3_pool_swap() {
     t.contract
         .execute(
             &ExecMsg::ExitPool {
-                tokens_out: vec![Coin::new(1_000, AXL_DAI), Coin::new(99_000, COSMOS_USDC)],
+                tokens_out: vec![coin(1_000, AXL_DAI), coin(99_000, COSMOS_USDC)],
             },
             &[],
             &t.accounts["provider"],
@@ -882,17 +874,13 @@ fn test_3_pool_swap() {
 
     assert_eq!(
         total_pool_liquidity,
-        vec![
-            Coin::new(0, AXL_USDC),
-            Coin::new(0, AXL_DAI),
-            Coin::new(0, COSMOS_USDC)
-        ]
+        vec![coin(0, AXL_USDC), coin(0, AXL_DAI), coin(0, COSMOS_USDC)]
     );
 
     t.assert_contract_balances(&[]);
     t.assert_account_balances(
         "provider",
-        vec![Coin::new(1_000, AXL_DAI), Coin::new(99_000, COSMOS_USDC)],
+        vec![coin(1_000, AXL_DAI), coin(99_000, COSMOS_USDC)],
         vec!["uosmo"],
     );
 }
@@ -903,11 +891,11 @@ fn test_swap_alloyed_asset() {
 
     let alloyed_asset_subdenom = "eth";
     let t = TestEnvBuilder::new()
-        .with_account("alice", vec![Coin::new(1_500, AXL_ETH)])
-        .with_account("bob", vec![Coin::new(1_500, WH_ETH)])
+        .with_account("alice", vec![coin(1_500, AXL_ETH)])
+        .with_account("bob", vec![coin(1_500, WH_ETH)])
         .with_account(
             "provider",
-            vec![Coin::new(100_000, AXL_ETH), Coin::new(100_000, WH_ETH)],
+            vec![coin(100_000, AXL_ETH), coin(100_000, WH_ETH)],
         )
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_configs: vec![
@@ -939,32 +927,21 @@ fn test_limiters() {
     let app = OsmosisTestApp::new();
     let cp = CosmwasmPool::new(&app);
 
-    let admin = app
-        .init_account(&[Coin::new(100_000u128, "uosmo")])
-        .unwrap();
+    let admin = app.init_account(&[coin(100_000u128, "uosmo")]).unwrap();
 
     let t = TestEnvBuilder::new()
         .with_account(
             "alice",
-            vec![
-                Coin::new(1_000_000, AXL_USDC),
-                Coin::new(1_000_000, COSMOS_USDC),
-            ],
+            vec![coin(1_000_000, AXL_USDC), coin(1_000_000, COSMOS_USDC)],
         )
         .with_account(
             "bob",
-            vec![
-                Coin::new(1_000_000, AXL_USDC),
-                Coin::new(1_000_000, COSMOS_USDC),
-            ],
+            vec![coin(1_000_000, AXL_USDC), coin(1_000_000, COSMOS_USDC)],
         )
         .with_account("admin", vec![])
         .with_account(
             "provider",
-            vec![
-                Coin::new(1_000_000, AXL_USDC),
-                Coin::new(1_000_000, COSMOS_USDC),
-            ],
+            vec![coin(1_000_000, AXL_USDC), coin(1_000_000, COSMOS_USDC)],
         )
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_configs: vec![
@@ -992,7 +969,7 @@ fn test_limiters() {
     t.contract
         .execute(
             &ExecMsg::RegisterLimiter {
-                denom: AXL_USDC.to_string(),
+                scope: Scope::Denom(AXL_USDC.to_string()),
                 label: "1h".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: config_1h.clone(),
@@ -1007,7 +984,7 @@ fn test_limiters() {
     t.contract
         .execute(
             &ExecMsg::RegisterLimiter {
-                denom: AXL_USDC.to_string(),
+                scope: Scope::Denom(AXL_USDC.to_string()),
                 label: "1w".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: config_1w.clone(),
@@ -1022,7 +999,7 @@ fn test_limiters() {
     t.contract
         .execute(
             &ExecMsg::RegisterLimiter {
-                denom: COSMOS_USDC.to_string(),
+                scope: Scope::Denom(COSMOS_USDC.to_string()),
                 label: "1h".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: config_1h.clone(),
@@ -1037,7 +1014,7 @@ fn test_limiters() {
     t.contract
         .execute(
             &ExecMsg::RegisterLimiter {
-                denom: COSMOS_USDC.to_string(),
+                scope: Scope::Denom(COSMOS_USDC.to_string()),
                 label: "1w".to_string(),
                 limiter_params: LimiterParams::ChangeLimiter {
                     window_config: config_1w.clone(),
@@ -1052,7 +1029,7 @@ fn test_limiters() {
     t.contract
         .execute(
             &ExecMsg::RegisterLimiter {
-                denom: COSMOS_USDC.to_string(),
+                scope: Scope::Denom(COSMOS_USDC.to_string()),
                 label: "static".to_string(),
                 limiter_params: LimiterParams::StaticLimiter {
                     upper_limit: Decimal::percent(55),
@@ -1070,29 +1047,29 @@ fn test_limiters() {
         limiters,
         vec![
             (
-                (AXL_USDC.to_string(), "1h".to_string()),
+                (Scope::denom(AXL_USDC).key(), "1h".to_string()),
                 Limiter::ChangeLimiter(
                     ChangeLimiter::new(config_1h.clone(), Decimal::percent(10)).unwrap()
                 )
             ),
             (
-                (AXL_USDC.to_string(), "1w".to_string()),
+                (Scope::denom(AXL_USDC).key(), "1w".to_string()),
                 Limiter::ChangeLimiter(
                     ChangeLimiter::new(config_1w.clone(), Decimal::percent(5)).unwrap()
                 )
             ),
             (
-                (COSMOS_USDC.to_string(), "1h".to_string()),
+                (Scope::denom(COSMOS_USDC).key(), "1h".to_string()),
                 Limiter::ChangeLimiter(
                     ChangeLimiter::new(config_1h, Decimal::percent(10)).unwrap()
                 )
             ),
             (
-                (COSMOS_USDC.to_string(), "1w".to_string()),
+                (Scope::denom(COSMOS_USDC).key(), "1w".to_string()),
                 Limiter::ChangeLimiter(ChangeLimiter::new(config_1w, Decimal::percent(5)).unwrap())
             ),
             (
-                (COSMOS_USDC.to_string(), "static".to_string()),
+                (Scope::denom(COSMOS_USDC).key(), "static".to_string()),
                 Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(55)).unwrap())
             ),
         ]
@@ -1102,10 +1079,7 @@ fn test_limiters() {
     t.contract
         .execute(
             &ExecMsg::JoinPool {},
-            &[
-                Coin::new(500_000, AXL_USDC),
-                Coin::new(500_000, COSMOS_USDC),
-            ],
+            &[coin(500_000, AXL_USDC), coin(500_000, COSMOS_USDC)],
             &t.accounts["provider"],
         )
         .unwrap();
@@ -1117,7 +1091,7 @@ fn test_limiters() {
         .swap_exact_amount_in(
             MsgSwapExactAmountIn {
                 sender: t.accounts["alice"].address(),
-                token_in: Some(Coin::new(100_001, AXL_USDC).into()),
+                token_in: Some(coin(100_001, AXL_USDC).into()),
                 routes: vec![SwapAmountInRoute {
                     pool_id: t.contract.pool_id,
                     token_out_denom: COSMOS_USDC.to_string(),
@@ -1130,7 +1104,7 @@ fn test_limiters() {
 
     assert_contract_err(
         ContractError::UpperLimitExceeded {
-            denom: AXL_USDC.to_string(),
+            scope: Scope::denom(AXL_USDC),
             upper_limit: Decimal::from_str("0.6").unwrap(),
             value: Decimal::from_str("0.600001").unwrap(),
         },
@@ -1142,7 +1116,7 @@ fn test_limiters() {
         .swap_exact_amount_out(
             MsgSwapExactAmountOut {
                 sender: t.accounts["alice"].address(),
-                token_out: Some(Coin::new(50_001, AXL_USDC).into()),
+                token_out: Some(coin(50_001, AXL_USDC).into()),
                 routes: vec![SwapAmountOutRoute {
                     pool_id: t.contract.pool_id,
                     token_in_denom: COSMOS_USDC.to_string(),
@@ -1155,7 +1129,7 @@ fn test_limiters() {
 
     assert_contract_err(
         ContractError::UpperLimitExceeded {
-            denom: COSMOS_USDC.to_string(),
+            scope: Scope::denom(COSMOS_USDC),
             upper_limit: Decimal::from_str("0.55").unwrap(),
             value: Decimal::from_str("0.550001").unwrap(),
         },
@@ -1166,7 +1140,7 @@ fn test_limiters() {
     cp.swap_exact_amount_in(
         MsgSwapExactAmountIn {
             sender: t.accounts["alice"].address(),
-            token_in: Some(Coin::new(50_000, COSMOS_USDC).into()),
+            token_in: Some(coin(50_000, COSMOS_USDC).into()),
             routes: vec![SwapAmountInRoute {
                 pool_id: t.contract.pool_id,
                 token_out_denom: AXL_USDC.to_string(),
@@ -1184,7 +1158,7 @@ fn test_limiters() {
         .contract
         .execute(
             &ExecMsg::ExitPool {
-                tokens_out: vec![Coin::new(200_000, COSMOS_USDC)],
+                tokens_out: vec![coin(200_000, COSMOS_USDC)],
             },
             &[],
             &t.accounts["provider"],
@@ -1193,7 +1167,7 @@ fn test_limiters() {
 
     assert_contract_err(
         ContractError::UpperLimitExceeded {
-            denom: AXL_USDC.to_string(),
+            scope: Scope::denom(AXL_USDC),
             upper_limit: Decimal::from_str("0.55").unwrap(),
             value: Decimal::from_str("0.5625").unwrap(),
         },
@@ -1205,15 +1179,15 @@ fn test_limiters() {
         .contract
         .execute(
             &ExecMsg::JoinPool {},
-            &[Coin::new(200_000, AXL_USDC)],
+            &[coin(200_000, AXL_USDC)],
             &t.accounts["provider"],
         )
         .unwrap_err();
 
     assert_contract_err(
         ContractError::UpperLimitExceeded {
-            denom: AXL_USDC.to_string(),
-            upper_limit: Decimal::from_str("0.525034626038781163").unwrap(),
+            scope: Scope::denom(AXL_USDC),
+            upper_limit: Decimal::from_str("0.525017349063150589").unwrap(),
             value: Decimal::from_str("0.5416666666666666").unwrap(),
         },
         err,
@@ -1230,7 +1204,7 @@ fn test_limiters() {
         .swap_exact_amount_in(
             MsgSwapExactAmountIn {
                 sender: t.accounts["provider"].address(),
-                token_in: Some(Coin::new(200_000, alloyed_denom.clone()).into()),
+                token_in: Some(coin(200_000, alloyed_denom.clone()).into()),
                 routes: vec![SwapAmountInRoute {
                     pool_id: t.contract.pool_id,
                     token_out_denom: AXL_USDC.to_string(),
@@ -1243,7 +1217,7 @@ fn test_limiters() {
 
     assert_contract_err(
         ContractError::UpperLimitExceeded {
-            denom: COSMOS_USDC.to_string(),
+            scope: Scope::denom(COSMOS_USDC),
             upper_limit: Decimal::from_str("0.65").unwrap(),
             value: Decimal::from_str("0.6875").unwrap(),
         },
@@ -1255,7 +1229,7 @@ fn test_limiters() {
         .swap_exact_amount_out(
             MsgSwapExactAmountOut {
                 sender: t.accounts["provider"].address(),
-                token_out: Some(Coin::new(200_000, alloyed_denom).into()),
+                token_out: Some(coin(200_000, alloyed_denom).into()),
                 routes: vec![SwapAmountOutRoute {
                     pool_id: t.contract.pool_id,
                     token_in_denom: COSMOS_USDC.to_string(),
@@ -1268,8 +1242,8 @@ fn test_limiters() {
 
     assert_contract_err(
         ContractError::UpperLimitExceeded {
-            denom: COSMOS_USDC.to_string(),
-            upper_limit: Decimal::from_str("0.575").unwrap(),
+            scope: Scope::denom(COSMOS_USDC),
+            upper_limit: Decimal::from_str("0.57498265093684941").unwrap(),
             value: Decimal::from_str("0.625").unwrap(),
         },
         err,
@@ -1281,32 +1255,21 @@ fn test_register_limiter_after_having_liquidity() {
     let app = OsmosisTestApp::new();
     let cp = CosmwasmPool::new(&app);
 
-    let admin = app
-        .init_account(&[Coin::new(100_000u128, "uosmo")])
-        .unwrap();
+    let admin = app.init_account(&[coin(100_000u128, "uosmo")]).unwrap();
 
     let t = TestEnvBuilder::new()
         .with_account(
             "alice",
-            vec![
-                Coin::new(1_000_000, AXL_USDC),
-                Coin::new(1_000_000, COSMOS_USDC),
-            ],
+            vec![coin(1_000_000, AXL_USDC), coin(1_000_000, COSMOS_USDC)],
         )
         .with_account(
             "bob",
-            vec![
-                Coin::new(1_000_000, AXL_USDC),
-                Coin::new(1_000_000, COSMOS_USDC),
-            ],
+            vec![coin(1_000_000, AXL_USDC), coin(1_000_000, COSMOS_USDC)],
         )
         .with_account("admin", vec![])
         .with_account(
             "provider",
-            vec![
-                Coin::new(1_000_000, AXL_USDC),
-                Coin::new(1_000_000, COSMOS_USDC),
-            ],
+            vec![coin(1_000_000, AXL_USDC), coin(1_000_000, COSMOS_USDC)],
         )
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_configs: vec![
@@ -1329,7 +1292,7 @@ fn test_register_limiter_after_having_liquidity() {
     cp.swap_exact_amount_in(
         MsgSwapExactAmountIn {
             sender: t.accounts["provider"].address(),
-            token_in: Some(Coin::new(200_000, COSMOS_USDC).into()),
+            token_in: Some(coin(200_000, COSMOS_USDC).into()),
             routes: vec![SwapAmountInRoute {
                 pool_id: t.contract.pool_id,
                 token_out_denom: alloyed_denom.clone(),
@@ -1343,7 +1306,7 @@ fn test_register_limiter_after_having_liquidity() {
     t.contract
         .execute(
             &ExecMsg::RegisterLimiter {
-                denom: COSMOS_USDC.to_string(),
+                scope: Scope::Denom(COSMOS_USDC.to_string()),
                 label: "static".to_string(),
                 limiter_params: LimiterParams::StaticLimiter {
                     upper_limit: Decimal::percent(60),
@@ -1358,7 +1321,7 @@ fn test_register_limiter_after_having_liquidity() {
         .swap_exact_amount_in(
             MsgSwapExactAmountIn {
                 sender: t.accounts["provider"].address(),
-                token_in: Some(Coin::new(1, COSMOS_USDC).into()),
+                token_in: Some(coin(1, COSMOS_USDC).into()),
                 routes: vec![SwapAmountInRoute {
                     pool_id: t.contract.pool_id,
                     token_out_denom: alloyed_denom.clone(),
@@ -1371,7 +1334,7 @@ fn test_register_limiter_after_having_liquidity() {
 
     assert_contract_err(
         ContractError::UpperLimitExceeded {
-            denom: COSMOS_USDC.to_string(),
+            scope: Scope::denom(COSMOS_USDC),
             upper_limit: Decimal::from_str("0.6").unwrap(),
             value: Decimal::from_str("1").unwrap(),
         },
@@ -1382,7 +1345,7 @@ fn test_register_limiter_after_having_liquidity() {
     cp.swap_exact_amount_in(
         MsgSwapExactAmountIn {
             sender: t.accounts["provider"].address(),
-            token_in: Some(Coin::new(1, AXL_USDC).into()),
+            token_in: Some(coin(1, AXL_USDC).into()),
             routes: vec![SwapAmountInRoute {
                 pool_id: t.contract.pool_id,
                 token_out_denom: alloyed_denom.clone(),
@@ -1397,7 +1360,7 @@ fn test_register_limiter_after_having_liquidity() {
     cp.swap_exact_amount_in(
         MsgSwapExactAmountIn {
             sender: t.accounts["provider"].address(),
-            token_in: Some(Coin::new(1, &alloyed_denom).into()),
+            token_in: Some(coin(1, &alloyed_denom).into()),
             routes: vec![SwapAmountInRoute {
                 pool_id: t.contract.pool_id,
                 token_out_denom: COSMOS_USDC.to_string(),
@@ -1412,7 +1375,7 @@ fn test_register_limiter_after_having_liquidity() {
     cp.swap_exact_amount_in(
         MsgSwapExactAmountIn {
             sender: t.accounts["provider"].address(),
-            token_in: Some(Coin::new(1, AXL_USDC).into()),
+            token_in: Some(coin(1, AXL_USDC).into()),
             routes: vec![SwapAmountInRoute {
                 pool_id: t.contract.pool_id,
                 token_out_denom: COSMOS_USDC.to_string(),
@@ -1428,7 +1391,7 @@ fn test_register_limiter_after_having_liquidity() {
         .swap_exact_amount_in(
             MsgSwapExactAmountIn {
                 sender: t.accounts["provider"].address(),
-                token_in: Some(Coin::new(1, COSMOS_USDC).into()),
+                token_in: Some(coin(1, COSMOS_USDC).into()),
                 routes: vec![SwapAmountInRoute {
                     pool_id: t.contract.pool_id,
                     token_out_denom: AXL_USDC.to_string(),
@@ -1441,7 +1404,7 @@ fn test_register_limiter_after_having_liquidity() {
 
     assert_contract_err(
         ContractError::UpperLimitExceeded {
-            denom: COSMOS_USDC.to_string(),
+            scope: Scope::denom(COSMOS_USDC),
             upper_limit: Decimal::from_str("0.6").unwrap(),
             value: Decimal::from_str("0.999995").unwrap(),
         },
@@ -1452,7 +1415,7 @@ fn test_register_limiter_after_having_liquidity() {
     cp.swap_exact_amount_in(
         MsgSwapExactAmountIn {
             sender: t.accounts["provider"].address(),
-            token_in: Some(Coin::new(1, alloyed_denom).into()),
+            token_in: Some(coin(1, alloyed_denom).into()),
             routes: vec![SwapAmountInRoute {
                 pool_id: t.contract.pool_id,
                 token_out_denom: COSMOS_USDC.to_string(),

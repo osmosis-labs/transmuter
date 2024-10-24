@@ -5,13 +5,13 @@ use crate::{ensure_admin_authority, ContractError};
 pub mod admin;
 pub mod moderator;
 
-pub struct Role<'a> {
-    pub admin: admin::Admin<'a>,
-    pub moderator: moderator::Moderator<'a>,
+pub struct Role {
+    pub admin: admin::Admin,
+    pub moderator: moderator::Moderator,
 }
 
-impl<'a> Role<'a> {
-    pub const fn new(admin_namespace: &'a str, moderator_namespace: &'a str) -> Self {
+impl Role {
+    pub const fn new(admin_namespace: &'static str, moderator_namespace: &'static str) -> Self {
         Role {
             admin: admin::Admin::new(admin_namespace),
             moderator: moderator::Moderator::new(moderator_namespace),

@@ -1,5 +1,6 @@
 use cosmwasm_std::{
-    testing::{mock_dependencies, mock_env, mock_info},
+    coin,
+    testing::{message_info, mock_dependencies, mock_env},
     Coin, Decimal, Uint128,
 };
 use sylvia::types::{ExecCtx, InstantiateCtx, QueryCtx};
@@ -8,32 +9,31 @@ use crate::{asset::AssetConfig, contract::Transmuter, ContractError};
 
 #[test]
 fn test_spot_price_on_balanced_liquidity_must_be_one() {
-    test_spot_price(&[Coin::new(100_000, "denom0"), Coin::new(100_000, "denom1")])
+    test_spot_price(&[coin(100_000, "denom0"), coin(100_000, "denom1")])
 }
 #[test]
 fn test_spot_price_on_unbalanced_liquidity_must_be_one() {
-    test_spot_price(&[
-        Coin::new(999_999_999, "denom0"),
-        Coin::new(100_000, "denom1"),
-    ])
+    test_spot_price(&[coin(999_999_999, "denom0"), coin(100_000, "denom1")])
 }
 
 fn test_spot_price(liquidity: &[Coin]) {
-    let transmuter = Transmuter::default();
+    let transmuter = Transmuter::new();
     let mut deps = mock_dependencies();
+    deps.api = deps.api.with_prefix("osmo");
 
     // make denom has non-zero total supply
-    deps.querier.update_balance(
-        "someone",
-        vec![Coin::new(1, "denom0"), Coin::new(1, "denom1")],
-    );
+    deps.querier
+        .bank
+        .update_balance("someone", vec![coin(1, "denom0"), coin(1, "denom1")]);
+
+    let creator = deps.api.addr_make("creator");
 
     transmuter
         .instantiate(
             InstantiateCtx {
                 deps: deps.as_mut(),
                 env: mock_env(),
-                info: mock_info("creator", &[]),
+                info: message_info(&creator, &[]),
             },
             vec![
                 AssetConfig::from_denom_str("denom0"),
@@ -54,11 +54,12 @@ fn test_spot_price(liquidity: &[Coin]) {
         )
         .unwrap();
 
+    let creator = deps.api.addr_make("creator");
     transmuter
         .join_pool(ExecCtx {
             deps: deps.as_mut(),
             env: mock_env(),
-            info: mock_info("creator", liquidity),
+            info: message_info(&creator, liquidity),
         })
         .unwrap();
 

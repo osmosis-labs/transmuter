@@ -4,7 +4,7 @@ use cosmwasm_std::{
 };
 use thiserror::Error;
 
-use crate::math::MathError;
+use crate::{math::MathError, scope::Scope};
 
 #[derive(Error, Debug, PartialEq)]
 pub enum ContractError {
@@ -48,7 +48,7 @@ pub enum ContractError {
     InvalidCorruptedAssetDenom { denom: String },
 
     #[error("Only corrupted asset with 0 amount can be removed")]
-    InvalidCorruptedAssetRemoval {},
+    InvalidAssetRemoval {},
 
     #[error("Pool asset denom count must be within {min} - {max} inclusive, but got: {actual}")]
     PoolAssetDenomCountOutOfRange {
@@ -56,6 +56,9 @@ pub enum ContractError {
         max: Uint64,
         actual: Uint64,
     },
+
+    #[error("Asset group count must be within {max} inclusive, but got: {actual}")]
+    AssetGroupCountOutOfRange { max: Uint64, actual: Uint64 },
 
     #[error("Insufficient pool asset: required: {required}, available: {available}")]
     InsufficientPoolAsset { required: Coin, available: Coin },
@@ -114,11 +117,11 @@ pub enum ContractError {
     #[error("Admin transferring state is inoperable for the requested operation")]
     InoperableAdminTransferringState {},
 
-    #[error("Limiter count for {denom} exceed maximum per denom: {max}")]
-    MaxLimiterCountPerDenomExceeded { denom: String, max: Uint64 },
+    #[error("Limiter count for {scope} exceed maximum per denom: {max}")]
+    MaxLimiterCountPerDenomExceeded { scope: Scope, max: Uint64 },
 
-    #[error("Denom: {denom} cannot have an empty limiter after it has been registered")]
-    EmptyLimiterNotAllowed { denom: String },
+    #[error("Denom: {scope} cannot have an empty limiter after it has been registered")]
+    EmptyLimiterNotAllowed { scope: Scope },
 
     #[error("Limiter label must not be empty")]
     EmptyLimiterLabel {},
@@ -158,17 +161,17 @@ pub enum ContractError {
         ended_at: Timestamp,
     },
 
-    #[error("Limiter does not exist for denom: {denom}, label: {label}")]
-    LimiterDoesNotExist { denom: String, label: String },
+    #[error("Limiter does not exist for scope: {scope}, label: {label}")]
+    LimiterDoesNotExist { scope: Scope, label: String },
 
-    #[error("Limiter already exists for denom: {denom}, label: {label}")]
-    LimiterAlreadyExists { denom: String, label: String },
+    #[error("Limiter already exists for scope: {scope}, label: {label}")]
+    LimiterAlreadyExists { scope: Scope, label: String },
 
     #[error(
-        "Upper limit exceeded for `{denom}`, upper limit is {upper_limit}, but the resulted weight is {value}"
+        "Upper limit exceeded for `{scope}`, upper limit is {upper_limit}, but the resulted weight is {value}"
     )]
     UpperLimitExceeded {
-        denom: String,
+        scope: Scope,
         upper_limit: Decimal,
         value: Decimal,
     },
@@ -179,8 +182,17 @@ pub enum ContractError {
     #[error("Normalization factor must be positive")]
     NormalizationFactorMustBePositive {},
 
-    #[error("Corrupted asset: {denom} must not increase in amount or weight")]
-    CorruptedAssetRelativelyIncreased { denom: String },
+    #[error("Corrupted scope: {scope} must not increase in amount or weight")]
+    CorruptedScopeRelativelyIncreased { scope: Scope },
+
+    #[error("Asset group {label} not found")]
+    AssetGroupNotFound { label: String },
+
+    #[error("Asset group {label} already exists")]
+    AssetGroupAlreadyExists { label: String },
+
+    #[error("Asset group label must not be empty")]
+    EmptyAssetGroupLabel {},
 
     #[error("{0}")]
     OverflowError(#[from] OverflowError),

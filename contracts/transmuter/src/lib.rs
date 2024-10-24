@@ -1,11 +1,13 @@
 mod alloyed_asset;
 mod asset;
 pub mod contract;
+mod corruptable;
 mod error;
 mod limiter;
 mod math;
 mod migrations;
 mod role;
+mod scope;
 mod sudo;
 mod swap;
 mod transmuter_pool;
@@ -26,7 +28,7 @@ mod entry_points {
     use crate::migrations;
     use crate::sudo::SudoMsg;
 
-    const CONTRACT: Transmuter = Transmuter::default();
+    const CONTRACT: Transmuter = Transmuter::new();
 
     macro_rules! ensure_active_status {
         ($msg:expr, $deps:expr, $env:expr, except: $pattern:pat) => {
@@ -100,9 +102,9 @@ mod entry_points {
     pub fn migrate(
         deps: DepsMut,
         _env: Env,
-        _msg: migrations::v3_2_0::MigrateMsg,
+        _msg: migrations::v4_0_0::MigrateMsg,
     ) -> Result<Response, ContractError> {
-        migrations::v3_2_0::execute_migration(deps)
+        migrations::v4_0_0::execute_migration(deps)
     }
 }
 

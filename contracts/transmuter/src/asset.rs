@@ -1,7 +1,7 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{ensure, Coin, Deps, StdError, Uint128, Uint256};
 
-use crate::ContractError;
+use crate::{corruptable::Corruptable, ContractError};
 
 #[derive(PartialEq)]
 pub enum Rounding {
@@ -121,16 +121,6 @@ impl Asset {
         Ok(self)
     }
 
-    pub fn mark_as_corrupted(&'_ mut self) -> &'_ Self {
-        self.is_corrupted = true;
-        self
-    }
-
-    pub fn unmark_as_corrupted(&'_ mut self) -> &'_ Self {
-        self.is_corrupted = false;
-        self
-    }
-
     pub fn denom(&self) -> &str {
         &self.denom
     }
@@ -141,10 +131,6 @@ impl Asset {
 
     pub fn normalization_factor(&self) -> Uint128 {
         self.normalization_factor
-    }
-
-    pub fn is_corrupted(&self) -> bool {
-        self.is_corrupted
     }
 
     pub fn config(&self) -> AssetConfig {
@@ -188,6 +174,22 @@ impl Asset {
     }
 }
 
+impl Corruptable for Asset {
+    fn is_corrupted(&self) -> bool {
+        self.is_corrupted
+    }
+
+    fn mark_as_corrupted(&mut self) -> &mut Self {
+        self.is_corrupted = true;
+        self
+    }
+
+    fn unmark_as_corrupted(&mut self) -> &mut Self {
+        self.is_corrupted = false;
+        self
+    }
+}
+
 /// Convert amount to target asset's amount with the same value
 ///
 /// target_amount / target_normalization_factor = amount / source_normalization_factor
@@ -219,7 +221,7 @@ pub fn convert_amount(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cosmwasm_std::{testing::mock_dependencies_with_balances, Coin};
+    use cosmwasm_std::{coin, testing::mock_dependencies_with_balances};
 
     #[test]
     fn test_convert_amount() {
@@ -351,8 +353,8 @@ mod tests {
     #[test]
     fn test_checked_init_asset() {
         let deps = mock_dependencies_with_balances(&[
-            ("addr1", &[Coin::new(1, "denom1")]),
-            ("addr2", &[Coin::new(1, "denom2")]),
+            ("addr1", &[coin(1, "denom1")]),
+            ("addr2", &[coin(1, "denom2")]),
         ]);
 
         // denom1

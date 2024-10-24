@@ -1,4 +1,4 @@
-use cosmwasm_std::{Coin, Uint128};
+use cosmwasm_std::{coin, Uint128};
 
 use osmosis_std::types::cosmos::bank::v1beta1::{
     DenomUnit, Metadata, QueryDenomMetadataRequest, QueryDenomMetadataResponse,
@@ -21,12 +21,9 @@ fn test_admin_set_denom_metadata() {
 
     let alloyed_asset_subdenom = "eth";
     let t = TestEnvBuilder::new()
-        .with_account("alice", vec![Coin::new(1_500, AXL_ETH)])
-        .with_account("bob", vec![Coin::new(1_500, WH_ETH)])
-        .with_account(
-            "admin",
-            vec![Coin::new(100_000, AXL_ETH), Coin::new(100_000, WH_ETH)],
-        )
+        .with_account("alice", vec![coin(1_500, AXL_ETH)])
+        .with_account("bob", vec![coin(1_500, WH_ETH)])
+        .with_account("admin", vec![coin(100_000, AXL_ETH), coin(100_000, WH_ETH)])
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_configs: vec![
                 AssetConfig::from_denom_str(AXL_ETH),

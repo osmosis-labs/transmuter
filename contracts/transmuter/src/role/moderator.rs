@@ -3,12 +3,12 @@ use cw_storage_plus::Item;
 
 use crate::ContractError;
 
-pub struct Moderator<'a> {
-    moderator: Item<'a, Addr>,
+pub struct Moderator {
+    moderator: Item<Addr>,
 }
 
-impl<'a> Moderator<'a> {
-    pub const fn new(namespace: &'a str) -> Self {
+impl Moderator {
+    pub const fn new(namespace: &'static str) -> Self {
         Self {
             moderator: Item::new(namespace),
         }
