@@ -1,6 +1,6 @@
 use cosmwasm_std::{
     coin,
-    testing::{message_info, mock_dependencies, mock_env, mock_info},
+    testing::{message_info, mock_dependencies, mock_env},
     Coin, Decimal, Uint128,
 };
 use sylvia::types::{ExecCtx, InstantiateCtx, QueryCtx};
@@ -54,11 +54,12 @@ fn test_spot_price(liquidity: &[Coin]) {
         )
         .unwrap();
 
+    let creator = deps.api.addr_make("creator");
     transmuter
         .join_pool(ExecCtx {
             deps: deps.as_mut(),
             env: mock_env(),
-            info: mock_info("creator", liquidity),
+            info: message_info(&creator, liquidity),
         })
         .unwrap();
 

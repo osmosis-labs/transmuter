@@ -178,7 +178,7 @@ mod tests {
     use cosmwasm_std::{
         coin,
         testing::{message_info, mock_dependencies, mock_env, MOCK_CONTRACT_ADDR},
-        to_json_binary, BankMsg, Binary, Reply, SubMsgResponse, SubMsgResult,
+        to_json_binary, BankMsg, Binary, MsgResponse, Reply, SubMsgResponse, SubMsgResult,
     };
     use osmosis_std::types::osmosis::tokenfactory::v1beta1::{
         MsgBurn, MsgCreateDenomResponse, MsgMint,
@@ -219,21 +219,7 @@ mod tests {
         reply(
             deps.as_mut(),
             env.clone(),
-            Reply {
-                id: 1,
-                result: SubMsgResult::Ok(SubMsgResponse {
-                    events: vec![],
-                    data: Some(
-                        MsgCreateDenomResponse {
-                            new_token_denom: alloyed_denom.to_string(),
-                        }
-                        .into(),
-                    ),
-                    msg_responses: vec![],
-                }),
-                payload: Binary::new(vec![]),
-                gas_used: 0,
-            },
+            reply_create_denom_response(alloyed_denom),
         )
         .unwrap();
 
@@ -444,21 +430,7 @@ mod tests {
         reply(
             deps.as_mut(),
             env.clone(),
-            Reply {
-                id: 1,
-                result: SubMsgResult::Ok(SubMsgResponse {
-                    events: vec![],
-                    data: Some(
-                        MsgCreateDenomResponse {
-                            new_token_denom: alloyed_denom.to_string(),
-                        }
-                        .into(),
-                    ),
-                    msg_responses: vec![],
-                }),
-                payload: Binary::new(vec![]),
-                gas_used: 0,
-            },
+            reply_create_denom_response(alloyed_denom),
         )
         .unwrap();
 
@@ -633,5 +605,28 @@ mod tests {
                 required: Uint128::from(1000u128),
             })
         );
+    }
+
+    fn reply_create_denom_response(alloyed_denom: &str) -> Reply {
+        let msg_create_denom_response = MsgCreateDenomResponse {
+            new_token_denom: alloyed_denom.to_string(),
+        };
+
+        Reply {
+            id: 1,
+            result: SubMsgResult::Ok(
+                #[allow(deprecated)]
+                SubMsgResponse {
+                    events: vec![],
+                    data: Some(msg_create_denom_response.clone().into()), // DEPRECATED
+                    msg_responses: vec![MsgResponse {
+                        type_url: MsgCreateDenomResponse::TYPE_URL.to_string(),
+                        value: msg_create_denom_response.into(),
+                    }],
+                },
+            ),
+            payload: Binary::new(vec![]),
+            gas_used: 0,
+        }
     }
 }
