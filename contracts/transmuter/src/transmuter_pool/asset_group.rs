@@ -99,6 +99,9 @@ impl TransmuterPool {
             }
         );
 
+        // ensure that asset group label is not empty string
+        ensure!(!label.is_empty(), ContractError::EmptyAssetGroupLabel {});
+
         // ensure that all denoms are valid pool assets and has no duplicated denoms
         // ensuring no duplicated denoms also ensures that it's within MAX_POOL_ASSET_DENOMS limit
         let mut denoms_set = HashSet::new();
@@ -249,6 +252,21 @@ mod tests {
             weights.get("group2").unwrap(),
             &Decimal::raw(333333333333333333)
         );
+    }
+
+    #[test]
+    fn test_create_asset_group_with_empty_string() {
+        let mut pool = TransmuterPool::new(vec![
+            Asset::new(Uint128::new(100), "denom1", Uint128::new(1)).unwrap(),
+            Asset::new(Uint128::new(200), "denom2", Uint128::new(1)).unwrap(),
+        ])
+        .unwrap();
+
+        let err = pool
+            .create_asset_group("".to_string(), vec!["denom1".to_string()])
+            .unwrap_err();
+
+        assert_eq!(err, ContractError::EmptyAssetGroupLabel {});
     }
 
     #[test]

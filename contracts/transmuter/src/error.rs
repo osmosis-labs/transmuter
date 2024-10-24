@@ -191,6 +191,9 @@ pub enum ContractError {
     #[error("Asset group {label} already exists")]
     AssetGroupAlreadyExists { label: String },
 
+    #[error("Asset group label must not be empty")]
+    EmptyAssetGroupLabel {},
+
     #[error("{0}")]
     OverflowError(#[from] OverflowError),
 

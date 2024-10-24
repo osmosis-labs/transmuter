@@ -1974,7 +1974,6 @@ mod tests {
     fn test_corrupted_asset_group() {
         let mut deps = mock_dependencies();
         let admin = deps.api.addr_make("admin");
-        let moderator = deps.api.addr_make("moderator");
         let user = deps.api.addr_make("user");
         let moderator = deps.api.addr_make("moderator");
 
