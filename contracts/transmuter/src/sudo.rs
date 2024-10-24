@@ -177,7 +177,7 @@ mod tests {
     };
     use cosmwasm_std::{
         coin,
-        testing::{message_info, mock_dependencies, mock_env, mock_info, MOCK_CONTRACT_ADDR},
+        testing::{message_info, mock_dependencies, mock_env, MOCK_CONTRACT_ADDR},
         to_json_binary, BankMsg, Binary, Reply, SubMsgResponse, SubMsgResult,
     };
     use osmosis_std::types::osmosis::tokenfactory::v1beta1::{
