@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
     coin, ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env,
-    Response, StdError, Storage, Uint128,
+    Response, StdError, Storage, Timestamp, Uint128,
 };
 use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
 use serde::Serialize;
@@ -55,7 +55,7 @@ impl Transmuter {
         entrypoint: Entrypoint,
         constraint: SwapToAlloyedConstraint,
         mint_to_address: Addr,
-        deps: DepsMut,
+        mut deps: DepsMut,
         env: Env,
     ) -> Result<Response, ContractError> {
         let mut pool: TransmuterPool = self.pool.load(deps.storage)?;
@@ -126,28 +126,10 @@ impl Transmuter {
             ContractError::ZeroValueOperation {}
         );
 
-        let prev_asset_weights = pool.asset_weights()?.unwrap_or_default();
-        let prev_asset_group_weights = pool.asset_group_weights()?.unwrap_or_default();
-
-        pool.join_pool(&tokens_in)?;
-
-        // check and update limiters only if pool assets are not zero
-        if let Some(updated_asset_weights) = pool.asset_weights()? {
-            if let Some(updated_asset_group_weights) = pool.asset_group_weights()? {
-                let scope_value_pairs = construct_scope_value_pairs(
-                    prev_asset_weights,
-                    updated_asset_weights,
-                    prev_asset_group_weights,
-                    updated_asset_group_weights,
-                )?;
-
-                self.limiters.check_limits_and_update(
-                    deps.storage,
-                    scope_value_pairs,
-                    env.block.time,
-                )?;
-            }
-        }
+        (pool, _) = self.limiters_pass(deps.branch(), env.block.time, pool, |_, mut pool| {
+            pool.join_pool(&tokens_in)?;
+            Ok((pool, ()))
+        })?;
 
         // no need for cleaning up drained corrupted assets here
         // since this function will only adding more underlying assets
@@ -175,7 +157,7 @@ impl Transmuter {
         constraint: SwapFromAlloyedConstraint,
         burn_target: BurnTarget,
         sender: Addr,
-        deps: DepsMut,
+        mut deps: DepsMut,
         env: Env,
     ) -> Result<Response, ContractError> {
         let mut pool: TransmuterPool = self.pool.load(deps.storage)?;
@@ -335,28 +317,11 @@ impl Transmuter {
                 asset_weights_iter.chain(asset_group_weights_iter),
             )?;
         } else {
-            let prev_asset_weights = pool.asset_weights()?.unwrap_or_default();
-            let prev_asset_group_weights = pool.asset_group_weights()?.unwrap_or_default();
-
-            pool.exit_pool(&tokens_out)?;
-
-            // check and update limiters only if pool assets are not zero
-            if let Some(updated_asset_weights) = pool.asset_weights()? {
-                if let Some(updated_asset_group_weights) = pool.asset_group_weights()? {
-                    let scope_value_pairs = construct_scope_value_pairs(
-                        prev_asset_weights,
-                        updated_asset_weights,
-                        prev_asset_group_weights,
-                        updated_asset_group_weights,
-                    )?;
-
-                    self.limiters.check_limits_and_update(
-                        deps.storage,
-                        scope_value_pairs,
-                        env.block.time,
-                    )?;
-                }
-            }
+            (pool, _) =
+                self.limiters_pass(deps.branch(), env.block.time, pool, |_, mut pool| {
+                    pool.exit_pool(&tokens_out)?;
+                    Ok((pool, ()))
+                })?;
         }
 
         self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
@@ -390,42 +355,27 @@ impl Transmuter {
         token_out_denom: &str,
         token_out_min_amount: Uint128,
         sender: Addr,
-        deps: DepsMut,
+        mut deps: DepsMut,
         env: Env,
     ) -> Result<Response, ContractError> {
         let pool = self.pool.load(deps.storage)?;
-        let prev_asset_weights = pool.asset_weights()?.unwrap_or_default();
-        let prev_asset_group_weights = pool.asset_group_weights()?.unwrap_or_default();
 
         let (mut pool, actual_token_out) =
-            self.out_amt_given_in(deps.as_ref(), pool, token_in, token_out_denom)?;
+            self.limiters_pass(deps.branch(), env.block.time, pool, |deps, pool| {
+                let (pool, actual_token_out) =
+                    self.out_amt_given_in(deps, pool, token_in, token_out_denom)?;
 
-        // ensure token_out amount is greater than or equal to token_out_min_amount
-        ensure!(
-            actual_token_out.amount >= token_out_min_amount,
-            ContractError::InsufficientTokenOut {
-                min_required: token_out_min_amount,
-                amount_out: actual_token_out.amount
-            }
-        );
+                // ensure token_out amount is greater than or equal to token_out_min_amount
+                ensure!(
+                    actual_token_out.amount >= token_out_min_amount,
+                    ContractError::InsufficientTokenOut {
+                        min_required: token_out_min_amount,
+                        amount_out: actual_token_out.amount
+                    }
+                );
 
-        // check and update limiters only if pool assets are not zero
-        if let Some(updated_asset_weights) = pool.asset_weights()? {
-            if let Some(updated_asset_group_weights) = pool.asset_group_weights()? {
-                let scope_value_pairs = construct_scope_value_pairs(
-                    prev_asset_weights,
-                    updated_asset_weights,
-                    prev_asset_group_weights,
-                    updated_asset_group_weights,
-                )?;
-
-                self.limiters.check_limits_and_update(
-                    deps.storage,
-                    scope_value_pairs,
-                    env.block.time,
-                )?;
-            }
-        }
+                Ok((pool, actual_token_out))
+            })?;
 
         self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
 
@@ -452,45 +402,30 @@ impl Transmuter {
         token_in_max_amount: Uint128,
         token_out: Coin,
         sender: Addr,
-        deps: DepsMut,
+        mut deps: DepsMut,
         env: Env,
     ) -> Result<Response, ContractError> {
         let pool = self.pool.load(deps.storage)?;
-        let prev_asset_weights = pool.asset_weights()?.unwrap_or_default();
-        let prev_asset_group_weights = pool.asset_group_weights()?.unwrap_or_default();
 
-        let (mut pool, actual_token_in) = self.in_amt_given_out(
-            deps.as_ref(),
-            pool,
-            token_out.clone(),
-            token_in_denom.to_string(),
-        )?;
-
-        ensure!(
-            actual_token_in.amount <= token_in_max_amount,
-            ContractError::ExcessiveRequiredTokenIn {
-                limit: token_in_max_amount,
-                required: actual_token_in.amount,
-            }
-        );
-
-        // check and update limiters only if pool assets are not zero
-        if let Some(updated_asset_weights) = pool.asset_weights()? {
-            if let Some(updated_asset_group_weights) = pool.asset_group_weights()? {
-                let scope_value_pairs = construct_scope_value_pairs(
-                    prev_asset_weights,
-                    updated_asset_weights,
-                    prev_asset_group_weights,
-                    updated_asset_group_weights,
+        let (mut pool, actual_token_in) =
+            self.limiters_pass(deps.branch(), env.block.time, pool, |deps, pool| {
+                let (pool, actual_token_in) = self.in_amt_given_out(
+                    deps,
+                    pool,
+                    token_out.clone(),
+                    token_in_denom.to_string(),
                 )?;
 
-                self.limiters.check_limits_and_update(
-                    deps.storage,
-                    scope_value_pairs,
-                    env.block.time,
-                )?;
-            }
-        }
+                ensure!(
+                    actual_token_in.amount <= token_in_max_amount,
+                    ContractError::ExcessiveRequiredTokenIn {
+                        limit: token_in_max_amount,
+                        required: actual_token_in.amount,
+                    }
+                );
+
+                Ok((pool, actual_token_in))
+            })?;
 
         self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
 
@@ -631,6 +566,42 @@ impl Transmuter {
                 (pool, token_out)
             }
         })
+    }
+
+    pub fn limiters_pass<T, F>(
+        &self,
+        deps: DepsMut,
+        block_time: Timestamp,
+        pool: TransmuterPool,
+        run: F,
+    ) -> Result<(TransmuterPool, T), ContractError>
+    where
+        F: FnOnce(Deps, TransmuterPool) -> Result<(TransmuterPool, T), ContractError>,
+    {
+        let prev_asset_weights = pool.asset_weights()?.unwrap_or_default();
+        let prev_asset_group_weights = pool.asset_group_weights()?.unwrap_or_default();
+
+        let (pool, payload) = run(deps.as_ref(), pool)?;
+
+        // check and update limiters only if pool assets are not zero
+        if let Some(updated_asset_weights) = pool.asset_weights()? {
+            if let Some(updated_asset_group_weights) = pool.asset_group_weights()? {
+                let scope_value_pairs = construct_scope_value_pairs(
+                    prev_asset_weights,
+                    updated_asset_weights,
+                    prev_asset_group_weights,
+                    updated_asset_group_weights,
+                )?;
+
+                self.limiters.check_limits_and_update(
+                    deps.storage,
+                    scope_value_pairs,
+                    block_time,
+                )?;
+            }
+        }
+
+        Ok((pool, payload))
     }
 
     pub fn ensure_valid_swap_fee(&self, swap_fee: Decimal) -> Result<(), ContractError> {
