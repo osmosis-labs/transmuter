@@ -1426,3 +1426,190 @@ fn test_register_limiter_after_having_liquidity() {
     )
     .unwrap();
 }
+
+#[test]
+fn test_register_limiter_after_having_liquidity_with_asset_group_scope() {
+    let app = OsmosisTestApp::new();
+    let cp = CosmwasmPool::new(&app);
+
+    let admin = app.init_account(&[coin(100_000u128, "uosmo")]).unwrap();
+
+    let t = TestEnvBuilder::new()
+        .with_account(
+            "alice",
+            vec![
+                coin(1_000_000, AXL_DAI),
+                coin(1_000_000, AXL_USDC),
+                coin(1_000_000, COSMOS_USDC),
+            ],
+        )
+        .with_account(
+            "bob",
+            vec![
+                coin(1_000_000, AXL_DAI),
+                coin(1_000_000, AXL_USDC),
+                coin(1_000_000, COSMOS_USDC),
+            ],
+        )
+        .with_account("admin", vec![])
+        .with_account(
+            "provider",
+            vec![
+                coin(1_000_000, AXL_DAI),
+                coin(1_000_000, AXL_USDC),
+                coin(1_000_000, COSMOS_USDC),
+            ],
+        )
+        .with_instantiate_msg(InstantiateMsg {
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str(AXL_DAI),
+                AssetConfig::from_denom_str(AXL_USDC),
+                AssetConfig::from_denom_str(COSMOS_USDC),
+            ],
+            alloyed_asset_subdenom: "usdc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
+            admin: Some(admin.address()),
+            moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
+        })
+        .build(&app);
+
+    // query share denom
+    let GetShareDenomResponse { share_denom } =
+        t.contract.query(&QueryMsg::GetShareDenom {}).unwrap();
+
+    let alloyed_denom = share_denom;
+
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["provider"].address(),
+            token_in: Some(coin(200_000, AXL_USDC).into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: alloyed_denom.clone(),
+            }],
+            token_out_min_amount: Uint128::from(200_000u128).to_string(),
+        },
+        &t.accounts["provider"],
+    )
+    .unwrap();
+
+    // create axl asset group
+    t.contract
+        .execute(
+            &ExecMsg::CreateAssetGroup {
+                label: "axl".to_string(),
+                denoms: vec![AXL_DAI.to_string(), AXL_USDC.to_string()],
+            },
+            &[],
+            &t.accounts["admin"],
+        )
+        .unwrap();
+
+    t.contract
+        .execute(
+            &ExecMsg::RegisterLimiter {
+                scope: Scope::asset_group("axl"),
+                label: "static".to_string(),
+                limiter_params: LimiterParams::StaticLimiter {
+                    upper_limit: Decimal::percent(60),
+                },
+            },
+            &[],
+            &t.accounts["admin"],
+        )
+        .unwrap();
+
+    let err = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["provider"].address(),
+                token_in: Some(coin(1_000_000, AXL_DAI).into()),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: alloyed_denom.clone(),
+                }],
+                token_out_min_amount: Uint128::from(1u128).to_string(),
+            },
+            &t.accounts["provider"],
+        )
+        .unwrap_err();
+
+    assert_contract_err(
+        ContractError::UpperLimitExceeded {
+            scope: Scope::asset_group("axl"),
+            upper_limit: Decimal::from_str("0.6").unwrap(),
+            value: Decimal::from_str("1").unwrap(),
+        },
+        err,
+    );
+
+    // Swap COSMOS USDC to alloyed asset should be successful
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["provider"].address(),
+            token_in: Some(coin(1, COSMOS_USDC).into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: alloyed_denom.clone(),
+            }],
+            token_out_min_amount: Uint128::from(1u128).to_string(),
+        },
+        &t.accounts["provider"],
+    )
+    .unwrap();
+
+    // Swap alloyed asset to AXL USDC should be successful
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["provider"].address(),
+            token_in: Some(coin(1, &alloyed_denom).into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: AXL_USDC.to_string(),
+            }],
+            token_out_min_amount: Uint128::from(1u128).to_string(),
+        },
+        &t.accounts["provider"],
+    )
+    .unwrap();
+
+    // Swap COSMOS USDC to AXL USDC should reduce axl asset group composition
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["provider"].address(),
+            token_in: Some(coin(1, COSMOS_USDC).into()),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: AXL_USDC.to_string(),
+            }],
+            token_out_min_amount: Uint128::from(1u128).to_string(),
+        },
+        &t.accounts["provider"],
+    )
+    .unwrap();
+
+    // Swap the other way around should fail
+    let err = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["provider"].address(),
+                token_in: Some(coin(1, AXL_USDC).into()),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: COSMOS_USDC.to_string(),
+                }],
+                token_out_min_amount: Uint128::from(1u128).to_string(),
+            },
+            &t.accounts["provider"],
+        )
+        .unwrap_err();
+
+    assert_contract_err(
+        ContractError::UpperLimitExceeded {
+            scope: Scope::asset_group("axl"),
+            upper_limit: Decimal::from_str("0.6").unwrap(),
+            value: Decimal::from_str("0.999995").unwrap(),
+        },
+        err,
+    );
+}

@@ -627,7 +627,7 @@ macro_rules! assert_reset_change_limiters_by_scope {
             .into_iter()
             .collect::<std::collections::HashMap<_, _>>();
 
-        let asset_group_weights = pool.asset_group_weights().unwrap();
+        let asset_group_weights = pool.asset_group_weights().unwrap().unwrap_or_default();
 
         let limiters = $transmuter
             .limiters

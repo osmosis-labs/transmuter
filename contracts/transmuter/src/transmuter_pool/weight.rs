@@ -51,7 +51,7 @@ impl TransmuterPool {
         Ok(Some(ratios))
     }
 
-    fn normalized_asset_values(
+    pub(crate) fn normalized_asset_values(
         &self,
         std_norm_factor: Uint128,
     ) -> Result<Vec<(String, Uint128)>, ContractError> {
