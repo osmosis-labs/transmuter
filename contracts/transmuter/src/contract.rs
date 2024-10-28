@@ -233,6 +233,7 @@ impl Transmuter {
             .map(|(denom, weight)| (Scope::denom(&denom).key(), weight));
         let asset_group_weights_iter = pool
             .asset_group_weights()?
+            .unwrap_or_default()
             .into_iter()
             .map(|(label, weight)| (Scope::asset_group(&label).key(), weight));
 

@@ -1,9 +1,11 @@
 use std::collections::{BTreeMap, HashSet};
 
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{ensure, Decimal, Uint64};
+use cosmwasm_std::{ensure, Decimal, Decimal256, Uint128, Uint256, Uint64};
 
-use crate::{corruptable::Corruptable, transmuter_pool::MAX_ASSET_GROUPS, ContractError};
+use crate::{
+    corruptable::Corruptable, math::lcm_from_iter, transmuter_pool::MAX_ASSET_GROUPS, ContractError,
+};
 
 use super::TransmuterPool;
 
@@ -144,22 +146,54 @@ impl TransmuterPool {
         Ok(self)
     }
 
-    pub fn asset_group_weights(&self) -> Result<BTreeMap<String, Decimal>, ContractError> {
-        let denom_weights = self.asset_weights()?.unwrap_or_default();
-        let mut weights = BTreeMap::new();
-        for (label, asset_group) in &self.asset_groups {
-            let mut group_weight = Decimal::zero();
-            for denom in &asset_group.denoms {
-                let denom_weight = denom_weights
-                    .get(denom)
-                    .copied()
-                    .unwrap_or_else(Decimal::zero);
-                group_weight = group_weight.checked_add(denom_weight)?;
-            }
-            weights.insert(label.to_string(), group_weight);
+    pub fn asset_group_weights(&self) -> Result<Option<BTreeMap<String, Decimal>>, ContractError> {
+        let std_norm_factor = lcm_from_iter(
+            self.pool_assets
+                .iter()
+                .map(|pool_asset| pool_asset.normalization_factor()),
+        )?;
+
+        let normalized_asset_values: BTreeMap<String, Uint128> = self
+            .normalized_asset_values(std_norm_factor)?
+            .into_iter()
+            .collect();
+
+        let total_normalized_pool_value = normalized_asset_values
+            .values()
+            .copied()
+            .map(Uint256::from)
+            .try_fold(Uint256::zero(), Uint256::checked_add)?;
+
+        if total_normalized_pool_value.is_zero() {
+            return Ok(None);
         }
 
-        Ok(weights)
+        let mut weights = BTreeMap::new();
+        for (label, asset_group) in &self.asset_groups {
+            let mut group_normalized_value = Uint256::zero();
+            for denom in &asset_group.denoms {
+                let denom_normalized_value = normalized_asset_values
+                    .get(denom)
+                    .copied()
+                    .map(Uint256::from)
+                    .unwrap_or_else(Uint256::zero);
+
+                group_normalized_value =
+                    group_normalized_value.checked_add(denom_normalized_value)?;
+            }
+
+            weights.insert(
+                label.to_string(),
+                Decimal256::checked_from_ratio(
+                    group_normalized_value,
+                    total_normalized_pool_value,
+                )?
+                // This is safe since weights are always less than 1, downcasting from Decimal256 to Decimal should never fail
+                .try_into()?,
+            );
+        }
+
+        Ok(Some(weights))
     }
 }
 
@@ -230,7 +264,7 @@ mod tests {
         .unwrap();
 
         // Test with empty pool
-        let weights = pool.asset_group_weights().unwrap();
+        let weights = pool.asset_group_weights().unwrap().unwrap_or_default();
         assert!(weights.is_empty());
 
         pool.create_asset_group(
@@ -242,7 +276,7 @@ mod tests {
         pool.create_asset_group("group2".to_string(), vec!["denom3".to_string()])
             .unwrap();
 
-        let weights = pool.asset_group_weights().unwrap();
+        let weights = pool.asset_group_weights().unwrap().unwrap();
         assert_eq!(weights.len(), 2);
         assert_eq!(
             weights.get("group1").unwrap(),
@@ -252,6 +286,26 @@ mod tests {
             weights.get("group2").unwrap(),
             &Decimal::raw(333333333333333333)
         );
+    }
+
+    #[test]
+    fn test_asset_group_weights_with_potential_decimal_precision_loss() {
+        let mut pool = TransmuterPool::new(vec![
+            Asset::new(Uint128::new(100), "denom1", Uint128::new(1)).unwrap(),
+            Asset::new(Uint128::new(200), "denom2", Uint128::new(1)).unwrap(),
+            Asset::new(Uint128::new(0), "denom3", Uint128::new(1)).unwrap(),
+        ])
+        .unwrap();
+
+        pool.create_asset_group(
+            "group1".to_string(),
+            vec!["denom1".to_string(), "denom2".to_string()],
+        )
+        .unwrap();
+
+        let weights = pool.asset_group_weights().unwrap().unwrap_or_default();
+
+        assert_eq!(weights.get("group1").unwrap(), &Decimal::percent(100));
     }
 
     #[test]
