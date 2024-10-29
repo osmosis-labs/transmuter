@@ -6,6 +6,7 @@ mod error;
 mod limiter;
 mod math;
 mod migrations;
+mod rebalancing_incentive;
 mod role;
 mod scope;
 mod sudo;
