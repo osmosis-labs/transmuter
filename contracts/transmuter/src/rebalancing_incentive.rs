@@ -1,14 +1,21 @@
 use std::collections::{HashMap, HashSet};
 
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::Decimal;
+use cosmwasm_std::{ensure, Decimal};
 
 use crate::{scope::Scope, ContractError};
 
 #[cw_serde]
+#[derive(Copy)]
 pub struct IdealBalance {
     pub lower: Decimal,
     pub upper: Decimal,
+}
+
+impl IdealBalance {
+    pub fn new(lower: Decimal, upper: Decimal) -> Self {
+        Self { lower, upper }
+    }
 }
 
 /// Default ideal balance bounds 0 - 100%
@@ -27,46 +34,238 @@ impl Default for IdealBalance {
 #[derive(Default)]
 pub struct RebalancingIncentiveConfig {
     /// The lambda parameter for scaling the fee \in λ ∈ (0,1], default is 0
-    pub lambda: Decimal,
+    lambda: Decimal,
 
     /// Ideal balance bounds for each asset
-    pub ideal_balances: HashMap<Scope, IdealBalance>,
+    ideal_balances: HashMap<Scope, IdealBalance>,
 }
 
 impl RebalancingIncentiveConfig {
-    pub fn set_lambda(self, new_lambda: Decimal) -> Result<Self, ContractError> {
-        if new_lambda <= Decimal::zero() || new_lambda > Decimal::one() {
-            todo!("Return Invalid lambda");
-        }
+    pub fn set_lambda(&mut self, new_lambda: Decimal) -> Result<&mut Self, ContractError> {
+        ensure!(
+            new_lambda <= Decimal::one(),
+            ContractError::InvalidLambda { lambda: new_lambda }
+        );
 
-        Ok(Self {
-            lambda: new_lambda,
-            ..self
-        })
+        self.lambda = new_lambda;
+        Ok(self)
     }
 
     pub fn set_ideal_balances(
-        self,
-        available_denoms: impl Iterator<Item = String>,
-        available_asset_groups: impl Iterator<Item = String>,
-        new_ideal_balances: impl Iterator<Item = (Scope, IdealBalance)>,
-    ) -> Result<Self, ContractError> {
+        &mut self,
+        available_denoms: impl IntoIterator<Item = String>,
+        available_asset_groups: impl IntoIterator<Item = String>,
+        new_ideal_balances: impl IntoIterator<Item = (Scope, IdealBalance)>,
+    ) -> Result<&mut Self, ContractError> {
         let available_scopes: HashSet<_> = available_denoms
+            .into_iter()
             .map(Scope::Denom)
-            .chain(available_asset_groups.map(Scope::AssetGroup))
+            .chain(available_asset_groups.into_iter().map(Scope::AssetGroup))
             .collect();
 
-        let mut ideal_balances = self.ideal_balances;
         for (scope, balance) in new_ideal_balances {
-            if !available_scopes.contains(&scope) {
-                todo!("Return Invalid scope");
-            }
-            ideal_balances.insert(scope, balance);
+            ensure!(
+                available_scopes.contains(&scope),
+                ContractError::InvalidScope { scope }
+            );
+            self.ideal_balances.insert(scope, balance);
         }
 
-        Ok(Self {
-            ideal_balances,
-            ..self
-        })
+        Ok(self)
+    }
+
+    pub fn lambda(&self) -> Decimal {
+        self.lambda
+    }
+
+    pub fn ideal_balances(&self) -> &HashMap<Scope, IdealBalance> {
+        &self.ideal_balances
+    }
+
+    pub fn ideal_balance(&self, scope: Scope) -> Option<&IdealBalance> {
+        self.ideal_balances.get(&scope)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cosmwasm_std::Decimal;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case(Decimal::percent(50), true)]
+    #[case(Decimal::percent(100), true)]
+    #[case(Decimal::percent(150), false)]
+    fn test_set_lambda(#[case] new_lambda: Decimal, #[case] expected_result: bool) {
+        let mut config = RebalancingIncentiveConfig {
+            lambda: Decimal::percent(0),
+            ideal_balances: HashMap::new(),
+        };
+
+        let result = config.set_lambda(new_lambda);
+
+        if expected_result {
+            assert!(result.is_ok());
+            assert_eq!(config.lambda(), new_lambda);
+        } else {
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn test_set_ideal_balances() {
+        let existing_ideal_balances = vec![
+            (
+                Scope::Denom("existing_denom".to_string()),
+                IdealBalance::new(Decimal::percent(10), Decimal::percent(25)),
+            ),
+            (
+                Scope::AssetGroup("existing_asset_group".to_string()),
+                IdealBalance::new(Decimal::percent(20), Decimal::percent(30)),
+            ),
+        ];
+
+        let mut config = RebalancingIncentiveConfig {
+            lambda: Decimal::percent(0),
+            ideal_balances: existing_ideal_balances.clone().into_iter().collect(),
+        };
+
+        let available_denoms = vec!["valid_denom".to_string(), "existing_denom".to_string()];
+        let available_asset_groups = vec![
+            "valid_asset_group".to_string(),
+            "existing_asset_group".to_string(),
+        ];
+
+        // get ideal balance for valid_denom when not set
+        let ideal_balance = config.ideal_balance(Scope::denom("valid_denom"));
+        assert_eq!(ideal_balance, None);
+
+        // default ideal balance for valid_denom
+        assert_eq!(
+            ideal_balance.as_deref().cloned().unwrap_or_default(),
+            IdealBalance::new(Decimal::zero(), Decimal::one())
+        );
+
+        // get ideal balance for existing_denom
+        let ideal_balance = config.ideal_balance(Scope::denom("existing_denom"));
+        assert_eq!(
+            ideal_balance.as_deref().cloned().unwrap(),
+            IdealBalance::new(Decimal::percent(10), Decimal::percent(25))
+        );
+
+        // get ideal balance for valid_asset_group
+        let ideal_balance = config.ideal_balance(Scope::asset_group("valid_asset_group"));
+        assert_eq!(
+            ideal_balance.as_deref().cloned().unwrap_or_default(),
+            IdealBalance::new(Decimal::zero(), Decimal::one())
+        );
+
+        // get ideal balance for existing_asset_group
+        let ideal_balance = config.ideal_balance(Scope::asset_group("existing_asset_group"));
+        assert_eq!(
+            ideal_balance.as_deref().cloned().unwrap(),
+            IdealBalance::new(Decimal::percent(20), Decimal::percent(30))
+        );
+
+        // set invalid denom
+        let new_ideal_balances = vec![(
+            Scope::denom("invalid_denom"),
+            IdealBalance::new(Decimal::percent(30), Decimal::percent(40)),
+        )];
+
+        let err = config
+            .set_ideal_balances(
+                available_denoms.clone(),
+                available_asset_groups.clone(),
+                new_ideal_balances,
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            ContractError::InvalidScope {
+                scope: Scope::Denom("invalid_denom".to_string())
+            }
+        );
+
+        // set invalid asset group
+        let new_ideal_balances = vec![(
+            Scope::asset_group("invalid_asset_group"),
+            IdealBalance::new(Decimal::percent(30), Decimal::percent(40)),
+        )];
+
+        let err = config
+            .set_ideal_balances(
+                available_denoms.clone(),
+                available_asset_groups.clone(),
+                new_ideal_balances,
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            ContractError::InvalidScope {
+                scope: Scope::AssetGroup("invalid_asset_group".to_string())
+            }
+        );
+
+        // set valid denom and asset group
+        let new_ideal_balances = vec![
+            (
+                Scope::denom("valid_denom"),
+                IdealBalance::new(Decimal::percent(23), Decimal::percent(37)),
+            ),
+            (
+                Scope::asset_group("valid_asset_group"),
+                IdealBalance::new(Decimal::percent(10), Decimal::percent(40)),
+            ),
+        ];
+
+        let result = config
+            .set_ideal_balances(
+                available_denoms.clone(),
+                available_asset_groups.clone(),
+                new_ideal_balances.clone(),
+            )
+            .unwrap();
+        assert_eq!(
+            result.ideal_balances(),
+            &vec![existing_ideal_balances, new_ideal_balances,]
+                .concat()
+                .into_iter()
+                .collect::<HashMap<_, _>>()
+        );
+
+        // update existing denom
+        let new_ideal_balances = vec![(
+            Scope::denom("existing_denom"),
+            IdealBalance::new(Decimal::percent(15), Decimal::percent(25)),
+        )];
+
+        let result = config
+            .set_ideal_balances(available_denoms, available_asset_groups, new_ideal_balances)
+            .unwrap();
+        assert_eq!(
+            result.ideal_balances(),
+            &vec![
+                (
+                    Scope::Denom("existing_denom".to_string()),
+                    IdealBalance::new(Decimal::percent(15), Decimal::percent(25)),
+                ),
+                (
+                    Scope::AssetGroup("existing_asset_group".to_string()),
+                    IdealBalance::new(Decimal::percent(20), Decimal::percent(30)),
+                ),
+                (
+                    Scope::denom("valid_denom"),
+                    IdealBalance::new(Decimal::percent(23), Decimal::percent(37)),
+                ),
+                (
+                    Scope::asset_group("valid_asset_group"),
+                    IdealBalance::new(Decimal::percent(10), Decimal::percent(40)),
+                ),
+            ]
+            .into_iter()
+            .collect()
+        );
     }
 }

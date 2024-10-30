@@ -185,6 +185,13 @@ pub enum ContractError {
     #[error("Corrupted scope: {scope} must not increase in amount or weight")]
     CorruptedScopeRelativelyIncreased { scope: Scope },
 
+    #[error("Not a registered scope: {scope}")]
+    InvalidScope { scope: Scope },
+
+    // TODO: use error from transmuter_math instead
+    #[error("Invalid lambda: {lambda}")]
+    InvalidLambda { lambda: Decimal },
+
     #[error("Asset group {label} not found")]
     AssetGroupNotFound { label: String },
 
