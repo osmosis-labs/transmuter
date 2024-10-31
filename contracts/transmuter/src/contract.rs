@@ -5027,4 +5027,39 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn test_initialize_incentive_pool() {
+        let mut deps = mock_dependencies();
+
+        let admin = deps.api.addr_make("admin");
+        let moderator = deps.api.addr_make("moderator");
+
+        deps.querier
+            .bank
+            .update_balance(admin.clone(), vec![coin(1000, "tbtc"), coin(1000, "nbtc")]);
+
+        let init_msg = InstantiateMsg {
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("tbtc"),
+                AssetConfig::from_denom_str("nbtc"),
+            ],
+            alloyed_asset_subdenom: "btc".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
+            admin: Some(admin.to_string()),
+            moderator: moderator.to_string(),
+        };
+        let env = mock_env();
+        let info = message_info(&admin, &[]);
+
+        // Instantiate the contract.
+        instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap();
+
+        // Query the incentive pool
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetIncentivePool {});
+        let query_res: GetIncentivePoolResponse =
+            from_json(&query(deps.as_ref(), env, query_msg).unwrap()).unwrap();
+
+        assert!(query_res.pool.balances.is_empty());
+    }
 }
