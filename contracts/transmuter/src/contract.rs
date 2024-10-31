@@ -1,4 +1,11 @@
-use crate::{corruptable::Corruptable, scope::Scope};
+use crate::{
+    corruptable::Corruptable,
+    rebalancing_incentive::{
+        config::{IdealBalance, RebalancingIncentiveConfig},
+        incentive_pool::IncentivePool,
+    },
+    scope::Scope,
+};
 use std::{collections::BTreeMap, iter};
 
 use crate::{
@@ -44,6 +51,8 @@ pub struct Transmuter {
     pub(crate) alloyed_asset: AlloyedAsset,
     pub(crate) role: Role,
     pub(crate) limiters: Limiters,
+    pub(crate) rebalancing_incentive_config: Item<RebalancingIncentiveConfig>,
+    pub(crate) incentive_pool: Item<IncentivePool>,
 }
 
 pub mod key {
@@ -54,6 +63,8 @@ pub mod key {
     pub const ADMIN: &str = "admin";
     pub const MODERATOR: &str = "moderator";
     pub const LIMITERS: &str = "limiters";
+    pub const REBALANCING_INCENTIVE_CONFIG: &str = "rebalancing_incentive_config";
+    pub const INCENTIVE_POOL: &str = "incentive_pool";
 }
 
 #[contract]
@@ -70,6 +81,8 @@ impl Transmuter {
             ),
             role: Role::new(key::ADMIN, key::MODERATOR),
             limiters: Limiters::new(key::LIMITERS),
+            rebalancing_incentive_config: Item::new(key::REBALANCING_INCENTIVE_CONFIG),
+            incentive_pool: Item::new(key::INCENTIVE_POOL),
         }
     }
 
@@ -133,6 +146,14 @@ impl Transmuter {
         // set normalization factor for alloyed asset
         self.alloyed_asset
             .set_normalization_factor(deps.storage, alloyed_asset_normalization_factor)?;
+
+        // initialize rebalancing incentive config
+        self.rebalancing_incentive_config
+            .save(deps.storage, &RebalancingIncentiveConfig::default())?;
+
+        // initialize incentive pool
+        self.incentive_pool
+            .save(deps.storage, &IncentivePool::default())?;
 
         Ok(Response::new()
             .add_attribute("method", "instantiate")
@@ -632,6 +653,45 @@ impl Transmuter {
         .map(|res| res.add_attribute("method", "exit_pool"))
     }
 
+    /// Set the rebalancing incentive config.
+    /// If left any of the fields empty, the corresponding config will remain unchanged.
+    /// setting ideal balance to [0,1] deletes value from storage as it's the same as default value
+    #[sv::msg(exec)]
+    pub fn set_rebalancing_incentive_config(
+        &self,
+        ExecCtx { deps, env: _, info }: ExecCtx,
+        lambda: Option<Decimal>,
+        ideal_balances: Option<Vec<(Scope, IdealBalance)>>,
+    ) -> Result<Response, ContractError> {
+        nonpayable(&info.funds)?;
+
+        // only admin can set rebalancing incentive config
+        ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
+
+        let mut config = self.rebalancing_incentive_config.load(deps.storage)?;
+
+        if let Some(new_lambda) = lambda {
+            config.set_lambda(new_lambda)?;
+        }
+
+        let pool = self.pool.load(deps.storage)?;
+        let available_denoms = pool.pool_assets.iter().map(|a| a.denom().to_string());
+        let available_asset_groups = pool.asset_groups.keys().cloned();
+
+        if let Some(new_ideal_balances) = ideal_balances {
+            config.set_ideal_balances(
+                available_denoms,
+                available_asset_groups,
+                new_ideal_balances,
+            )?;
+        }
+
+        self.rebalancing_incentive_config
+            .save(deps.storage, &config)?;
+
+        Ok(Response::new().add_attribute("method", "set_rebalancing_incentive_config"))
+    }
+
     // === queries ===
 
     #[sv::msg(query)]
@@ -843,6 +903,26 @@ impl Transmuter {
         })
     }
 
+    #[sv::msg(query)]
+    pub fn get_rebalancing_incentive_config(
+        &self,
+        QueryCtx { deps, env: _ }: QueryCtx,
+    ) -> Result<GetRebalancingIncentiveConfigResponse, ContractError> {
+        Ok(GetRebalancingIncentiveConfigResponse {
+            config: self.rebalancing_incentive_config.load(deps.storage)?,
+        })
+    }
+
+    #[sv::msg(query)]
+    pub fn get_incentive_pool(
+        &self,
+        QueryCtx { deps, env: _ }: QueryCtx,
+    ) -> Result<GetIncentivePoolResponse, ContractError> {
+        Ok(GetIncentivePoolResponse {
+            pool: self.incentive_pool.load(deps.storage)?,
+        })
+    }
+
     // --- admin ---
 
     #[sv::msg(exec)]
@@ -1022,8 +1102,19 @@ pub struct GetModeratorResponse {
     pub moderator: Addr,
 }
 
+#[cw_serde]
+pub struct GetRebalancingIncentiveConfigResponse {
+    pub config: RebalancingIncentiveConfig,
+}
+
+#[cw_serde]
+pub struct GetIncentivePoolResponse {
+    pub pool: IncentivePool,
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
 
     use super::sv::*;
     use super::*;
@@ -4812,5 +4903,128 @@ mod tests {
             payload: Binary::new(vec![]),
             gas_used: 0,
         }
+    }
+
+    #[test]
+    fn test_set_rebalancing_incentive_config() {
+        let mut deps = mock_dependencies();
+
+        let env = mock_env();
+        let admin = deps.api.addr_make("admin");
+        let non_admin = deps.api.addr_make("non_admin");
+        let moderator = deps.api.addr_make("moderator");
+        let info = message_info(&admin, &[]);
+
+        deps.querier.bank.update_balance(
+            admin.clone(),
+            vec![coin(1000000, "uusdc"), coin(1000000, "uusdt")],
+        );
+
+        // Instantiate the contract.
+        let init_msg = InstantiateMsg {
+            pool_asset_configs: vec![
+                AssetConfig {
+                    denom: "uusdc".to_string(),
+                    normalization_factor: Uint128::one(),
+                },
+                AssetConfig {
+                    denom: "uusdt".to_string(),
+                    normalization_factor: Uint128::one(),
+                },
+            ],
+            alloyed_asset_subdenom: "alloyed".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
+            admin: Some(admin.to_string()),
+            moderator: moderator.to_string(),
+        };
+        instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap();
+
+        // Query initial rebalancing incentive config
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetRebalancingIncentiveConfig {});
+        let query_res: GetRebalancingIncentiveConfigResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+
+        // Check that the initial rebalancing incentive config is the default value
+        assert_eq!(query_res.config.lambda, Decimal::zero());
+        assert!(query_res.config.ideal_balances.is_empty());
+
+        // Try to set rebalancing incentive config with non_admin
+        let non_admin_info = message_info(&non_admin, &[]);
+        let set_config_msg = ContractExecMsg::Transmuter(ExecMsg::SetRebalancingIncentiveConfig {
+            lambda: Some(Decimal::percent(5)),
+            ideal_balances: None,
+        });
+
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            non_admin_info,
+            set_config_msg.clone(),
+        )
+        .unwrap_err();
+        assert_eq!(err, ContractError::Unauthorized {});
+
+        // Set initial rebalancing incentive config
+        execute(deps.as_mut(), env.clone(), info.clone(), set_config_msg).unwrap();
+
+        // Query rebalancing incentive config
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetRebalancingIncentiveConfig {});
+        let query_res: GetRebalancingIncentiveConfigResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+
+        assert_eq!(query_res.config.lambda, Decimal::percent(5));
+        assert!(query_res.config.ideal_balances.is_empty());
+
+        // not updating lambda, but updating ideal_balances
+        let set_config_msg = ContractExecMsg::Transmuter(ExecMsg::SetRebalancingIncentiveConfig {
+            lambda: None,
+            ideal_balances: Some(vec![
+                (
+                    Scope::Denom("uusdc".to_string()),
+                    IdealBalance::new(Decimal::percent(40), Decimal::percent(60)),
+                ),
+                (
+                    Scope::Denom("uusdt".to_string()),
+                    IdealBalance::new(Decimal::percent(40), Decimal::percent(60)),
+                ),
+            ]),
+        });
+        execute(deps.as_mut(), env.clone(), info.clone(), set_config_msg).unwrap();
+
+        // Query rebalancing incentive config
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetRebalancingIncentiveConfig {});
+        let query_res: GetRebalancingIncentiveConfigResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+
+        assert_eq!(query_res.config.lambda, Decimal::percent(5));
+        assert_eq!(
+            query_res.config.ideal_balances,
+            HashMap::from([
+                (
+                    Scope::denom("uusdc"),
+                    IdealBalance::new(Decimal::percent(40), Decimal::percent(60))
+                ),
+                (
+                    Scope::denom("uusdt"),
+                    IdealBalance::new(Decimal::percent(40), Decimal::percent(60))
+                )
+            ]),
+        );
+
+        // setting wrong denom
+        let set_config_msg = ContractExecMsg::Transmuter(ExecMsg::SetRebalancingIncentiveConfig {
+            lambda: None,
+            ideal_balances: Some(vec![(
+                Scope::denom("wrong_denom"),
+                IdealBalance::new(Decimal::percent(40), Decimal::percent(60)),
+            )]),
+        });
+        let err = execute(deps.as_mut(), env.clone(), info, set_config_msg).unwrap_err();
+        assert_eq!(
+            err,
+            ContractError::ScopeNotFound {
+                scope: Scope::denom("wrong_denom")
+            }
+        );
     }
 }

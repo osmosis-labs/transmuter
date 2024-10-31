@@ -189,7 +189,10 @@ pub enum ContractError {
     CorruptedScopeRelativelyIncreased { scope: Scope },
 
     #[error("Not a registered scope: {scope}")]
-    InvalidScope { scope: Scope },
+    ScopeNotFound { scope: Scope },
+
+    #[error("Duplicated scope: {scope}")]
+    DuplicatedScope { scope: Scope },
 
     // TODO: use error from transmuter_math instead
     #[error("Invalid lambda: {lambda}")]

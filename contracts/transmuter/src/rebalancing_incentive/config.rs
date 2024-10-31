@@ -34,10 +34,10 @@ impl Default for IdealBalance {
 #[derive(Default)]
 pub struct RebalancingIncentiveConfig {
     /// The lambda parameter for scaling the fee \in λ ∈ (0,1], default is 0
-    lambda: Decimal,
+    pub lambda: Decimal,
 
     /// Ideal balance bounds for each asset
-    ideal_balances: HashMap<Scope, IdealBalance>,
+    pub ideal_balances: HashMap<Scope, IdealBalance>,
 }
 
 impl RebalancingIncentiveConfig {
@@ -63,15 +63,34 @@ impl RebalancingIncentiveConfig {
             .chain(available_asset_groups.into_iter().map(Scope::AssetGroup))
             .collect();
 
+        let mut seen_scopes = HashSet::new();
+
         for (scope, balance) in new_ideal_balances {
+            let is_unseen = seen_scopes.insert(scope.clone());
+            ensure!(is_unseen, ContractError::DuplicatedScope { scope });
+
             ensure!(
                 available_scopes.contains(&scope),
-                ContractError::InvalidScope { scope }
+                ContractError::ScopeNotFound { scope }
             );
-            self.ideal_balances.insert(scope, balance);
+
+            // set ideal balance with 0-1 bounds will delete value from storage
+            // as it is interpreted as default value
+            if balance == IdealBalance::default() {
+                self.ideal_balances.remove(&scope);
+            } else {
+                self.ideal_balances.insert(scope, balance);
+            }
         }
 
         Ok(self)
+    }
+
+    /// Explicitly remove ideal balance for scope
+    pub fn remove_ideal_balance(&mut self, scope: Scope) -> Result<IdealBalance, ContractError> {
+        self.ideal_balances
+            .remove(&scope)
+            .ok_or_else(|| ContractError::ScopeNotFound { scope })
     }
 
     pub fn lambda(&self) -> Decimal {
@@ -183,7 +202,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err,
-            ContractError::InvalidScope {
+            ContractError::ScopeNotFound {
                 scope: Scope::Denom("invalid_denom".to_string())
             }
         );
@@ -203,7 +222,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err,
-            ContractError::InvalidScope {
+            ContractError::ScopeNotFound {
                 scope: Scope::AssetGroup("invalid_asset_group".to_string())
             }
         );
@@ -242,7 +261,11 @@ mod tests {
         )];
 
         let result = config
-            .set_ideal_balances(available_denoms, available_asset_groups, new_ideal_balances)
+            .set_ideal_balances(
+                available_denoms.clone(),
+                available_asset_groups.clone(),
+                new_ideal_balances,
+            )
             .unwrap();
         assert_eq!(
             result.ideal_balances(),
@@ -266,6 +289,100 @@ mod tests {
             ]
             .into_iter()
             .collect()
+        );
+
+        // set ideal balance with duplicated scopes will fail
+        let new_ideal_balances = vec![
+            (
+                Scope::denom("existing_denom"),
+                IdealBalance::new(Decimal::percent(15), Decimal::percent(25)),
+            ),
+            (
+                Scope::denom("existing_denom"),
+                IdealBalance::new(Decimal::percent(15), Decimal::percent(20)),
+            ),
+        ];
+
+        let err = config
+            .set_ideal_balances(
+                available_denoms.clone(),
+                available_asset_groups.clone(),
+                new_ideal_balances,
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            ContractError::DuplicatedScope {
+                scope: Scope::Denom("existing_denom".to_string())
+            }
+        );
+
+        // set ideal balance with 0-1 bounds will delete value from storage
+        let new_ideal_balances = vec![
+            (Scope::denom("existing_denom"), IdealBalance::default()),
+            (
+                Scope::asset_group("existing_asset_group"),
+                IdealBalance::default(),
+            ),
+            (Scope::denom("valid_denom"), IdealBalance::default()),
+            (
+                Scope::asset_group("valid_asset_group"),
+                IdealBalance::new(Decimal::zero(), Decimal::percent(1)),
+            ),
+        ];
+        let result = config
+            .set_ideal_balances(available_denoms, available_asset_groups, new_ideal_balances)
+            .unwrap();
+        assert_eq!(
+            result.ideal_balances(),
+            &vec![(
+                Scope::asset_group("valid_asset_group"),
+                IdealBalance::new(Decimal::zero(), Decimal::percent(1)),
+            ),]
+            .into_iter()
+            .collect()
+        );
+    }
+
+    #[test]
+    fn test_remove_ideal_balance() {
+        let mut config = RebalancingIncentiveConfig {
+            lambda: Decimal::percent(0),
+            ideal_balances: vec![
+                (
+                    Scope::Denom("existing_denom".to_string()),
+                    IdealBalance::new(Decimal::percent(10), Decimal::percent(25)),
+                ),
+                (
+                    Scope::AssetGroup("existing_asset_group".to_string()),
+                    IdealBalance::new(Decimal::percent(20), Decimal::percent(30)),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        };
+
+        // Test removing an existing ideal balance
+        let removed_balance = config
+            .remove_ideal_balance(Scope::Denom("existing_denom".to_string()))
+            .unwrap();
+        assert_eq!(
+            removed_balance,
+            IdealBalance::new(Decimal::percent(10), Decimal::percent(25))
+        );
+        assert!(!config
+            .ideal_balances()
+            .contains_key(&Scope::Denom("existing_denom".to_string())));
+
+        // Test removing a non-existing ideal balance
+        let err = config
+            .remove_ideal_balance(Scope::Denom("non_existing_denom".to_string()))
+            .unwrap_err();
+        assert_eq!(
+            err,
+            ContractError::ScopeNotFound {
+                scope: Scope::Denom("non_existing_denom".to_string())
+            }
         );
     }
 }
