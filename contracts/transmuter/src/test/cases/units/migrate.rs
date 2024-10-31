@@ -4,9 +4,11 @@ use crate::{
     asset::AssetConfig,
     contract::{
         sv::{InstantiateMsg, QueryMsg},
-        GetModeratorResponse, ListAssetConfigsResponse, ListAssetGroupsResponse,
+        GetIncentivePoolResponse, GetModeratorResponse, GetRebalancingIncentiveConfigResponse,
+        ListAssetConfigsResponse, ListAssetGroupsResponse,
     },
     migrations::v4_0_0::MigrateMsg,
+    rebalancing_incentive::{config::RebalancingIncentiveConfig, incentive_pool::IncentivePool},
     test::{modules::cosmwasm_pool::CosmwasmPool, test_env::TransmuterContract},
 };
 use cosmwasm_schema::cw_serde;
@@ -410,6 +412,18 @@ fn test_migrate_v4_0_0() {
 
     // list asset groups
     let ListAssetGroupsResponse { asset_groups } = t.query(&QueryMsg::ListAssetGroups {}).unwrap();
+
+    // rebalancing incentive config should be initialized
+    let GetRebalancingIncentiveConfigResponse { config } = t
+        .query(&QueryMsg::GetRebalancingIncentiveConfig {})
+        .unwrap();
+
+    assert_eq!(config, RebalancingIncentiveConfig::default());
+
+    // incentive pool should be initialized
+    let GetIncentivePoolResponse { pool } = t.query(&QueryMsg::GetIncentivePool {}).unwrap();
+
+    assert_eq!(pool, IncentivePool::default());
 
     assert_eq!(asset_groups, BTreeMap::new());
 }
