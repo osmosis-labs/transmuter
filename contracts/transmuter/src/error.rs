@@ -96,6 +96,9 @@ pub enum ContractError {
     #[error("Excessive token in required: max acceptable token in: {limit}, required: {required}")]
     ExcessiveRequiredTokenIn { limit: Uint128, required: Uint128 },
 
+    #[error("Unable to deduct from incentive pool: required: {required}, available: {available}")]
+    UnableToDeductFromIncentivePool { required: Coin, available: Coin },
+
     #[error("The pool is currently inactive")]
     InactivePool {},
 
@@ -184,6 +187,16 @@ pub enum ContractError {
 
     #[error("Corrupted scope: {scope} must not increase in amount or weight")]
     CorruptedScopeRelativelyIncreased { scope: Scope },
+
+    #[error("Not a registered scope: {scope}")]
+    ScopeNotFound { scope: Scope },
+
+    #[error("Duplicated scope: {scope}")]
+    DuplicatedScope { scope: Scope },
+
+    // TODO: use error from transmuter_math instead
+    #[error("Invalid lambda: {lambda}")]
+    InvalidLambda { lambda: Decimal },
 
     #[error("Asset group {label} not found")]
     AssetGroupNotFound { label: String },

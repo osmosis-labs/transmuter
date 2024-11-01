@@ -9,6 +9,7 @@ use cw_storage_plus::Item;
 use crate::{
     asset::Asset,
     contract::{key, CONTRACT_NAME, CONTRACT_VERSION},
+    rebalancing_incentive::{config::RebalancingIncentiveConfig, incentive_pool::IncentivePool},
     transmuter_pool::TransmuterPool,
     ContractError,
 };
@@ -48,6 +49,14 @@ pub fn execute_migration(deps: DepsMut) -> Result<Response, ContractError> {
     };
 
     Item::<TransmuterPool>::new(key::POOL).save(deps.storage, &pool_v4)?;
+
+    // Initialize the rebalancing incentive config
+    Item::<RebalancingIncentiveConfig>::new(key::REBALANCING_INCENTIVE_CONFIG)
+        .save(deps.storage, &RebalancingIncentiveConfig::default())?;
+
+    // initialize the incentive pool
+    Item::<IncentivePool>::new(key::INCENTIVE_POOL)
+        .save(deps.storage, &IncentivePool::default())?;
 
     // Set the contract version to the target version after successful migration
     cw2::set_contract_version(deps.storage, CONTRACT_NAME, TO_VERSION)?;
@@ -123,6 +132,22 @@ mod tests {
                 asset_groups: BTreeMap::new() // migrgate with empty asset groups
             }
         );
+
+        let rebalancing_incentive_config =
+            Item::<RebalancingIncentiveConfig>::new(key::REBALANCING_INCENTIVE_CONFIG)
+                .load(&deps.storage)
+                .unwrap();
+
+        assert_eq!(
+            rebalancing_incentive_config,
+            RebalancingIncentiveConfig::default()
+        );
+
+        let incentive_pool = Item::<IncentivePool>::new(key::INCENTIVE_POOL)
+            .load(&deps.storage)
+            .unwrap();
+
+        assert_eq!(incentive_pool, IncentivePool::default());
 
         assert_eq!(
             res,

@@ -1,13 +1,32 @@
-use cosmwasm_schema::cw_serde;
+use schemars::JsonSchema;
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::{fmt::Display, str::FromStr};
 
 /// Scope for configuring limiters & rebalacing incentive for
-#[cw_serde]
+#[derive(Clone, Debug, PartialEq, JsonSchema, Eq, Hash)]
 #[serde(tag = "type", content = "value")]
-#[derive(Eq, Hash)]
 pub enum Scope {
     Denom(String),
     AssetGroup(String),
+}
+
+impl Serialize for Scope {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.key())
+    }
+}
+
+impl<'de> Deserialize<'de> for Scope {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Scope::from_str(&s).map_err(de::Error::custom)
+    }
 }
 
 impl Display for Scope {
@@ -54,5 +73,33 @@ impl Scope {
 
     pub fn asset_group(label: &str) -> Self {
         Scope::AssetGroup(label.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cosmwasm_std::{from_json, to_json_string};
+
+    #[test]
+    fn test_serialize_deserialize_scope() {
+        let scope_denom = Scope::denom("uusdc");
+        let scope_asset_group = Scope::asset_group("group1");
+
+        // Serialize to JSON string
+        let json_denom = to_json_string(&scope_denom).unwrap();
+        let json_asset_group = to_json_string(&scope_asset_group).unwrap();
+
+        // assert json string is valid
+        assert_eq!(json_denom, r#""denom::uusdc""#);
+        assert_eq!(json_asset_group, r#""asset_group::group1""#);
+
+        // Deserialize back from JSON string
+        let deserialized_denom: Scope = from_json(json_denom.as_bytes()).unwrap();
+        let deserialized_asset_group: Scope = from_json(json_asset_group.as_bytes()).unwrap();
+
+        // Assert equality
+        assert_eq!(scope_denom, deserialized_denom);
+        assert_eq!(scope_asset_group, deserialized_asset_group);
     }
 }
