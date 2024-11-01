@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{ensure, Decimal};
+use transmuter_math::TransmuterMathError;
 
 use crate::{scope::Scope, ContractError};
 
@@ -44,7 +45,9 @@ impl RebalancingIncentiveConfig {
     pub fn set_lambda(&mut self, new_lambda: Decimal) -> Result<&mut Self, ContractError> {
         ensure!(
             new_lambda <= Decimal::one(),
-            ContractError::InvalidLambda { lambda: new_lambda }
+            TransmuterMathError::OutOfNormalizedRange {
+                var_name: "lambda".to_string()
+            }
         );
 
         self.lambda = new_lambda;

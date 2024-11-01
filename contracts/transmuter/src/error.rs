@@ -194,10 +194,6 @@ pub enum ContractError {
     #[error("Duplicated scope: {scope}")]
     DuplicatedScope { scope: Scope },
 
-    // TODO: use error from transmuter_math instead
-    #[error("Invalid lambda: {lambda}")]
-    InvalidLambda { lambda: Decimal },
-
     #[error("Asset group {label} not found")]
     AssetGroupNotFound { label: String },
 
