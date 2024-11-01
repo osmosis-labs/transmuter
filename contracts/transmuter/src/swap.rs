@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
     coin, ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env,
-    Response, StdError, Storage, Timestamp, Uint128,
+    Response, StdError, Storage, Timestamp, Uint128, Uint256,
 };
 use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
 use serde::Serialize;
@@ -625,12 +625,15 @@ impl Transmuter {
         storage: &mut dyn Storage,
         pool: &mut TransmuterPool,
     ) -> Result<(), ContractError> {
+        let mut rebalancing_incentive_config = self.rebalancing_incentive_config.load(storage)?;
         // remove corrupted assets
         for corrupted in pool.clone().corrupted_assets() {
             if corrupted.amount().is_zero() {
                 pool.remove_asset(corrupted.denom())?;
+                let scope = Scope::denom(corrupted.denom());
+                rebalancing_incentive_config.remove_ideal_balance(scope.clone());
                 self.limiters
-                    .uncheck_deregister_all_for_scope(storage, Scope::denom(corrupted.denom()))?;
+                    .uncheck_deregister_all_for_scope(storage, scope)?;
             }
         }
 
@@ -640,10 +643,18 @@ impl Transmuter {
             if asset_group.is_corrupted() {
                 // remove asset from pool if amount is zero.
                 // removing asset here will also remove it from the asset group
+                let mut total_amount = Uint256::zero();
                 for denom in asset_group.denoms() {
-                    if pool.get_pool_asset_by_denom(denom)?.amount().is_zero() {
+                    let amount = pool.get_pool_asset_by_denom(denom)?.amount();
+                    total_amount = total_amount.checked_add(amount.into())?;
+                    if amount.is_zero() {
                         pool.remove_asset(denom)?;
+                        rebalancing_incentive_config.remove_ideal_balance(Scope::denom(denom));
                     }
+                }
+
+                if total_amount.is_zero() {
+                    rebalancing_incentive_config.remove_ideal_balance(Scope::asset_group(&label));
                 }
 
                 // remove asset group is removed
@@ -654,6 +665,9 @@ impl Transmuter {
                 }
             }
         }
+
+        self.rebalancing_incentive_config
+            .save(storage, &rebalancing_incentive_config)?;
 
         Ok(())
     }
@@ -792,7 +806,11 @@ pub enum BurnTarget {
 #[cfg(test)]
 mod tests {
     use crate::{
-        asset::Asset, corruptable::Corruptable, limiter::LimiterParams, transmuter_pool::AssetGroup,
+        asset::Asset,
+        corruptable::Corruptable,
+        limiter::LimiterParams,
+        rebalancing_incentive::config::{IdealBalance, RebalancingIncentiveConfig},
+        transmuter_pool::AssetGroup,
     };
 
     use super::*;
@@ -1040,6 +1058,12 @@ mod tests {
         )]);
 
         let transmuter = Transmuter::new();
+
+        transmuter
+            .rebalancing_incentive_config
+            .save(&mut deps.storage, &RebalancingIncentiveConfig::default())
+            .unwrap();
+
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -1243,6 +1267,12 @@ mod tests {
         )]);
 
         let transmuter = Transmuter::new();
+
+        transmuter
+            .rebalancing_incentive_config
+            .save(&mut deps.storage, &RebalancingIncentiveConfig::default())
+            .unwrap();
+
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -1346,6 +1376,12 @@ mod tests {
     fn test_swap_non_alloyed_exact_amount_in_with_corrupted_assets() {
         let mut deps = mock_dependencies();
         let transmuter = Transmuter::new();
+
+        transmuter
+            .rebalancing_incentive_config
+            .save(&mut deps.storage, &RebalancingIncentiveConfig::default())
+            .unwrap();
+
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -1431,6 +1467,12 @@ mod tests {
     fn test_swap_non_alloyed_exact_amount_out_with_corrupted_assets() {
         let mut deps = mock_dependencies();
         let transmuter = Transmuter::new();
+
+        transmuter
+            .rebalancing_incentive_config
+            .save(&mut deps.storage, &RebalancingIncentiveConfig::default())
+            .unwrap();
+
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -1574,6 +1616,12 @@ mod tests {
         )]);
 
         let transmuter = Transmuter::new();
+
+        transmuter
+            .rebalancing_incentive_config
+            .save(&mut deps.storage, &RebalancingIncentiveConfig::default())
+            .unwrap();
+
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -1672,6 +1720,11 @@ mod tests {
         )]);
 
         let transmuter = Transmuter::new();
+        transmuter
+            .rebalancing_incentive_config
+            .save(&mut deps.storage, &RebalancingIncentiveConfig::default())
+            .unwrap();
+
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -1797,7 +1850,7 @@ mod tests {
     }
 
     #[test]
-    fn test_clean_up_drained_corrupted_assets_group() {
+    fn test_clean_up_drained_corrupted_denom() {
         let sender = Addr::unchecked("addr1");
         let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
             sender.to_string().as_str(),
@@ -1823,33 +1876,56 @@ mod tests {
             ],
             asset_groups: BTreeMap::from([(
                 "group1".to_string(),
-                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()])
-                    .mark_as_corrupted()
-                    .clone(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
             )]),
         };
         transmuter.pool.save(&mut deps.storage, &init_pool).unwrap();
 
-        // Register limiters for group1
+        let rebalancing_incentive_config = RebalancingIncentiveConfig {
+            lambda: Decimal::percent(10),
+            ideal_balances: vec![
+                (
+                    Scope::denom("denom1"),
+                    IdealBalance::new(Decimal::percent(10), Decimal::percent(50)),
+                ),
+                (
+                    Scope::denom("denom2"),
+                    IdealBalance::new(Decimal::percent(10), Decimal::percent(30)),
+                ),
+                (
+                    Scope::denom("denom3"),
+                    IdealBalance::new(Decimal::percent(10), Decimal::percent(20)),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        transmuter
+            .rebalancing_incentive_config
+            .save(&mut deps.storage, &rebalancing_incentive_config)
+            .unwrap();
+
+        // Register a limiter for the group
         transmuter
             .limiters
             .register(
                 &mut deps.storage,
                 Scope::asset_group("group1"),
-                "1w",
+                "limiter1",
                 LimiterParams::StaticLimiter {
-                    upper_limit: Decimal::percent(60),
+                    upper_limit: Decimal::one(),
                 },
             )
             .unwrap();
 
         let mut pool = transmuter.pool.load(&deps.storage).unwrap();
-        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
-        assert_eq!(res, Ok(()));
-
-        pool = transmuter.pool.load(&deps.storage).unwrap();
         assert_eq!(pool, init_pool);
 
+        // mark denom2 as corrupted
+        pool.mark_corrupted_asset("denom2").unwrap();
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        // Drain denom2 from the pool
         pool.exit_pool(&[coin(1000000000000u128, "denom2")])
             .unwrap();
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
@@ -1857,6 +1933,7 @@ mod tests {
         let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
         assert_eq!(res, Ok(()));
 
+        // Check that the pool remains unchanged except for the drained assets
         let expected_pool = TransmuterPool {
             pool_assets: vec![
                 Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
@@ -1864,9 +1941,7 @@ mod tests {
             ],
             asset_groups: BTreeMap::from([(
                 "group1".to_string(),
-                AssetGroup::new(vec!["denom3".to_string()])
-                    .mark_as_corrupted()
-                    .clone(),
+                AssetGroup::new(vec!["denom3".to_string()]),
             )]),
         };
         assert_eq!(pool, expected_pool);
@@ -1878,31 +1953,70 @@ mod tests {
         // Save the updated pool
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
 
+        // Drain denom3 from the pool
         pool.exit_pool(&[coin(1000000000000u128, "denom3")])
             .unwrap();
 
         let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
         assert_eq!(res, Ok(()));
 
+        // Check that the pool remains unchanged
         let expected_pool = TransmuterPool {
             pool_assets: vec![
                 Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::zero(), "denom3", 100u128).unwrap(),
             ],
-            asset_groups: BTreeMap::new(),
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom3".to_string()]),
+            )]),
         };
         assert_eq!(pool, expected_pool);
 
-        // Check that the limiter for group1 is removed
-        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
-        assert_eq!(limiters.len(), 0);
+        // Check that the ideal balance for group1 is still registered
+        let config = transmuter
+            .rebalancing_incentive_config
+            .load(&deps.storage)
+            .unwrap();
+        assert_eq!(
+            config,
+            RebalancingIncentiveConfig {
+                lambda: Decimal::percent(10),
+                ideal_balances: vec![
+                    (
+                        Scope::denom("denom1"),
+                        IdealBalance::new(Decimal::percent(10), Decimal::percent(50)),
+                    ),
+                    (
+                        Scope::denom("denom3"),
+                        IdealBalance::new(Decimal::percent(10), Decimal::percent(20)),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            }
+        );
     }
 
     #[test]
-    fn test_clean_up_drained_corrupted_assets_group_not_corrupted() {
-        let mut deps = mock_dependencies();
-        let transmuter = Transmuter::new();
+    fn test_clean_up_drained_corrupted_denom_not_corrupted() {
+        let sender = Addr::unchecked("addr1");
+        let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
+            sender.to_string().as_str(),
+            &[coin(2000000000000u128, "alloyed")],
+        )]);
 
-        // Initialize the pool with non-corrupted assets and groups
+        let transmuter = Transmuter::new();
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_normalization_factor(&mut deps.storage, 100u128.into())
+            .unwrap();
+
         let init_pool = TransmuterPool {
             pool_assets: vec![
                 Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
@@ -1914,8 +2028,31 @@ mod tests {
                 AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
             )]),
         };
-
         transmuter.pool.save(&mut deps.storage, &init_pool).unwrap();
+
+        let rebalancing_incentive_config = RebalancingIncentiveConfig {
+            lambda: Decimal::percent(10),
+            ideal_balances: vec![
+                (
+                    Scope::denom("denom1"),
+                    IdealBalance::new(Decimal::percent(10), Decimal::percent(50)),
+                ),
+                (
+                    Scope::denom("denom2"),
+                    IdealBalance::new(Decimal::percent(10), Decimal::percent(30)),
+                ),
+                (
+                    Scope::denom("denom3"),
+                    IdealBalance::new(Decimal::percent(10), Decimal::percent(20)),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        transmuter
+            .rebalancing_incentive_config
+            .save(&mut deps.storage, &rebalancing_incentive_config)
+            .unwrap();
 
         // Register a limiter for the group
         transmuter
@@ -1986,5 +2123,277 @@ mod tests {
         // Check that the limiter for group1 is still registered
         let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
         assert_eq!(limiters.len(), 1);
+
+        // Check that the ideal balance for group1 is still registered
+        let config = transmuter
+            .rebalancing_incentive_config
+            .load(&deps.storage)
+            .unwrap();
+        assert_eq!(config, rebalancing_incentive_config);
+    }
+
+    #[test]
+    fn test_clean_up_drained_corrupted_assets_group() {
+        let sender = Addr::unchecked("addr1");
+        let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
+            sender.to_string().as_str(),
+            &[coin(2000000000000u128, "alloyed")],
+        )]);
+
+        let transmuter = Transmuter::new();
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_normalization_factor(&mut deps.storage, 100u128.into())
+            .unwrap();
+
+        let init_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()])
+                    .mark_as_corrupted()
+                    .clone(),
+            )]),
+        };
+        transmuter.pool.save(&mut deps.storage, &init_pool).unwrap();
+
+        let rebalancing_incentive_config = RebalancingIncentiveConfig {
+            lambda: Decimal::percent(10),
+            ideal_balances: vec![
+                (
+                    Scope::denom("denom1"),
+                    IdealBalance::new(Decimal::percent(10), Decimal::percent(50)),
+                ),
+                (
+                    Scope::denom("denom2"),
+                    IdealBalance::new(Decimal::percent(10), Decimal::percent(30)),
+                ),
+                (
+                    Scope::denom("denom3"),
+                    IdealBalance::new(Decimal::percent(10), Decimal::percent(20)),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        transmuter
+            .rebalancing_incentive_config
+            .save(&mut deps.storage, &rebalancing_incentive_config)
+            .unwrap();
+
+        // Register limiters for group1
+        transmuter
+            .limiters
+            .register(
+                &mut deps.storage,
+                Scope::asset_group("group1"),
+                "1w",
+                LimiterParams::StaticLimiter {
+                    upper_limit: Decimal::percent(60),
+                },
+            )
+            .unwrap();
+
+        let mut pool = transmuter.pool.load(&deps.storage).unwrap();
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        pool = transmuter.pool.load(&deps.storage).unwrap();
+        assert_eq!(pool, init_pool);
+
+        pool.exit_pool(&[coin(1000000000000u128, "denom2")])
+            .unwrap();
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        let expected_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom3".to_string()])
+                    .mark_as_corrupted()
+                    .clone(),
+            )]),
+        };
+        assert_eq!(pool, expected_pool);
+
+        // Check that the limiter for group1 is still registered
+        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
+        assert_eq!(limiters.len(), 1);
+
+        // Save the updated pool
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        pool.exit_pool(&[coin(1000000000000u128, "denom3")])
+            .unwrap();
+
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        let expected_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::new(),
+        };
+        assert_eq!(pool, expected_pool);
+
+        // Check that the limiter for group1 is removed
+        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
+        assert_eq!(limiters.len(), 0);
+
+        // Check that the ideal balance for group1 is removed
+        let config = transmuter
+            .rebalancing_incentive_config
+            .load(&deps.storage)
+            .unwrap();
+        assert_eq!(
+            config,
+            RebalancingIncentiveConfig {
+                lambda: Decimal::percent(10),
+                ideal_balances: vec![(
+                    Scope::denom("denom1"),
+                    IdealBalance::new(Decimal::percent(10), Decimal::percent(50)),
+                ),]
+                .into_iter()
+                .collect(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_clean_up_drained_corrupted_assets_group_not_corrupted() {
+        let mut deps = mock_dependencies();
+        let transmuter = Transmuter::new();
+
+        // Initialize the pool with non-corrupted assets and groups
+        let init_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
+            )]),
+        };
+
+        transmuter.pool.save(&mut deps.storage, &init_pool).unwrap();
+
+        let rebalancing_incentive_config = RebalancingIncentiveConfig {
+            lambda: Decimal::percent(10),
+            ideal_balances: vec![
+                (
+                    Scope::denom("denom1"),
+                    IdealBalance::new(Decimal::percent(10), Decimal::percent(50)),
+                ),
+                (
+                    Scope::denom("denom2"),
+                    IdealBalance::new(Decimal::percent(10), Decimal::percent(30)),
+                ),
+                (
+                    Scope::denom("denom3"),
+                    IdealBalance::new(Decimal::percent(10), Decimal::percent(20)),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        transmuter
+            .rebalancing_incentive_config
+            .save(&mut deps.storage, &rebalancing_incentive_config)
+            .unwrap();
+
+        // Register a limiter for the group
+        transmuter
+            .limiters
+            .register(
+                &mut deps.storage,
+                Scope::asset_group("group1"),
+                "limiter1",
+                LimiterParams::StaticLimiter {
+                    upper_limit: Decimal::one(),
+                },
+            )
+            .unwrap();
+
+        let mut pool = transmuter.pool.load(&deps.storage).unwrap();
+        assert_eq!(pool, init_pool);
+
+        // Drain denom2 from the pool
+        pool.exit_pool(&[coin(1000000000000u128, "denom2")])
+            .unwrap();
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        // Check that the pool remains unchanged
+        let expected_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::zero(), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
+            )]),
+        };
+        assert_eq!(pool, expected_pool);
+
+        // Check that the limiter for group1 is still registered
+        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
+        assert_eq!(limiters.len(), 1);
+
+        // Save the updated pool
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        // Drain denom3 from the pool
+        pool.exit_pool(&[coin(1000000000000u128, "denom3")])
+            .unwrap();
+
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        // Check that the pool remains unchanged except for the drained assets
+        let expected_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::zero(), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::zero(), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
+            )]),
+        };
+        assert_eq!(pool, expected_pool);
+
+        // Check that the limiter for group1 is still registered
+        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
+        assert_eq!(limiters.len(), 1);
+
+        // Check that the ideal balance for group1 is still registered
+        let config = transmuter
+            .rebalancing_incentive_config
+            .load(&deps.storage)
+            .unwrap();
+        assert_eq!(config, rebalancing_incentive_config);
     }
 }

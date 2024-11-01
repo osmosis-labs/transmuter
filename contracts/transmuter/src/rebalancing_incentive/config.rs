@@ -87,10 +87,8 @@ impl RebalancingIncentiveConfig {
     }
 
     /// Explicitly remove ideal balance for scope
-    pub fn remove_ideal_balance(&mut self, scope: Scope) -> Result<IdealBalance, ContractError> {
-        self.ideal_balances
-            .remove(&scope)
-            .ok_or_else(|| ContractError::ScopeNotFound { scope })
+    pub fn remove_ideal_balance(&mut self, scope: Scope) -> Option<IdealBalance> {
+        self.ideal_balances.remove(&scope)
     }
 
     pub fn lambda(&self) -> Decimal {
@@ -375,14 +373,8 @@ mod tests {
             .contains_key(&Scope::Denom("existing_denom".to_string())));
 
         // Test removing a non-existing ideal balance
-        let err = config
-            .remove_ideal_balance(Scope::Denom("non_existing_denom".to_string()))
-            .unwrap_err();
-        assert_eq!(
-            err,
-            ContractError::ScopeNotFound {
-                scope: Scope::Denom("non_existing_denom".to_string())
-            }
-        );
+        let removed_balance =
+            config.remove_ideal_balance(Scope::Denom("non_existing_denom".to_string()));
+        assert_eq!(removed_balance, None);
     }
 }
