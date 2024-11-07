@@ -95,7 +95,7 @@ pub fn calculate_impact_factor(
 /// $$
 /// C(b) =
 /// \begin{cases}
-///       \left(\frac{b - \phi_l}{\phi_l}\right)^2 & \text{if } 0 \leq b \lt \phi_l \\
+///       \left(\frac{\phi_l - b}{\phi_l}\right)^2 & \text{if } 0 \leq b \lt \phi_l \\
 ///       0 & \text{if } \phi_l \leq b \leq \phi_u \\
 ///       \left(\frac{b - \phi_u}{\delta - \phi_u}\right)^2 & \text{if } \phi_u \lt b \leq \delta
 ///    \end{cases}
