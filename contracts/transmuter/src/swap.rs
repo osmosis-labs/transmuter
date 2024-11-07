@@ -607,7 +607,7 @@ impl Transmuter {
         Ok((pool, payload))
     }
 
-    pub fn rebalancing_incentive_pass<T, F>(
+    pub fn rebalancing_incentive_pass<F>(
         &self,
         deps: DepsMut,
         block_time: Timestamp,
@@ -621,7 +621,7 @@ impl Transmuter {
         let ideal_balances = rebalancing_incentive_config.ideal_balances();
         let upper_limits = self.limiters.upper_limits(deps.storage, block_time)?;
 
-        let prev_normalized_balance = pool.weights()?.unwrap_or_default(); // TODO: should we handle None case?
+        let prev_normalized_balance = pool.weights()?.unwrap_or_default(); // TODO: should we handle None case? -> write test with that case
 
         let pool = run(pool)?;
 
@@ -631,7 +631,6 @@ impl Transmuter {
             .scopes()?
             .into_iter()
             .map(|scope| {
-                // TODO: check if default make sense in all cases
                 let ideal_balance = ideal_balances.get(&scope).copied().unwrap_or_default();
 
                 ImpactFactorParamGroup::new(
@@ -863,7 +862,10 @@ mod tests {
         asset::Asset,
         corruptable::Corruptable,
         limiter::LimiterParams,
-        rebalancing_incentive::config::{IdealBalance, RebalancingIncentiveConfig},
+        rebalancing_incentive::{
+            config::{IdealBalance, RebalancingIncentiveConfig},
+            incentive_pool::IncentivePool,
+        },
         transmuter_pool::AssetGroup,
     };
 
@@ -2449,5 +2451,152 @@ mod tests {
             .load(&deps.storage)
             .unwrap();
         assert_eq!(config, rebalancing_incentive_config);
+    }
+
+    #[test]
+    fn test_rebalancing_incentive_pass() {
+        let mut deps = mock_dependencies();
+        let transmuter = Transmuter::new();
+
+        let pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(500000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(3000000000000000u128), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(20000000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
+            )]),
+        };
+
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+        transmuter
+            .rebalancing_incentive_config
+            .save(&mut deps.storage, &RebalancingIncentiveConfig::default())
+            .unwrap();
+        transmuter
+            .incentive_pool
+            .save(&mut deps.storage, &IncentivePool::default())
+            .unwrap();
+
+        let block_time = Timestamp::from_seconds(1000000);
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+        let impact_factor = transmuter
+            .rebalancing_incentive_pass(deps.as_mut(), block_time, pool.clone(), |mut pool| {
+                pool.join_pool(&[coin(1000000000000u128, "denom1")])?;
+                Ok(pool)
+            })
+            .unwrap();
+
+        assert_eq!(impact_factor, ImpactFactor::None);
+
+        let rebalancing_incentive_config = RebalancingIncentiveConfig {
+            lambda: Decimal::percent(10),
+            ideal_balances: vec![
+                (
+                    Scope::denom("denom1"),
+                    IdealBalance::new(Decimal::percent(10), Decimal::percent(60)),
+                ),
+                (
+                    Scope::asset_group("group1"),
+                    IdealBalance::new(Decimal::percent(20), Decimal::percent(60)),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        };
+
+        transmuter
+            .rebalancing_incentive_config
+            .save(&mut deps.storage, &rebalancing_incentive_config)
+            .unwrap();
+
+        // move within ideal balance does not incur fee or incentivized
+        let impact_factor = transmuter
+            .rebalancing_incentive_pass(deps.as_mut(), block_time, pool.clone(), |mut pool| {
+                pool.join_pool(&[coin(100000000000000u128, "denom1")])?;
+                Ok(pool)
+            })
+            .unwrap();
+
+        assert_eq!(impact_factor, ImpactFactor::None);
+
+        // move out of ideal balance less than lower bound incurs fee
+        let impact_factor = transmuter
+            .rebalancing_incentive_pass(deps.as_mut(), block_time, pool.clone(), |mut pool| {
+                pool.exit_pool(&[coin(500000000000000u128, "denom1")])?;
+
+                Ok(pool)
+            })
+            .unwrap();
+
+        assert_eq!(
+            impact_factor,
+            ImpactFactor::Fee("0.707106781186547524".parse().unwrap())
+        );
+
+        let add_more_denom_1 = |mut pool: TransmuterPool| {
+            pool.join_pool(&[coin(1000000000000000u128, "denom1")])?;
+            Ok(pool)
+        };
+
+        // move out of ideal balance more than upper bound incurs fee
+        let impact_factor = transmuter
+            .rebalancing_incentive_pass(deps.as_mut(), block_time, pool.clone(), add_more_denom_1)
+            .unwrap();
+
+        assert_eq!(
+            impact_factor,
+            ImpactFactor::Fee("0.0703125".parse().unwrap())
+        );
+
+        // having limiter makes the fee more dramatic
+        transmuter
+            .limiters
+            .register(
+                &mut deps.storage,
+                Scope::denom("denom1"),
+                "limiter1",
+                LimiterParams::StaticLimiter {
+                    upper_limit: Decimal::percent(75),
+                },
+            )
+            .unwrap();
+        let impact_factor = transmuter
+            .rebalancing_incentive_pass(deps.as_mut(), block_time, pool.clone(), add_more_denom_1)
+            .unwrap();
+
+        assert_eq!(impact_factor, ImpactFactor::Fee("0.5".parse().unwrap()));
+
+        // move into ideal balance is incentivized
+        let non_ideal_balance_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(500000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(3000000000000000u128), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
+            )]),
+        };
+
+        let impact_factor = transmuter
+            .rebalancing_incentive_pass(
+                deps.as_mut(),
+                block_time,
+                non_ideal_balance_pool,
+                |mut pool| {
+                    pool.join_pool(&[coin(19000000000000000u128, "denom3")])?;
+                    Ok(pool)
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            impact_factor,
+            ImpactFactor::Incentive("0.006638554420904599".parse().unwrap())
+        );
     }
 }
