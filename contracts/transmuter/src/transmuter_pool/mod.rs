@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashSet};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{ensure, Coin, Uint128, Uint64};
 
-use crate::{asset::Asset, ContractError};
+use crate::{asset::Asset, scope::Scope, ContractError};
 
 pub use asset_group::AssetGroup;
 pub use transmute::AmountConstraint;
@@ -126,6 +126,20 @@ impl TransmuterPool {
             ..self
         })
     }
+
+    pub fn scopes(&self) -> Result<Vec<Scope>, ContractError> {
+        let denom_scopes = self
+            .pool_assets
+            .iter()
+            .map(|asset| Scope::denom(asset.denom()));
+
+        let asset_group_scopes = self
+            .asset_groups
+            .iter()
+            .map(|(label, _)| Scope::asset_group(label));
+
+        Ok(denom_scopes.chain(asset_group_scopes).collect())
+    }
 }
 
 #[cfg(test)]
@@ -199,5 +213,29 @@ mod tests {
                 denom: "a".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn test_list_all_scopes() {
+        let assets = Asset::unchecked_equal_assets(&["a", "b"]);
+        let mut transmuter_pool = TransmuterPool::new(assets).unwrap();
+
+        // Add asset groups
+        transmuter_pool
+            .asset_groups
+            .insert("group1".to_string(), AssetGroup::new(vec!["a".to_string()]));
+        transmuter_pool
+            .asset_groups
+            .insert("group2".to_string(), AssetGroup::new(vec!["b".to_string()]));
+
+        let scopes = transmuter_pool.scopes().unwrap();
+        let expected_scopes: Vec<Scope> = vec![
+            Scope::denom("a"),
+            Scope::denom("b"),
+            Scope::asset_group("group1"),
+            Scope::asset_group("group2"),
+        ];
+
+        assert_eq!(scopes, expected_scopes);
     }
 }

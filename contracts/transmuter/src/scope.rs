@@ -3,7 +3,7 @@ use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use std::{fmt::Display, str::FromStr};
 
 /// Scope for configuring limiters & rebalacing incentive for
-#[derive(Clone, Debug, PartialEq, JsonSchema, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, JsonSchema, Eq, Hash, Ord, PartialOrd)]
 #[serde(tag = "type", content = "value")]
 pub enum Scope {
     Denom(String),
@@ -35,24 +35,24 @@ impl Display for Scope {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, PartialEq)]
 #[error("Invalid scope: {0}, must start with 'denom::' or 'asset_group::'")]
-pub struct ParseScopeErr(String);
+pub struct ParseScopeError(String);
 
 impl FromStr for Scope {
-    type Err = ParseScopeErr;
+    type Err = ParseScopeError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.starts_with("denom::") {
             s.strip_prefix("denom::")
                 .map(|s| Scope::Denom(s.to_string()))
-                .ok_or(ParseScopeErr(s.to_string()))
+                .ok_or(ParseScopeError(s.to_string()))
         } else if s.starts_with("asset_group::") {
             s.strip_prefix("asset_group::")
                 .map(|s| Scope::AssetGroup(s.to_string()))
-                .ok_or(ParseScopeErr(s.to_string()))
+                .ok_or(ParseScopeError(s.to_string()))
         } else {
-            Err(ParseScopeErr(s.to_string()))
+            Err(ParseScopeError(s.to_string()))
         }
     }
 }

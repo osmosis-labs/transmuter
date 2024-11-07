@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::{scope::Scope, ContractError};
 use cosmwasm_schema::cw_serde;
@@ -139,6 +139,23 @@ impl ChangeLimiter {
         scope: &Scope,
         value: Decimal,
     ) -> Result<Self, ContractError> {
+        let (updated_limiter, upper_limit) = self.upper_limit(block_time)?;
+
+        if let Some(upper_limit) = upper_limit {
+            ensure!(
+                value <= upper_limit,
+                ContractError::UpperLimitExceeded {
+                    scope: scope.clone(),
+                    upper_limit,
+                    value,
+                }
+            );
+        }
+
+        Ok(updated_limiter)
+    }
+
+    fn upper_limit(self, block_time: Timestamp) -> Result<(Self, Option<Decimal>), ContractError> {
         let (latest_removed_division, updated_limiter) =
             self.clean_up_outdated_divisions(block_time)?;
 
@@ -157,18 +174,10 @@ impl ChangeLimiter {
 
             // using saturating_add/sub since the overflowed value can't be exceeded anyway
             let upper_limit = avg.saturating_add(updated_limiter.boundary_offset);
-
-            ensure!(
-                value <= upper_limit,
-                ContractError::UpperLimitExceeded {
-                    scope: scope.clone(),
-                    upper_limit,
-                    value,
-                }
-            );
+            Ok((updated_limiter, Some(upper_limit)))
+        } else {
+            Ok((updated_limiter, None))
         }
-
-        Ok(updated_limiter)
     }
 
     fn update(self, block_time: Timestamp, value: Decimal) -> Result<Self, ContractError> {
@@ -526,7 +535,6 @@ impl Limiters {
             .map_err(Into::into)
     }
 
-    #[allow(clippy::type_complexity)]
     pub fn list_limiters(
         &self,
         storage: &dyn Storage,
@@ -611,6 +619,39 @@ impl Limiters {
         }
 
         Ok(())
+    }
+
+    /// Get the upper limit for each scope. Lowest upper limit for each scope wins.
+    pub fn upper_limits(
+        &self,
+        storage: &dyn Storage,
+        block_time: Timestamp,
+    ) -> Result<BTreeMap<Scope, Decimal>, ContractError> {
+        let mut upper_limits = BTreeMap::new();
+        for ((scope_str, _), limiter) in self.list_limiters(storage)?.into_iter() {
+            let scope = scope_str.parse::<Scope>()?;
+            match limiter {
+                Limiter::StaticLimiter(limiter) => {
+                    upper_limits
+                        .entry(scope)
+                        .and_modify(|ul: &mut Decimal| *ul = (*ul).min(limiter.upper_limit))
+                        .or_insert(limiter.upper_limit);
+                }
+                Limiter::ChangeLimiter(change_limiter) => {
+                    let upper_limit = match change_limiter.upper_limit(block_time)? {
+                        (_, Some(upper_limit)) => upper_limit,
+                        (_, None) => Decimal::one(), // if no upper limit, use 100%
+                    };
+
+                    upper_limits
+                        .entry(scope)
+                        .and_modify(|ul: &mut Decimal| *ul = (*ul).min(upper_limit))
+                        .or_insert(upper_limit);
+                }
+            }
+        }
+
+        Ok(upper_limits)
     }
 }
 
@@ -3091,6 +3132,266 @@ mod tests {
                     vec![Division::new(block_time, block_time, value, value).unwrap()]
                 );
             }
+        }
+    }
+
+    mod list_upper_limits {
+        use super::*;
+
+        #[test]
+        fn test_list_upper_limits() {
+            let mut deps = mock_dependencies();
+            let limiters = Limiters::new("limiters");
+
+            let block_time = Timestamp::from_seconds(1_000_000);
+
+            limiters
+                .register(
+                    &mut deps.storage,
+                    Scope::denom("denom1"),
+                    "static",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(40),
+                    },
+                )
+                .unwrap();
+
+            limiters
+                .register(
+                    &mut deps.storage,
+                    Scope::denom("denom2"),
+                    "static",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(45),
+                    },
+                )
+                .unwrap();
+
+            limiters
+                .register(
+                    &mut deps.storage,
+                    Scope::denom("denom3"),
+                    "static",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(30),
+                    },
+                )
+                .unwrap();
+
+            limiters
+                .register(
+                    &mut deps.storage,
+                    Scope::asset_group("asset_group"),
+                    "static",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(60),
+                    },
+                )
+                .unwrap();
+
+            let upper_limits = limiters.upper_limits(&deps.storage, block_time).unwrap();
+            assert_eq!(
+                upper_limits,
+                vec![
+                    (Scope::denom("denom1"), Decimal::percent(40)),
+                    (Scope::denom("denom2"), Decimal::percent(45)),
+                    (Scope::denom("denom3"), Decimal::percent(30)),
+                    (Scope::asset_group("asset_group"), Decimal::percent(60)),
+                ]
+                .into_iter()
+                .collect()
+            );
+
+            // add tigher limiter for denom1
+            limiters
+                .set_static_limiter_upper_limit(
+                    &mut deps.storage,
+                    Scope::denom("denom1"),
+                    "static",
+                    Decimal::percent(35),
+                )
+                .unwrap();
+
+            let upper_limits = limiters.upper_limits(&deps.storage, block_time).unwrap();
+            assert_eq!(
+                upper_limits,
+                vec![
+                    (Scope::denom("denom1"), Decimal::percent(35)),
+                    (Scope::denom("denom2"), Decimal::percent(45)),
+                    (Scope::denom("denom3"), Decimal::percent(30)),
+                    (Scope::asset_group("asset_group"), Decimal::percent(60)),
+                ]
+                .into_iter()
+                .collect()
+            );
+
+            // add laxer limiter for asset_group
+            limiters
+                .register(
+                    &mut deps.storage,
+                    Scope::asset_group("asset_group"),
+                    "more_static",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(70),
+                    },
+                )
+                .unwrap();
+
+            let upper_limits = limiters.upper_limits(&deps.storage, block_time).unwrap();
+            assert_eq!(
+                upper_limits,
+                vec![
+                    (Scope::denom("denom1"), Decimal::percent(35)),
+                    (Scope::denom("denom2"), Decimal::percent(45)),
+                    (Scope::denom("denom3"), Decimal::percent(30)),
+                    (Scope::asset_group("asset_group"), Decimal::percent(60)),
+                ]
+                .into_iter()
+                .collect()
+            );
+
+            // add change limiter for denom2 and make it tigher than static
+            let config_1h = WindowConfig {
+                window_size: Uint64::from(3_600_000_000_000u64), // 1 hrs
+                division_count: Uint64::from(2u64),              // 30 mins each
+            };
+            limiters
+                .register(
+                    &mut deps.storage,
+                    Scope::denom("denom2"),
+                    "change",
+                    LimiterParams::ChangeLimiter {
+                        window_config: config_1h,
+                        boundary_offset: Decimal::percent(10),
+                    },
+                )
+                .unwrap();
+
+            let upper_limits = limiters.upper_limits(&deps.storage, block_time).unwrap();
+            assert_eq!(
+                upper_limits,
+                vec![
+                    (Scope::denom("denom1"), Decimal::percent(35)),
+                    (Scope::denom("denom2"), Decimal::percent(45)),
+                    (Scope::denom("denom3"), Decimal::percent(30)),
+                    (Scope::asset_group("asset_group"), Decimal::percent(60)),
+                ]
+                .into_iter()
+                .collect()
+            );
+
+            limiters
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![(
+                        Scope::denom("denom2"),
+                        (Decimal::percent(2), Decimal::percent(5)),
+                    )],
+                    block_time,
+                )
+                .unwrap();
+
+            let upper_limits = limiters
+                .upper_limits(&deps.storage, block_time.plus_minutes(10))
+                .unwrap();
+            assert_eq!(
+                upper_limits,
+                vec![
+                    (Scope::denom("denom1"), Decimal::percent(35)),
+                    (Scope::denom("denom2"), Decimal::percent(15)),
+                    (Scope::denom("denom3"), Decimal::percent(30)),
+                    (Scope::asset_group("asset_group"), Decimal::percent(60)),
+                ]
+                .into_iter()
+                .collect()
+            );
+
+            // add even tighter change limiter for denom2
+            let config_1w = WindowConfig {
+                window_size: Uint64::from(25_920_000_000_000u64), // 7 days
+                division_count: Uint64::from(10u64),              // 3.5 days each
+            };
+            limiters
+                .register(
+                    &mut deps.storage,
+                    Scope::denom("denom2"),
+                    "even_tighter",
+                    LimiterParams::ChangeLimiter {
+                        window_config: config_1w,
+                        boundary_offset: Decimal::percent(1),
+                    },
+                )
+                .unwrap();
+
+            limiters
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![(
+                        Scope::denom("denom2"),
+                        (Decimal::percent(10), Decimal::percent(4)),
+                    )],
+                    block_time,
+                )
+                .unwrap();
+
+            let upper_limits = limiters
+                .upper_limits(&deps.storage, block_time.plus_minutes(10))
+                .unwrap();
+            assert_eq!(
+                upper_limits,
+                vec![
+                    (Scope::denom("denom1"), Decimal::percent(35)),
+                    (Scope::denom("denom2"), Decimal::percent(5)),
+                    (Scope::denom("denom3"), Decimal::percent(30)),
+                    (Scope::asset_group("asset_group"), Decimal::percent(60)),
+                ]
+                .into_iter()
+                .collect()
+            );
+
+            // add only change limiter for denom4
+            let config_1d = WindowConfig {
+                window_size: Uint64::from(86_400_000_000_000u64), // 1 day
+                division_count: Uint64::from(1u64),               // 1 day
+            };
+            limiters
+                .register(
+                    &mut deps.storage,
+                    Scope::denom("denom4"),
+                    "only_change",
+                    LimiterParams::ChangeLimiter {
+                        window_config: config_1d,
+                        boundary_offset: Decimal::percent(5),
+                    },
+                )
+                .unwrap();
+
+            limiters
+                .check_limits_and_update(
+                    &mut deps.storage,
+                    vec![(
+                        Scope::denom("denom4"),
+                        (Decimal::percent(10), Decimal::percent(5)),
+                    )],
+                    block_time,
+                )
+                .unwrap();
+
+            let upper_limits = limiters
+                .upper_limits(&deps.storage, block_time.plus_minutes(10))
+                .unwrap();
+            assert_eq!(
+                upper_limits,
+                vec![
+                    (Scope::denom("denom1"), Decimal::percent(35)),
+                    (Scope::denom("denom2"), Decimal::percent(5)),
+                    (Scope::denom("denom3"), Decimal::percent(30)),
+                    (Scope::denom("denom4"), Decimal::percent(10)),
+                    (Scope::asset_group("asset_group"), Decimal::percent(60)),
+                ]
+                .into_iter()
+                .collect()
+            );
         }
     }
 

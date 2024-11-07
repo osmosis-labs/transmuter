@@ -7,6 +7,9 @@ use cosmwasm_std::{
 };
 use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
 use serde::Serialize;
+use transmuter_math::rebalancing_incentive::{
+    calculate_impact_factor, ImpactFactor, ImpactFactorParamGroup,
+};
 
 use crate::{
     alloyed_asset::{swap_from_alloyed, swap_to_alloyed},
@@ -602,6 +605,57 @@ impl Transmuter {
         }
 
         Ok((pool, payload))
+    }
+
+    pub fn rebalancing_incentive_pass<T, F>(
+        &self,
+        deps: DepsMut,
+        block_time: Timestamp,
+        pool: TransmuterPool,
+        run: F,
+    ) -> Result<ImpactFactor, ContractError>
+    where
+        F: FnOnce(TransmuterPool) -> Result<TransmuterPool, ContractError>,
+    {
+        let rebalancing_incentive_config = self.rebalancing_incentive_config.load(deps.storage)?;
+        let ideal_balances = rebalancing_incentive_config.ideal_balances();
+        let upper_limits = self.limiters.upper_limits(deps.storage, block_time)?;
+
+        let prev_normalized_balance = pool.weights()?.unwrap_or_default(); // TODO: should we handle None case?
+
+        let pool = run(pool)?;
+
+        let update_normalized_balance = pool.weights()?.unwrap_or_default();
+
+        let implact_factor_param_groups: Vec<ImpactFactorParamGroup> = pool
+            .scopes()?
+            .into_iter()
+            .map(|scope| {
+                // TODO: check if default make sense in all cases
+                let ideal_balance = ideal_balances.get(&scope).copied().unwrap_or_default();
+
+                ImpactFactorParamGroup::new(
+                    prev_normalized_balance
+                        .get(&scope)
+                        .copied()
+                        .unwrap_or_else(|| Decimal::zero()),
+                    update_normalized_balance
+                        .get(&scope)
+                        .copied()
+                        .unwrap_or_else(|| Decimal::zero()),
+                    ideal_balance.lower,
+                    ideal_balance.upper,
+                    upper_limits
+                        .get(&scope)
+                        .copied()
+                        .unwrap_or_else(|| Decimal::one()),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let impact_factor = calculate_impact_factor(&implact_factor_param_groups)?;
+
+        Ok(impact_factor)
     }
 
     pub fn ensure_valid_swap_fee(&self, swap_fee: Decimal) -> Result<(), ContractError> {

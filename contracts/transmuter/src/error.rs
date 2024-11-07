@@ -4,7 +4,10 @@ use cosmwasm_std::{
 };
 use thiserror::Error;
 
-use crate::{math::MathError, scope::Scope};
+use crate::{
+    math::MathError,
+    scope::{ParseScopeError, Scope},
+};
 
 #[derive(Error, Debug, PartialEq)]
 pub enum ContractError {
@@ -202,6 +205,9 @@ pub enum ContractError {
 
     #[error("Asset group label must not be empty")]
     EmptyAssetGroupLabel {},
+
+    #[error("{0}")]
+    ParseScopeError(#[from] ParseScopeError),
 
     #[error("{0}")]
     OverflowError(#[from] OverflowError),
