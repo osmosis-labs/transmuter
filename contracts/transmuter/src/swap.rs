@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashSet};
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    coin, ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Decimal256, Deps,
-    DepsMut, Env, Response, StdError, Storage, Timestamp, Uint128, Uint256,
+    coin, ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env,
+    Response, StdError, Storage, Timestamp, Uint128, Uint256,
 };
 use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
 use serde::Serialize;

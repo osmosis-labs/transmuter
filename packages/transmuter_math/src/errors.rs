@@ -1,6 +1,6 @@
 use cosmwasm_std::{
-    CheckedFromRatioError, Decimal256RangeExceeded, DecimalRangeExceeded, DivideByZeroError,
-    OverflowError,
+    CheckedFromRatioError, ConversionOverflowError, Decimal256RangeExceeded, DecimalRangeExceeded,
+    DivideByZeroError, OverflowError,
 };
 
 #[derive(thiserror::Error, Debug, PartialEq)]
@@ -35,4 +35,7 @@ pub enum TransmuterMathError {
 
     #[error("{0}")]
     CheckedFromRatioError(#[from] CheckedFromRatioError),
+
+    #[error("{0}")]
+    ConversionOverflowError(#[from] ConversionOverflowError),
 }
