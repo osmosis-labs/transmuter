@@ -4,8 +4,8 @@ use crate::TransmuterMathError;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ImpactFactor {
-    Incentive(Decimal256),
-    Fee(Decimal256),
+    Incentive(Decimal),
+    Fee(Decimal),
     None,
 }
 
@@ -66,6 +66,7 @@ pub fn calculate_impact_factor(
             cumulative_impact_factor_sqaure
                 .checked_div(n)?
                 .sqrt()
+                .try_into()? // safe to convert to Decimal as it's always less than 1
         ))
     } else {
         // add back lost impact_factor_component_square_sum before normalizing
@@ -74,6 +75,7 @@ pub fn calculate_impact_factor(
                 .checked_add(lost_rounded_impact_factor_component_square_sum)?
                 .checked_div(n)?
                 .sqrt()
+                .try_into()? // safe to convert to Decimal as it's always less than 1   
         ))
     }
 }
@@ -864,7 +866,7 @@ mod tests {
                 upper_limit: Decimal::percent(100),
             },
         ],
-        Ok(ImpactFactor::Fee(Decimal256::from_str("0.159344359799774525").unwrap()))
+        Ok(ImpactFactor::Fee(Decimal::from_str("0.159344359799774525").unwrap()))
     )]
     #[case::all_negative_resulted_in_incentive(
         vec![
@@ -883,7 +885,7 @@ mod tests {
                 upper_limit: Decimal::percent(100),
             },
         ],
-        Ok(ImpactFactor::Incentive(Decimal256::from_str("0.045554311678478909").unwrap())))
+        Ok(ImpactFactor::Incentive(Decimal::from_str("0.045554311678478909").unwrap())))
     ]
     #[case::mixed_positive_and_negative_resulted_in_fee(
         vec![
@@ -902,7 +904,7 @@ mod tests {
                 upper_limit: Decimal::percent(100),
             },
         ],
-        Ok(ImpactFactor::Fee(Decimal256::from_str("0.133042080983800009").unwrap()))
+        Ok(ImpactFactor::Fee(Decimal::from_str("0.133042080983800009").unwrap()))
     )]
     #[case::mixed_positive_and_negative_resulted_in_incentive(
         vec![
@@ -921,7 +923,7 @@ mod tests {
                 upper_limit: Decimal::percent(100),
             },
         ],
-        Ok(ImpactFactor::Incentive(Decimal256::from_str("0.055242717280199025").unwrap()))
+        Ok(ImpactFactor::Incentive(Decimal::from_str("0.055242717280199025").unwrap()))
     )]
     #[case::loss_rounding_fee(
         vec![
@@ -940,7 +942,7 @@ mod tests {
                 upper_limit: Decimal::percent(100),
             },
         ],
-        Ok(ImpactFactor::Fee(Decimal256::from_str("0.000000001").unwrap()))    
+        Ok(ImpactFactor::Fee(Decimal::from_str("0.000000001").unwrap()))    
     )]
     #[case::no_loss_rounding_incentive(
         vec![
