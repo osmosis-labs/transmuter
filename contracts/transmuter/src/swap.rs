@@ -1973,6 +1973,7 @@ mod tests {
 
         let rebalancing_incentive_config = RebalancingIncentiveConfig {
             lambda: Decimal::percent(10),
+            prev_lambda: Decimal::percent(0),
             ideal_balances: vec![
                 (
                     Scope::denom("denom1"),
@@ -2072,6 +2073,7 @@ mod tests {
             config,
             RebalancingIncentiveConfig {
                 lambda: Decimal::percent(10),
+                prev_lambda: Decimal::percent(0),
                 ideal_balances: vec![
                     (
                         Scope::denom("denom1"),
@@ -2122,6 +2124,7 @@ mod tests {
 
         let rebalancing_incentive_config = RebalancingIncentiveConfig {
             lambda: Decimal::percent(10),
+            prev_lambda: Decimal::percent(0),
             ideal_balances: vec![
                 (
                     Scope::denom("denom1"),
@@ -2258,6 +2261,7 @@ mod tests {
 
         let rebalancing_incentive_config = RebalancingIncentiveConfig {
             lambda: Decimal::percent(10),
+            prev_lambda: Decimal::percent(0),
             ideal_balances: vec![
                 (
                     Scope::denom("denom1"),
@@ -2355,6 +2359,7 @@ mod tests {
             config,
             RebalancingIncentiveConfig {
                 lambda: Decimal::percent(10),
+                prev_lambda: Decimal::percent(0),
                 ideal_balances: vec![(
                     Scope::denom("denom1"),
                     IdealBalance::new(Decimal::percent(10), Decimal::percent(50)),
@@ -2387,6 +2392,7 @@ mod tests {
 
         let rebalancing_incentive_config = RebalancingIncentiveConfig {
             lambda: Decimal::percent(10),
+            prev_lambda: Decimal::percent(0),
             ideal_balances: vec![
                 (
                     Scope::denom("denom1"),
@@ -2534,6 +2540,7 @@ mod tests {
 
         let rebalancing_incentive_config = RebalancingIncentiveConfig {
             lambda: Decimal::percent(10),
+            prev_lambda: Decimal::percent(0),
             ideal_balances: vec![
                 (
                     Scope::denom("denom1"),

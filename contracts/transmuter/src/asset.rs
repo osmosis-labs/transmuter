@@ -50,7 +50,7 @@ impl AssetConfig {
 
 #[cw_serde]
 pub struct Asset {
-    amount: Uint128,
+    amount: Uint128, // TODO: change to Uint256
     denom: String,
     normalization_factor: Uint128,
     is_corrupted: bool,
