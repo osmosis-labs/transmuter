@@ -1,5 +1,6 @@
 mod alloyed_asset;
 mod asset;
+mod coin256;
 pub mod contract;
 mod corruptable;
 mod error;

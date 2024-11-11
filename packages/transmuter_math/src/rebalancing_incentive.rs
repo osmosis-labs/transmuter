@@ -286,64 +286,64 @@ pub fn calculate_rebalancing_impact(
 /// Incentive = min(λ * f * a_in, p)
 /// ```
 ///
-/// But `λ` can be updated and largely impact incentive comparing to when fee has been collected. To account for `λ` transition, we track `λ_prev` and `p_prev` which is an incentive pool collected with `λ_prev`.
+/// But `λ` can be updated and largely impact incentive comparing to when fee has been collected. To account for `λ` transition, we track `λ_hist` and `p_hist` which is an incentive pool collected with `λ_hist`.
 ///
-/// If there is more `λ` update when the `p_prev` hasn't run out, update the following:
+/// If there is more `λ` update when the `p_hist` hasn't run out, update the following:
 ///
 /// ```text
-/// λ_prev := (λ_prev * p_prev + λ * p) / (p_prev + p)
-/// p_prev := p_prev + p
+/// λ_hist := (λ_hist * p_hist + λ * p) / (p_hist + p)
+/// p_hist := p_hist + p
 /// ```
 ///
 /// So that we keep remembering past `λ` without storing all of the history.
 ///
-/// To calculate the incentive now we need incentive portion that derived from `λ_prev`:
+/// To calculate the incentive now we need incentive portion that derived from `λ_hist`:
 ///
 /// ```text
-/// Incentive_prev = min(λ_prev * f * a_in, p_prev)
+/// Incentive_hist = min(λ_hist * f * a_in, p_hist)
 /// ```
 ///
 /// Then use the remaining portion, adjusted to current `λ`, then capped with current `p`:
 ///
 /// ```text
-/// Incentive_curr = min((λ_prev * f * a_in - Incentive_prev) * (λ / λ_prev), p)
+/// Incentive_curr = min((λ_hist * f * a_in - Incentive_hist) * (λ / λ_hist), p)
 /// ```
 ///
 /// This has the property that:
 ///
-/// If `λ_prev * f * a_in < p_prev` then `Incentive_curr = 0` (meaning `p_prev` hasn't run out).
+/// If `λ_hist * f * a_in < p_hist` then `Incentive_curr = 0` (meaning `p_hist` hasn't run out).
 ///
-/// If `p_prev = 0` then `Incentive_curr = min(λ * f * a_in, p)`
+/// If `p_hist = 0` then `Incentive_curr = min(λ * f * a_in, p)`
 ///
 /// The final incentive function is:
 ///
 /// ```text
-/// Incentive = Incentive_prev + Incentive_curr
+/// Incentive = Incentive_hist + Incentive_curr
 /// ```
 pub fn calculate_rebalancing_incentive(
     impact_factor: Decimal,
     amount_in: Uint128,
-    lambda_prev: Decimal,
+    lambda_hist: Decimal,
     lambda_curr: Decimal,
-    incentive_pool_prev: Uint256,
+    incentive_pool_hist: Uint256,
     incentive_pool_curr: Uint256,
 ) -> Result<Uint128, TransmuterMathError> {
-    // when `lambda_prev` is 0, incentive_pool_prev should be ignored since it should also be 0 as no fee was collected
-    let total_incentive  = if lambda_prev.is_zero() {
+    // when `lambda_hist` is 0, incentive_pool_hist should be ignored since it should also be 0 as no fee was collected
+    let total_incentive  = if lambda_hist.is_zero() {
         let p_curr_incentive = calculate_rebalancing_impact(lambda_curr, impact_factor, amount_in)?.to_uint_floor();
         let p_curr_incentive_capped = p_curr_incentive.min(incentive_pool_curr);
         
         p_curr_incentive_capped
     } else {
-        let p_prev_incentive = calculate_rebalancing_impact(lambda_prev, impact_factor, amount_in)?.to_uint_floor();
-        let p_prev_incentive_capped = p_prev_incentive.min(incentive_pool_prev);
-        let rem = p_prev_incentive.checked_sub(p_prev_incentive_capped)?;
+        let p_hist_incentive = calculate_rebalancing_impact(lambda_hist, impact_factor, amount_in)?.to_uint_floor();
+        let p_hist_incentive_capped = p_hist_incentive.min(incentive_pool_hist);
+        let rem = p_hist_incentive.checked_sub(p_hist_incentive_capped)?;
 
-        // when `incentive_pool_prev` is 0, this becomes `lambda_curr * f * a`
-        let p_curr_incentive = Decimal256::from_atomics(rem, 0)?.checked_mul(lambda_curr.into())?.checked_div(lambda_prev.into())?.to_uint_floor();
+        // when `incentive_pool_hist` is 0, this becomes `lambda_curr * f * a`
+        let p_curr_incentive = Decimal256::from_atomics(rem, 0)?.checked_mul(lambda_curr.into())?.checked_div(lambda_hist.into())?.to_uint_floor();
         let p_curr_incentive_capped = p_curr_incentive.min(incentive_pool_curr);
 
-        p_prev_incentive_capped.checked_add(p_curr_incentive_capped)?
+        p_hist_incentive_capped.checked_add(p_curr_incentive_capped)?
     };
 
 
@@ -512,13 +512,13 @@ mod tests {
     fn test_calculate_rebalancing_incentive(
         #[case] impact_factor: Decimal,
         #[case] amount_in: Uint128,
-        #[case] lambda_prev: Decimal,
+        #[case] lambda_hist: Decimal,
         #[case] lambda_curr: Decimal,
-        #[case] incentive_pool_prev: Uint256,
+        #[case] incentive_pool_hist: Uint256,
         #[case] incentive_pool_curr: Uint256,
         #[case] expected: Result<Uint128, TransmuterMathError>,
     ) {
-        let actual = calculate_rebalancing_incentive(impact_factor, amount_in, lambda_prev, lambda_curr, incentive_pool_prev, incentive_pool_curr);
+        let actual = calculate_rebalancing_incentive(impact_factor, amount_in, lambda_hist, lambda_curr, incentive_pool_hist, incentive_pool_curr);
         assert_eq!(expected, actual);
     }
 
@@ -527,26 +527,26 @@ mod tests {
         fn proptest_incentive_less_than_or_equal_sum_of_pools(
             impact_factor in 0u128..=ONE_DEC_RAW,
             amount_in in any::<u128>(),
-            lambda_prev in 0u128..=ONE_DEC_RAW,
+            lambda_hist in 0u128..=ONE_DEC_RAW,
             lambda_curr in 0u128..=ONE_DEC_RAW,
-            incentive_pool_prev_1 in 0u128..=u128::MAX,
-            incentive_pool_prev_2 in 0u128..=u128::MAX,
+            incentive_pool_hist_1 in 0u128..=u128::MAX,
+            incentive_pool_hist_2 in 0u128..=u128::MAX,
             incentive_pool_curr_1 in 0u128..=u128::MAX,
             incentive_pool_curr_2 in 0u128..=u128::MAX,
         ) {
-            let incentive_pool_prev = Uint256::from(incentive_pool_prev_1).checked_add(Uint256::from(incentive_pool_prev_2)).unwrap();
+            let incentive_pool_hist = Uint256::from(incentive_pool_hist_1).checked_add(Uint256::from(incentive_pool_hist_2)).unwrap();
             let incentive_pool_curr = Uint256::from(incentive_pool_curr_1).checked_add(Uint256::from(incentive_pool_curr_2)).unwrap();
             let result = calculate_rebalancing_incentive(
                 Decimal::raw(impact_factor),
                 Uint128::new(amount_in),
-                Decimal::raw(lambda_prev),
+                Decimal::raw(lambda_hist),
                 Decimal::raw(lambda_curr),
-                Uint256::from(incentive_pool_prev),
+                Uint256::from(incentive_pool_hist),
                 Uint256::from(incentive_pool_curr),
             );
 
             if let Ok(incentive) = result {
-                let total_incentive_pool = Uint512::from(incentive_pool_prev).checked_add(Uint512::from(incentive_pool_curr)).unwrap();
+                let total_incentive_pool = Uint512::from(incentive_pool_hist).checked_add(Uint512::from(incentive_pool_curr)).unwrap();
                 assert!(Uint512::from(incentive) <= total_incentive_pool);
             }
         }
@@ -556,21 +556,21 @@ mod tests {
         fn proptest_incentive_must_always_succeed(
             impact_factor in 0u128..=ONE_DEC_RAW,
             amount_in in any::<u128>(),
-            lambda_prev in 0u128..=ONE_DEC_RAW,
+            lambda_hist in 0u128..=ONE_DEC_RAW,
             lambda_curr in 0u128..=ONE_DEC_RAW,
-            incentive_pool_prev_1 in 0u128..=u128::MAX,
-            incentive_pool_prev_2 in 0u128..=u128::MAX,
+            incentive_pool_hist_1 in 0u128..=u128::MAX,
+            incentive_pool_hist_2 in 0u128..=u128::MAX,
             incentive_pool_curr_1 in 0u128..=u128::MAX,
             incentive_pool_curr_2 in 0u128..=u128::MAX,
         ) {
-            let incentive_pool_prev = Uint256::from(incentive_pool_prev_1).checked_add(Uint256::from(incentive_pool_prev_2)).unwrap();
+            let incentive_pool_hist = Uint256::from(incentive_pool_hist_1).checked_add(Uint256::from(incentive_pool_hist_2)).unwrap();
             let incentive_pool_curr = Uint256::from(incentive_pool_curr_1).checked_add(Uint256::from(incentive_pool_curr_2)).unwrap();
             calculate_rebalancing_incentive(
                 Decimal::raw(impact_factor),
                 Uint128::new(amount_in),
-                Decimal::raw(lambda_prev),
+                Decimal::raw(lambda_hist),
                 Decimal::raw(lambda_curr),
-                Uint256::from(incentive_pool_prev),
+                Uint256::from(incentive_pool_hist),
                 Uint256::from(incentive_pool_curr),
             ).unwrap();
         }

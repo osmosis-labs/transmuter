@@ -5,6 +5,7 @@ use cosmwasm_std::{
 use thiserror::Error;
 
 use crate::{
+    coin256::Coin256,
     math::MathError,
     scope::{ParseScopeError, Scope},
 };
@@ -100,7 +101,10 @@ pub enum ContractError {
     ExcessiveRequiredTokenIn { limit: Uint128, required: Uint128 },
 
     #[error("Unable to deduct from incentive pool: required: {required}, available: {available}")]
-    UnableToDeductFromIncentivePool { required: Coin, available: Coin },
+    UnableToDeductFromIncentivePool {
+        required: Coin256,
+        available: Coin256,
+    },
 
     #[error("The pool is currently inactive")]
     InactivePool {},
