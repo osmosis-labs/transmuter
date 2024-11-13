@@ -37,9 +37,6 @@ pub struct RebalancingIncentiveConfig {
     /// The lambda parameter for scaling the fee \in λ ∈ (0,1], default is 0
     pub lambda: Decimal,
 
-    /// Previously set lambda value, used for tracking transition of lambda while calculating incentive
-    pub prev_lambda: Decimal,
-
     /// Ideal balance bounds for each asset
     pub ideal_balances: HashMap<Scope, IdealBalance>,
 }
@@ -53,7 +50,6 @@ impl RebalancingIncentiveConfig {
             }
         );
 
-        self.prev_lambda = self.lambda;
         self.lambda = new_lambda;
         Ok(self)
     }
@@ -135,16 +131,6 @@ mod tests {
     }
 
     #[test]
-    fn test_set_lambda_update_prev_lambda() {
-        let mut config = RebalancingIncentiveConfig::default();
-        config.set_lambda(Decimal::percent(50)).unwrap();
-        assert_eq!(config.prev_lambda, Decimal::percent(0));
-
-        config.set_lambda(Decimal::percent(75)).unwrap();
-        assert_eq!(config.prev_lambda, Decimal::percent(50));
-    }
-
-    #[test]
     fn test_set_ideal_balances() {
         let existing_ideal_balances = vec![
             (
@@ -159,7 +145,6 @@ mod tests {
 
         let mut config = RebalancingIncentiveConfig {
             lambda: Decimal::percent(0),
-            prev_lambda: Decimal::percent(0),
             ideal_balances: existing_ideal_balances.clone().into_iter().collect(),
         };
 
@@ -361,7 +346,6 @@ mod tests {
     fn test_remove_ideal_balance() {
         let mut config = RebalancingIncentiveConfig {
             lambda: Decimal::percent(0),
-            prev_lambda: Decimal::percent(0),
             ideal_balances: vec![
                 (
                     Scope::Denom("existing_denom".to_string()),

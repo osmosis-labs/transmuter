@@ -1,6 +1,7 @@
 use cosmwasm_std::{
     CheckedFromRatioError, CheckedMultiplyRatioError, Coin, ConversionOverflowError, Decimal,
-    DecimalRangeExceeded, DivideByZeroError, OverflowError, StdError, Timestamp, Uint128, Uint64,
+    Decimal256RangeExceeded, DecimalRangeExceeded, DivideByZeroError, OverflowError, StdError,
+    Timestamp, Uint128, Uint64,
 };
 use thiserror::Error;
 
@@ -230,6 +231,10 @@ pub enum ContractError {
 
     #[error("{0}")]
     DecimalRangeExceeded(#[from] DecimalRangeExceeded),
+
+    #[error("{0}")]
+    Decimal256RangeExceeded(#[from] Decimal256RangeExceeded),
+
     #[error("{0}")]
     MathError(#[from] MathError),
 
