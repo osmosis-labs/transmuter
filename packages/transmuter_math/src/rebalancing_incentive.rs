@@ -338,7 +338,7 @@ pub fn calculate_rebalancing_incentive(
         let p_hist_incentive = calculate_rebalancing_impact(lambda_hist, impact_factor, amount_in)?.to_uint_floor();
         let p_hist_incentive_capped = p_hist_incentive.min(incentive_pool_hist);
         let rem = p_hist_incentive.checked_sub(p_hist_incentive_capped)?;
-
+        
         // when `incentive_pool_hist` is 0, this becomes `lambda_curr * f * a`
         let p_curr_incentive = Decimal256::from_atomics(rem, 0)?.checked_mul(lambda_curr.into())?.checked_div(lambda_hist.into())?.to_uint_floor();
         let p_curr_incentive_capped = p_curr_incentive.min(incentive_pool_curr);

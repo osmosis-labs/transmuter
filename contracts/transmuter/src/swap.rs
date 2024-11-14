@@ -634,7 +634,7 @@ impl Transmuter {
         let alloyed_normalization_factor =
             self.alloyed_asset.get_normalization_factor(deps.storage)?;
 
-        let prev_normalized_balance = pool.weights()?.unwrap_or_default(); // TODO: should we handle None case? -> write test with that case
+        let prev_normalized_balance = pool.weights()?.unwrap_or_default();
 
         let pool = run(pool)?;
 
@@ -2938,8 +2938,66 @@ mod tests {
                     .collect(),
             }
         );
+
+        // make incentive pool contains old lambda
+        transmuter
+            .incentive_pool
+            .save(
+                &mut deps.storage,
+                &IncentivePool {
+                    balances: vec![(
+                        "denom2".to_string(),
+                        IncentivePoolBalance {
+                            historical_lambda: Decimal::percent(20),
+                            historical_lambda_collected_balance: Uint256::from(1000000u128),
+                            current_lambda_collected_balance: Uint256::from(
+                                1000000000000000000000000u128,
+                            ),
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                },
+            )
+            .unwrap();
+
+        let non_ideal_balance_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(100000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(7000000000000000u128), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(20000000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
+            )]),
+        };
+
+        let action = transmuter
+            .rebalancing_incentive_pass(
+                deps.as_mut(),
+                block_time,
+                &coins(400000000000000u128, "denom1"),
+                "denom2",
+                non_ideal_balance_pool,
+                |mut pool| {
+                    pool.transmute(
+                        AmountConstraint::ExactIn(400000000000000u128.into()),
+                        "denom1",
+                        "denom2",
+                    )?;
+                    Ok(pool)
+                },
+            )
+            .unwrap();
+
+        // incentive_hist = min(0.2 * 0.28125 * 400000000000000 * 10, 1000000) = 1000000
+        // rem = 0.2 * 0.28125 * 400000000000000 * 10 - 1000000 = 224,999,999,000,000
+        // incentive_curr = min(224,999,999,000,000 * 0.1 / 0.2, 1000000000000000000000000) = 112,499,999,500,000
+        // incentive = 112,499,999,500,000 + 1000000 = 112,500,000,500,000
+        assert_eq!(
+            action,
+            RebalancingIncentiveAction::DistributeIncentive(coin(112500000500000u128, "denom2"))
+        );
     }
-    // TODO: test these cases
-    // - move into asset group ideal balance is incentivized
-    // - incentive pool with old lambda
 }
