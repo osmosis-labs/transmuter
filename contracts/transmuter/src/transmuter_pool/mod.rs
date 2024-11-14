@@ -11,8 +11,14 @@ use std::collections::{BTreeMap, HashSet};
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{ensure, Coin, Uint128, Uint64};
+use itertools::Itertools;
 
-use crate::{asset::Asset, scope::Scope, ContractError};
+use crate::{
+    asset::{convert_amount, Asset, Rounding},
+    math::lcm,
+    scope::Scope,
+    ContractError,
+};
 
 pub use asset_group::AssetGroup;
 pub use transmute::AmountConstraint;
@@ -140,11 +146,94 @@ impl TransmuterPool {
 
         Ok(denom_scopes.chain(asset_group_scopes).collect())
     }
+
+    /// Normalize coins to the standard normalization factor.
+    pub fn normalize_coins(
+        &self,
+        coins: &[Coin],
+        alloyed_denom: String,
+        alloyed_normalization_factor: Uint128,
+    ) -> Result<Vec<(String, Uint128)>, ContractError> {
+        let std_norm_factor = lcm(
+            self.underlying_assets_norm_factor()?,
+            alloyed_normalization_factor,
+        )?;
+        let normalization_factor_by_denom: BTreeMap<String, Uint128> = self
+            .pool_assets
+            .clone()
+            .into_iter()
+            .map(|asset| (asset.denom().to_string(), asset.normalization_factor()))
+            .chain(std::iter::once((
+                alloyed_denom,
+                alloyed_normalization_factor,
+            )))
+            .collect();
+
+        coins
+            .iter()
+            .map(|c| {
+                let value = convert_amount(
+                    c.amount,
+                    normalization_factor_by_denom
+                        .get(&c.denom.to_string())
+                        .copied()
+                        .ok_or_else(|| ContractError::InvalidTransmuteDenom {
+                            denom: c.denom.to_string(),
+                            expected_denom: normalization_factor_by_denom.keys().cloned().collect(),
+                        })?,
+                    std_norm_factor,
+                    &Rounding::Down, // This shouldn't matter since the target is LCM
+                )?;
+
+                Ok((c.denom.to_string(), value))
+            })
+            .collect()
+    }
+
+    /// Denormalize std normalized amount to the target denom amount.
+    pub fn denormalize_amount(
+        &self,
+        std_amount: Uint128,
+        target_denom: String,
+        alloyed_denom: String,
+        alloyed_normalization_factor: Uint128,
+    ) -> Result<Uint128, ContractError> {
+        let std_norm_factor = lcm(
+            self.underlying_assets_norm_factor()?,
+            alloyed_normalization_factor,
+        )?;
+
+        let target_norm_factor = if target_denom == alloyed_denom {
+            alloyed_normalization_factor
+        } else {
+            self.pool_assets
+                .iter()
+                .find(|asset| asset.denom() == target_denom)
+                .ok_or_else(|| ContractError::InvalidTransmuteDenom {
+                    denom: target_denom.clone(),
+                    expected_denom: self
+                        .pool_assets
+                        .iter()
+                        .map(|asset| asset.denom().to_string())
+                        .chain(std::iter::once(alloyed_denom.clone()))
+                        .sorted()
+                        .collect(),
+                })?
+                .normalization_factor()
+        };
+
+        convert_amount(
+            std_amount,
+            std_norm_factor,
+            target_norm_factor,
+            &Rounding::Down, // target is LCM so this shouldn't matter
+        )
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use cosmwasm_std::Uint128;
+    use cosmwasm_std::{coin, Uint128};
 
     use super::*;
 
@@ -237,5 +326,113 @@ mod tests {
         ];
 
         assert_eq!(scopes, expected_scopes);
+    }
+
+    #[test]
+    fn test_normalize_coins() {
+        let assets = vec![
+            Asset::new(1000u128, "axlusdc", 10u128).unwrap(),
+            Asset::new(2000u128, "whusdc", 100u128).unwrap(),
+        ];
+        let transmuter_pool = TransmuterPool::new(assets).unwrap();
+
+        let coins = vec![coin(500u128, "axlusdc"), coin(1000u128, "whusdc")];
+
+        let normalized_coins = transmuter_pool
+            .normalize_coins(&coins, "alloyed".to_string(), Uint128::one())
+            .unwrap();
+        let expected_normalized_coins = vec![
+            ("axlusdc".to_string(), Uint128::new(5000)),
+            ("whusdc".to_string(), Uint128::new(1000)),
+        ];
+
+        assert_eq!(normalized_coins, expected_normalized_coins);
+
+        // denormalize back
+        let denormalized_coins = expected_normalized_coins
+            .into_iter()
+            .map(|(denom, amount)| {
+                let amount = transmuter_pool
+                    .denormalize_amount(
+                        amount,
+                        denom.clone(),
+                        "alloyed".to_string(),
+                        Uint128::one(),
+                    )
+                    .unwrap();
+                coin(amount.u128(), denom)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(denormalized_coins, coins);
+
+        // with alloyed denom
+        let coins = vec![
+            coin(500u128, "axlusdc"),
+            coin(1000u128, "whusdc"),
+            coin(1000u128, "alloyed"),
+        ];
+        let normalized_coins = transmuter_pool
+            .normalize_coins(&coins, "alloyed".to_string(), Uint128::one())
+            .unwrap();
+        let expected_normalized_coins = vec![
+            ("axlusdc".to_string(), Uint128::new(5000)),
+            ("whusdc".to_string(), Uint128::new(1000)),
+            ("alloyed".to_string(), Uint128::new(100000)),
+        ];
+
+        assert_eq!(normalized_coins, expected_normalized_coins);
+
+        // denormalize back
+        let denormalized_coins = expected_normalized_coins
+            .into_iter()
+            .map(|(denom, amount)| {
+                let amount = transmuter_pool
+                    .denormalize_amount(
+                        amount,
+                        denom.clone(),
+                        "alloyed".to_string(),
+                        Uint128::one(),
+                    )
+                    .unwrap();
+                coin(amount.u128(), denom)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(denormalized_coins, coins);
+
+        // Test with unknown denom
+        let unknown_coins = vec![coin(1000u128, "whusdc"), coin(500u128, "unknown")];
+        assert_eq!(
+            transmuter_pool
+                .normalize_coins(&unknown_coins, "alloyed".to_string(), Uint128::one())
+                .unwrap_err(),
+            ContractError::InvalidTransmuteDenom {
+                denom: "unknown".to_string(),
+                expected_denom: vec![
+                    "alloyed".to_string(),
+                    "axlusdc".to_string(),
+                    "whusdc".to_string()
+                ],
+            }
+        );
+
+        // denormalize unknown denom
+        assert_eq!(
+            transmuter_pool
+                .denormalize_amount(
+                    Uint128::new(1000),
+                    "unknown".to_string(),
+                    "alloyed".to_string(),
+                    Uint128::one(),
+                )
+                .unwrap_err(),
+            ContractError::InvalidTransmuteDenom {
+                denom: "unknown".to_string(),
+                expected_denom: vec![
+                    "alloyed".to_string(),
+                    "axlusdc".to_string(),
+                    "whusdc".to_string(),
+                ],
+            }
+        );
     }
 }

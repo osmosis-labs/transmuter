@@ -111,7 +111,7 @@ impl TransmuterPool {
     where
         T: FromIterator<(String, Uint128)>,
     {
-        let std_norm_factor = self.std_norm_factor()?;
+        let underlying_assets_norm_factor = self.underlying_assets_norm_factor()?;
 
         self.pool_assets
             .iter()
@@ -119,7 +119,7 @@ impl TransmuterPool {
                 let value = convert_amount(
                     asset.amount(),
                     asset.normalization_factor(),
-                    std_norm_factor,
+                    underlying_assets_norm_factor,
                     &Rounding::Down, // This shouldn't matter since the target is LCM
                 )?;
 
@@ -128,7 +128,11 @@ impl TransmuterPool {
             .collect()
     }
 
-    fn std_norm_factor(&self) -> Result<Uint128, ContractError> {
+    /// Calculate the underlying assets normalization factor for the pool.
+    ///
+    /// The underlying assets normalization factor is the least common multiple of all
+    /// normalization factors in the pool (excluding the alloyed asset).
+    pub fn underlying_assets_norm_factor(&self) -> Result<Uint128, ContractError> {
         Ok(lcm_from_iter(
             self.pool_assets
                 .iter()

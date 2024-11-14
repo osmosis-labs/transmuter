@@ -40,7 +40,7 @@ pub fn lcm_from_iter(iter: impl IntoIterator<Item = Uint128>) -> MathResult<Uint
     iter.try_fold(Uint128::one(), lcm)
 }
 
-fn lcm(n: Uint128, m: Uint128) -> MathResult<Uint128> {
+pub fn lcm(n: Uint128, m: Uint128) -> MathResult<Uint128> {
     n.checked_multiply_ratio(m, gcd(n, m)?).map_err(Into::into)
 }
 
