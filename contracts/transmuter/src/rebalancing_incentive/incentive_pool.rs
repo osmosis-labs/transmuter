@@ -157,32 +157,27 @@ impl IncentivePool {
     }
 
     /// Deducts the given coin from the pool.
-    pub fn deduct(
-        &mut self,
-        coins: impl IntoIterator<Item = Coin>,
-    ) -> Result<&mut Self, ContractError> {
-        // deduct the coins from the pool
-        for c in coins.into_iter() {
-            let Some(collected_fees) = self.balances.get_mut(&c.denom) else {
-                return Err(ContractError::UnableToDeductFromIncentivePool {
-                    required: c.clone().into(),
-                    available: Coin256::zero(&c.denom),
-                });
-            };
+    pub fn deduct(&mut self, coin: Coin) -> Result<&mut Self, ContractError> {
+        // deduct the coin from the pool
+        let Some(collected_fees) = self.balances.get_mut(&coin.denom) else {
+            return Err(ContractError::UnableToDeductFromIncentivePool {
+                required: coin.clone().into(),
+                available: Coin256::zero(&coin.denom),
+            });
+        };
 
-            // try to deduct the coin from the pool
-            if let Err(NotEnoughBalanceError { available }) = collected_fees.deduct(c.amount.into())
-            {
-                return Err(ContractError::UnableToDeductFromIncentivePool {
-                    required: c.clone().into(),
-                    available: Coin256::new(available, &c.denom),
-                });
-            }
+        // try to deduct the coin from the pool
+        if let Err(NotEnoughBalanceError { available }) = collected_fees.deduct(coin.amount.into())
+        {
+            return Err(ContractError::UnableToDeductFromIncentivePool {
+                required: coin.clone().into(),
+                available: Coin256::new(available, &coin.denom),
+            });
+        }
 
-            // if the collected fees is zero, remove the coin from the pool
-            if collected_fees.is_zero() {
-                self.balances.remove(&c.denom);
-            }
+        // if the collected fees is zero, remove the coin from the pool
+        if collected_fees.is_zero() {
+            self.balances.remove(&coin.denom);
         }
 
         Ok(self)
@@ -254,25 +249,25 @@ mod tests {
         pool.collect(coin(200, "uusdc")).unwrap();
 
         // Deduct 50 uusdt
-        pool.deduct(vec![coin(50, "uusdt")]).unwrap();
+        pool.deduct(coin(50, "uusdt")).unwrap();
         assert_eq!(
             pool.balances.get("uusdt"),
             Some(&IncentivePoolBalance::new(50u128))
         );
 
         // Deduct another 50 uusdt, should be zero now
-        pool.deduct(vec![coin(50, "uusdt")]).unwrap();
+        pool.deduct(coin(50, "uusdt")).unwrap();
         assert_eq!(pool.balances.get("uusdt"), None);
 
         // Deduct 100 uusdc
-        pool.deduct(vec![coin(100, "uusdc")]).unwrap();
+        pool.deduct(coin(100, "uusdc")).unwrap();
         assert_eq!(
             pool.balances.get("uusdc"),
             Some(&IncentivePoolBalance::new(100u128))
         );
 
         // Try to deduct more than available, should return an error
-        let err = pool.deduct(vec![coin(150, "uusdc")]).unwrap_err();
+        let err = pool.deduct(coin(150, "uusdc")).unwrap_err();
         assert_eq!(
             err,
             ContractError::UnableToDeductFromIncentivePool {
@@ -308,7 +303,7 @@ mod tests {
         };
 
         // Deduct below historical balance
-        pool.deduct(vec![coin(50, "uusdt")]).unwrap();
+        pool.deduct(coin(50, "uusdt")).unwrap();
         assert_eq!(
             pool.balances.get("uusdt"),
             Some(&IncentivePoolBalance {
@@ -319,7 +314,7 @@ mod tests {
         );
 
         // Deduct over historical balance
-        pool.deduct(vec![coin(150, "uusdt")]).unwrap();
+        pool.deduct(coin(150, "uusdt")).unwrap();
         assert_eq!(
             pool.balances.get("uusdt"),
             Some(&IncentivePoolBalance {

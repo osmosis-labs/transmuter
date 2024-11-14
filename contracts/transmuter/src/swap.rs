@@ -628,7 +628,6 @@ impl Transmuter {
         F: FnOnce(TransmuterPool) -> Result<TransmuterPool, ContractError>,
     {
         let rebalancing_incentive_config = self.rebalancing_incentive_config.load(deps.storage)?;
-        let incentive_pool = self.incentive_pool.load(deps.storage)?;
         let ideal_balances = rebalancing_incentive_config.ideal_balances();
         let upper_limits = self.limiters.upper_limits(deps.storage, block_time)?;
         let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
@@ -670,6 +669,7 @@ impl Transmuter {
 
         match impact_factor {
             ImpactFactor::Fee(impact_factor) => {
+                let mut incentive_pool = self.incentive_pool.load(deps.storage)?;
                 if tokens_in.is_empty() {
                     return Ok(RebalancingIncentiveAction::None);
                 }
@@ -685,12 +685,18 @@ impl Transmuter {
                     .try_into()?; // safe to convert to Uint128 as it's always less than the token amount
 
                     let fee_coin = coin(fee_amount.u128(), token_in.denom.clone());
+
+                    incentive_pool.collect(fee_coin.clone())?;
                     fee_coins.push(fee_coin);
                 }
+
+                self.incentive_pool.save(deps.storage, &incentive_pool)?;
 
                 Ok(RebalancingIncentiveAction::CollectFee(fee_coins))
             }
             ImpactFactor::Incentive(impact_factor) => {
+                let mut incentive_pool = self.incentive_pool.load(deps.storage)?;
+
                 let token_out_incentive_balance = incentive_pool
                     .balances
                     .get(token_out_denom)
@@ -734,10 +740,14 @@ impl Transmuter {
                     incentive_pool_curr,
                 )?;
 
-                Ok(RebalancingIncentiveAction::DistributeIncentive(coin(
-                    incentive_amount.u128(),
-                    token_out_denom.to_string(),
-                )))
+                let incentive_coin = coin(incentive_amount.u128(), token_out_denom.to_string());
+
+                incentive_pool.deduct(incentive_coin.clone())?;
+                self.incentive_pool.save(deps.storage, &incentive_pool)?;
+
+                Ok(RebalancingIncentiveAction::DistributeIncentive(
+                    incentive_coin,
+                ))
             }
             ImpactFactor::None => Ok(RebalancingIncentiveAction::None),
         }
@@ -2595,6 +2605,9 @@ mod tests {
 
         assert_eq!(action, RebalancingIncentiveAction::None);
 
+        let incentive_pool = transmuter.incentive_pool.load(&deps.storage).unwrap();
+        assert_eq!(incentive_pool, IncentivePool::default());
+
         let rebalancing_incentive_config = RebalancingIncentiveConfig {
             lambda: Decimal::percent(10),
             ideal_balances: vec![
@@ -2634,6 +2647,9 @@ mod tests {
 
         assert_eq!(action, RebalancingIncentiveAction::None);
 
+        let incentive_pool = transmuter.incentive_pool.load(&deps.storage).unwrap();
+        assert_eq!(incentive_pool, IncentivePool::default());
+
         // move out of ideal balance less than lower bound incurs fee
         let tokens_in = vec![coin(500000000000000u128, "alloyed")]; // doesn't matter for this case
         let action = transmuter
@@ -2655,6 +2671,19 @@ mod tests {
         assert_eq!(
             action,
             RebalancingIncentiveAction::CollectFee(coins(35355339059328u128, "alloyed"))
+        );
+
+        let incentive_pool = transmuter.incentive_pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            incentive_pool,
+            IncentivePool {
+                balances: vec![(
+                    "alloyed".to_string(),
+                    IncentivePoolBalance::new(35355339059328u128)
+                )]
+                .into_iter()
+                .collect(),
+            }
         );
 
         // more token ins
@@ -2687,6 +2716,29 @@ mod tests {
             ])
         );
 
+        let incentive_pool = transmuter.incentive_pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            incentive_pool,
+            IncentivePool {
+                balances: vec![
+                    (
+                        "alloyed".to_string(),
+                        IncentivePoolBalance::new(35355339059328u128)
+                    ),
+                    (
+                        "denom1".to_string(),
+                        IncentivePoolBalance::new(605510723214u128)
+                    ),
+                    (
+                        "denom2".to_string(),
+                        IncentivePoolBalance::new(121102144643u128)
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            }
+        );
+
         let add_more_denom_1_tokens_in = vec![coin(1000000000000000u128, "denom1")];
         let add_more_denom_1 = |mut pool: TransmuterPool| {
             pool.join_pool(&add_more_denom_1_tokens_in)?;
@@ -2708,6 +2760,29 @@ mod tests {
         assert_eq!(
             action,
             RebalancingIncentiveAction::CollectFee(coins(7031250000000u128, "denom1"))
+        );
+
+        let incentive_pool = transmuter.incentive_pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            incentive_pool,
+            IncentivePool {
+                balances: vec![
+                    (
+                        "alloyed".to_string(),
+                        IncentivePoolBalance::new(35355339059328u128)
+                    ),
+                    (
+                        "denom1".to_string(),
+                        IncentivePoolBalance::new(605510723214u128 + 7031250000000u128)
+                    ),
+                    (
+                        "denom2".to_string(),
+                        IncentivePoolBalance::new(121102144643u128)
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            }
         );
 
         // having limiter makes the fee more dramatic
@@ -2737,6 +2812,37 @@ mod tests {
             action,
             RebalancingIncentiveAction::CollectFee(coins(50000000000000u128, "denom1"))
         );
+
+        let incentive_pool = transmuter.incentive_pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            incentive_pool,
+            IncentivePool {
+                balances: vec![
+                    (
+                        "alloyed".to_string(),
+                        IncentivePoolBalance::new(35355339059328u128)
+                    ),
+                    (
+                        "denom1".to_string(),
+                        IncentivePoolBalance::new(
+                            605510723214u128 + 7031250000000u128 + 50000000000000u128
+                        )
+                    ),
+                    (
+                        "denom2".to_string(),
+                        IncentivePoolBalance::new(121102144643u128)
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            }
+        );
+
+        // reset incentive pool
+        transmuter
+            .incentive_pool
+            .save(&mut deps.storage, &IncentivePool::default())
+            .unwrap();
 
         // try collect fee on moves that equal to upcoming incentivize move
         let non_ideal_balance_pool = TransmuterPool {
@@ -2775,6 +2881,19 @@ mod tests {
             RebalancingIncentiveAction::CollectFee(vec![coin(126132533998, "alloyed")]) // ceiled
         );
 
+        let incentive_pool = transmuter.incentive_pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            incentive_pool,
+            IncentivePool {
+                balances: vec![(
+                    "alloyed".to_string(),
+                    IncentivePoolBalance::new(126132533998u128)
+                ),]
+                .into_iter()
+                .collect(),
+            }
+        );
+
         // move into denom ideal balance is incentivized
         let non_ideal_balance_pool = TransmuterPool {
             pool_assets: vec![
@@ -2788,25 +2907,6 @@ mod tests {
             )]),
         };
 
-        // abundance of alloyed in incentive equals to collected fee above
-        transmuter
-            .incentive_pool
-            .save(
-                &mut deps.storage,
-                &IncentivePool {
-                    balances: vec![(
-                        "alloyed".to_string(),
-                        IncentivePoolBalance {
-                            historical_lambda: Decimal::percent(0),
-                            historical_lambda_collected_balance: Uint256::zero(),
-                            current_lambda_collected_balance: Uint256::from(126132533998u128),
-                        },
-                    )]
-                    .into_iter()
-                    .collect(),
-                },
-            )
-            .unwrap();
         let tokens_in = vec![coin(19000000000000000u128, "denom3")];
         let action = transmuter
             .rebalancing_incentive_pass(
@@ -2828,9 +2928,18 @@ mod tests {
             action,
             RebalancingIncentiveAction::DistributeIncentive(coin(126132533997, "alloyed"))
         );
+
+        let incentive_pool = transmuter.incentive_pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            incentive_pool,
+            IncentivePool {
+                balances: vec![("alloyed".to_string(), IncentivePoolBalance::new(1u128))]
+                    .into_iter()
+                    .collect(),
+            }
+        );
     }
     // TODO: test these cases
     // - move into asset group ideal balance is incentivized
     // - incentive pool with old lambda
-    // - make sure incentive is updated correctly
 }
