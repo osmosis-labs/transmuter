@@ -505,39 +505,47 @@ fn test_exit_pool_greater_than_their_shares_should_fail() {
     struct Case {
         join: Vec<Coin>,
         exit: Vec<Coin>,
+        other_shares: Vec<Coin>,
     }
 
     let cases = vec![
         Case {
             join: vec![coin(1, "denoma")],
             exit: vec![coin(2, "denoma")],
+            other_shares: vec![coin(1000, "denoma")],
         },
         Case {
             join: vec![coin(100_000_000, "denoma")],
             exit: vec![coin(100_000_001, "denoma")],
+            other_shares: vec![coin(1000, "denoma")],
         },
         Case {
             join: vec![coin(u128::MAX - 1, "denoma")],
             exit: vec![coin(u128::MAX, "denoma")],
-        },
-        Case {
-            join: vec![
-                coin(u128::MAX - 100_000_000, "denoma"),
-                coin(99_999_999, "denomb"),
-            ],
-            exit: vec![coin(u128::MAX, "denoma")],
+            other_shares: vec![coin(1, "denoma")],
         },
     ];
 
     for case in cases {
         let app = OsmosisTestApp::new();
 
-        // create denom
-        app.init_account(&[coin(1, "denoma"), coin(1, "denomb")])
-            .unwrap();
+        // create required denoms if not part of join or other shares
+        let denoms = vec![case.join.clone(), case.other_shares.clone()]
+            .concat()
+            .iter()
+            .map(|coin| coin.denom.clone())
+            .collect::<Vec<_>>();
+
+        if !denoms.contains(&"denoma".to_string()) {
+            app.init_account(&[coin(1, "denoma")]).unwrap();
+        }
+        if !denoms.contains(&"denomb".to_string()) {
+            app.init_account(&[coin(1, "denomb")]).unwrap();
+        }
 
         let t = TestEnvBuilder::new()
             .with_account("addr", case.join.clone())
+            .with_account("other", case.other_shares.clone())
             .with_instantiate_msg(InstantiateMsg {
                 pool_asset_configs: vec![
                     AssetConfig::from_denom_str("denoma"),
@@ -549,6 +557,17 @@ fn test_exit_pool_greater_than_their_shares_should_fail() {
                 moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
             })
             .build(&app);
+
+        // let other join pool
+        if !case.other_shares.is_empty() {
+            t.contract
+                .execute(
+                    &ExecMsg::JoinPool {},
+                    &case.other_shares,
+                    &t.accounts["other"],
+                )
+                .unwrap();
+        }
 
         t.contract
             .execute(&ExecMsg::JoinPool {}, &case.join, &t.accounts["addr"])

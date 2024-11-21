@@ -630,12 +630,15 @@ impl Limiters {
         let mut upper_limits = BTreeMap::new();
         for ((scope_str, _), limiter) in self.list_limiters(storage)?.into_iter() {
             let scope = scope_str.parse::<Scope>()?;
+            let max_cap = Decimal::one();
             match limiter {
                 Limiter::StaticLimiter(limiter) => {
                     upper_limits
                         .entry(scope)
-                        .and_modify(|ul: &mut Decimal| *ul = (*ul).min(limiter.upper_limit))
-                        .or_insert(limiter.upper_limit);
+                        .and_modify(|ul: &mut Decimal| {
+                            *ul = (*ul).min(limiter.upper_limit).min(max_cap)
+                        })
+                        .or_insert(limiter.upper_limit.min(max_cap));
                 }
                 Limiter::ChangeLimiter(change_limiter) => {
                     let upper_limit = match change_limiter.upper_limit(block_time)? {
@@ -645,10 +648,10 @@ impl Limiters {
 
                     upper_limits
                         .entry(scope)
-                        .and_modify(|ul: &mut Decimal| *ul = (*ul).min(upper_limit))
-                        .or_insert(upper_limit);
+                        .and_modify(|ul: &mut Decimal| *ul = (*ul).min(upper_limit).min(max_cap))
+                        .or_insert(upper_limit.min(max_cap));
                 }
-            }
+            };
         }
 
         Ok(upper_limits)

@@ -1,7 +1,7 @@
 use cosmwasm_std::{
-    CheckedFromRatioError, CheckedMultiplyRatioError, Coin, ConversionOverflowError, Decimal,
-    Decimal256RangeExceeded, DecimalRangeExceeded, DivideByZeroError, OverflowError, StdError,
-    Timestamp, Uint128, Uint64,
+    CheckedFromRatioError, CheckedMultiplyRatioError, Coin, CoinsError, ConversionOverflowError,
+    Decimal, Decimal256RangeExceeded, DecimalRangeExceeded, DivideByZeroError, OverflowError,
+    StdError, Timestamp, Uint128, Uint64,
 };
 use thiserror::Error;
 
@@ -239,7 +239,10 @@ pub enum ContractError {
     MathError(#[from] MathError),
 
     #[error("{0}")]
-    TrasnmuterMathError(#[from] transmuter_math::TransmuterMathError),
+    CoinsError(#[from] CoinsError),
+
+    #[error("{0}")]
+    TransmuterMathError(#[from] transmuter_math::TransmuterMathError),
 
     /// This error should never occur
     #[error("")]

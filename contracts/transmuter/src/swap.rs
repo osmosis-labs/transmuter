@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashSet};
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    coin, ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env,
-    Response, StdError, Storage, Timestamp, Uint128, Uint256,
+    coin, coins, ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Coins, Decimal, Deps,
+    DepsMut, Env, Response, StdError, Storage, Timestamp, Uint128, Uint256,
 };
 use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
 use serde::Serialize;
@@ -14,6 +14,7 @@ use transmuter_math::rebalancing_incentive::{
 
 use crate::{
     alloyed_asset::{swap_from_alloyed, swap_to_alloyed},
+    asset::{convert_amount, Rounding},
     contract::Transmuter,
     corruptable::Corruptable,
     scope::Scope,
@@ -23,7 +24,7 @@ use crate::{
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RebalancingIncentiveAction {
-    CollectFee(Vec<Coin>),
+    CollectFee(Coins),
     DistributeIncentive(Coin),
     None,
 }
@@ -70,6 +71,9 @@ impl Transmuter {
         env: Env,
     ) -> Result<Response, ContractError> {
         let mut pool: TransmuterPool = self.pool.load(deps.storage)?;
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+        let alloyed_denom_normalization_factor =
+            self.alloyed_asset.get_normalization_factor(deps.storage)?;
 
         let response = Response::new();
 
@@ -78,13 +82,57 @@ impl Transmuter {
                 tokens_in,
                 token_out_min_amount,
             } => {
+                // ensure funds does not have zero coin
+                // this is a pre-guard to avoid unnecessary computation
+                // TODO: move this to constraint validation
+                ensure!(
+                    tokens_in.iter().all(|coin| coin.amount > Uint128::zero()),
+                    ContractError::ZeroValueOperation {}
+                );
+
+                let action = self.rebalancing_incentive_pass(
+                    deps.branch(),
+                    env.block.time,
+                    &tokens_in,
+                    &alloyed_denom,
+                    pool.clone(),
+                    |mut pool| {
+                        pool.join_pool(&tokens_in)?;
+                        Ok(pool)
+                    },
+                )?;
+
+                let mut tokens_in = Coins::try_from(tokens_in.to_owned())?;
+
+                let (fee, incentive) = match action {
+                    RebalancingIncentiveAction::CollectFee(fee_coins) => (Some(fee_coins), None),
+                    RebalancingIncentiveAction::DistributeIncentive(incentive_coin) => {
+                        (None, Some(incentive_coin))
+                    }
+                    RebalancingIncentiveAction::None => (None, None),
+                };
+
+                // if fee is present, subtract the fee from tokens_in
+                if let Some(fee_coins) = fee {
+                    for coin in fee_coins {
+                        tokens_in.sub(coin)?;
+                    }
+                }
+
+                let tokens_in = tokens_in.to_vec();
+
                 let tokens_in_with_norm_factor =
-                    pool.pair_coins_with_normalization_factor(tokens_in)?;
-                let out_amount = swap_to_alloyed::out_amount_via_exact_in(
+                    pool.pair_coins_with_normalization_factor(&tokens_in)?;
+                let mut out_amount = swap_to_alloyed::out_amount_via_exact_in(
                     tokens_in_with_norm_factor,
                     token_out_min_amount,
-                    self.alloyed_asset.get_normalization_factor(deps.storage)?,
+                    alloyed_denom_normalization_factor,
                 )?;
+
+                // if incentive is present, add the incentive to out_amount
+                if let Some(Coin { amount, .. }) = incentive {
+                    out_amount = out_amount.checked_add(amount)?;
+                }
 
                 let response = set_data_if_sudo(
                     response,
@@ -105,13 +153,60 @@ impl Transmuter {
                 let token_in_norm_factor = pool
                     .get_pool_asset_by_denom(token_in_denom)?
                     .normalization_factor();
-                let in_amount = swap_to_alloyed::in_amount_via_exact_out(
-                    token_in_norm_factor,
-                    token_in_max_amount,
+
+                // convert amount out (alloyed term) to match value in token in denom term
+                let in_amount = convert_amount(
                     token_out_amount,
-                    self.alloyed_asset.get_normalization_factor(deps.storage)?,
+                    alloyed_denom_normalization_factor,
+                    token_in_norm_factor,
+                    &Rounding::Up,
                 )?;
+
                 let tokens_in = vec![coin(in_amount.u128(), token_in_denom)];
+                let action = self.rebalancing_incentive_pass(
+                    deps.branch(),
+                    env.block.time,
+                    &tokens_in,
+                    &alloyed_denom,
+                    pool.clone(),
+                    |mut pool| {
+                        pool.join_pool(&tokens_in)?;
+                        Ok(pool)
+                    },
+                )?;
+
+                let mut tokens_in = Coins::try_from(tokens_in)?;
+                let (fee, incentive) = match action {
+                    RebalancingIncentiveAction::CollectFee(fee_coins) => (Some(fee_coins), None),
+                    RebalancingIncentiveAction::DistributeIncentive(incentive_coin) => {
+                        (None, Some(incentive_coin))
+                    }
+                    RebalancingIncentiveAction::None => (None, None),
+                };
+
+                // if fee is present, subtract the fee from tokens_in
+                if let Some(fee_coins) = fee {
+                    for coin in fee_coins {
+                        tokens_in.sub(coin)?;
+                    }
+                }
+
+                let in_amount = tokens_in.amount_of(token_in_denom);
+
+                ensure!(
+                    in_amount <= token_in_max_amount,
+                    ContractError::ExcessiveRequiredTokenIn {
+                        limit: token_in_max_amount,
+                        required: in_amount
+                    }
+                );
+
+                let token_out_amount = convert_amount(
+                    in_amount,
+                    token_in_norm_factor,
+                    alloyed_denom_normalization_factor,
+                    &Rounding::Down,
+                )?;
 
                 let response = set_data_if_sudo(
                     response,
@@ -121,7 +216,7 @@ impl Transmuter {
                     },
                 )?;
 
-                (tokens_in, token_out_amount, response)
+                (tokens_in.to_vec(), token_out_amount, response)
             }
         };
 
@@ -148,10 +243,7 @@ impl Transmuter {
 
         self.pool.save(deps.storage, &pool)?;
 
-        let alloyed_asset_out = coin(
-            out_amount.u128(),
-            self.alloyed_asset.get_alloyed_denom(deps.storage)?,
-        );
+        let alloyed_asset_out = coin(out_amount.u128(), alloyed_denom);
 
         let response = response.add_message(MsgMint {
             sender: env.contract.address.to_string(),
@@ -172,10 +264,40 @@ impl Transmuter {
         env: Env,
     ) -> Result<Response, ContractError> {
         let mut pool: TransmuterPool = self.pool.load(deps.storage)?;
-
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+        let alloyed_denom_normalization_factor =
+            self.alloyed_asset.get_normalization_factor(deps.storage)?;
         let response = Response::new();
 
-        let (in_amount, tokens_out, response) = match constraint {
+        let denoms_in_corrupted_asset_group = pool
+            .asset_groups
+            .iter()
+            .flat_map(|(_, asset_group)| {
+                if asset_group.is_corrupted() {
+                    asset_group.denoms().to_vec()
+                } else {
+                    vec![]
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let check_is_force_exit_corrupted_assets = |tokens_out: &[Coin]| {
+            tokens_out.iter().all(|coin| {
+                let total_liquidity = pool
+                    .get_pool_asset_by_denom(&coin.denom)
+                    .map(|asset| asset.amount())
+                    .unwrap_or_default();
+
+                let is_redeeming_total_liquidity = coin.amount == total_liquidity;
+                let is_under_corrupted_asset_group =
+                    denoms_in_corrupted_asset_group.contains(&coin.denom);
+
+                is_redeeming_total_liquidity
+                    && (is_under_corrupted_asset_group || pool.is_corrupted_asset(&coin.denom))
+            })
+        };
+
+        let (in_amount, tokens_out, incentive, response) = match constraint {
             SwapFromAlloyedConstraint::ExactIn {
                 token_out_denom,
                 token_out_min_amount,
@@ -186,34 +308,145 @@ impl Transmuter {
                     .normalization_factor();
                 let out_amount = swap_from_alloyed::out_amount_via_exact_in(
                     token_in_amount,
+                    alloyed_denom_normalization_factor,
+                    token_out_norm_factor,
+                    Uint128::zero(),
+                )?;
+
+                let is_force_exit_corrupted_assets = check_is_force_exit_corrupted_assets(&[coin(
+                    out_amount.u128(),
+                    token_out_denom,
+                )]);
+
+                // no rebalancing incentive if force exit corrupted assets
+                let action = if is_force_exit_corrupted_assets {
+                    RebalancingIncentiveAction::None
+                } else {
+                    self.rebalancing_incentive_pass(
+                        deps.branch(),
+                        env.block.time,
+                        &coins(token_in_amount.u128(), alloyed_denom.clone()),
+                        &token_out_denom,
+                        pool.clone(),
+                        |mut pool| {
+                            pool.exit_pool(&coins(out_amount.u128(), token_out_denom))?;
+                            Ok(pool)
+                        },
+                    )?
+                };
+
+                let mut tokens_in =
+                    Coins::try_from(coins(token_in_amount.u128(), alloyed_denom.clone()))?;
+
+                let (fee, incentive) = match action {
+                    RebalancingIncentiveAction::CollectFee(fee_coins) => (Some(fee_coins), None),
+                    RebalancingIncentiveAction::DistributeIncentive(incentive_coin) => {
+                        (None, Some(incentive_coin))
+                    }
+                    RebalancingIncentiveAction::None => (None, None),
+                };
+
+                // if fee is present, subtract the fee from tokens_in
+                if let Some(fee_coins) = fee {
+                    for coin in fee_coins {
+                        tokens_in.sub(coin)?;
+                    }
+                }
+
+                let token_in_amount = tokens_in.amount_of(&alloyed_denom);
+
+                let token_out_norm_factor = pool
+                    .get_pool_asset_by_denom(token_out_denom)?
+                    .normalization_factor();
+
+                let incentive_amount = incentive.clone().map(|c| c.amount).unwrap_or_default();
+
+                let out_amount = swap_from_alloyed::out_amount_via_exact_in(
+                    token_in_amount,
                     self.alloyed_asset.get_normalization_factor(deps.storage)?,
                     token_out_norm_factor,
-                    token_out_min_amount,
+                    token_out_min_amount.checked_sub(incentive_amount)?,
                 )?;
 
                 let response = set_data_if_sudo(
                     response,
                     &entrypoint,
                     &SwapExactAmountInResponseData {
-                        token_out_amount: out_amount,
+                        // only add it here since returned token out is used for actual exit pool
+                        token_out_amount: out_amount.checked_add(incentive_amount)?,
                     },
                 )?;
 
                 let tokens_out = vec![coin(out_amount.u128(), token_out_denom)];
 
-                (token_in_amount, tokens_out, response)
+                (token_in_amount, tokens_out, incentive, response)
             }
             SwapFromAlloyedConstraint::ExactOut {
                 tokens_out,
                 token_in_max_amount,
             } => {
+                let is_force_exit_corrupted_assets =
+                    check_is_force_exit_corrupted_assets(&tokens_out);
+
                 let tokens_out_with_norm_factor =
                     pool.pair_coins_with_normalization_factor(tokens_out)?;
-                let in_amount = swap_from_alloyed::in_amount_via_exact_out(
-                    token_in_max_amount,
-                    self.alloyed_asset.get_normalization_factor(deps.storage)?,
-                    tokens_out_with_norm_factor,
+
+                let in_amount = tokens_out_with_norm_factor.iter().try_fold(
+                    Uint128::zero(),
+                    |acc, (Coin { amount, .. }, norm_factor)| -> Result<_, ContractError> {
+                        let converted_amount = convert_amount(
+                            *amount,
+                            *norm_factor,
+                            alloyed_denom_normalization_factor,
+                            &Rounding::Up,
+                        )?;
+                        Ok(acc.checked_add(converted_amount)?)
+                    },
                 )?;
+
+                let action = if is_force_exit_corrupted_assets {
+                    RebalancingIncentiveAction::None
+                } else {
+                    self.rebalancing_incentive_pass(
+                        deps.branch(),
+                        env.block.time,
+                        &coins(in_amount.u128(), alloyed_denom.clone()),
+                        &tokens_out[0].denom, // TODO: support multiple tokens out
+                        pool.clone(),
+                        |mut pool| {
+                            pool.exit_pool(&tokens_out)?;
+                            Ok(pool)
+                        },
+                    )?
+                };
+
+                let mut tokens_in =
+                    Coins::try_from(coins(in_amount.u128(), alloyed_denom.clone()))?;
+
+                let (fee, incentive) = match action {
+                    RebalancingIncentiveAction::CollectFee(fee_coins) => (Some(fee_coins), None),
+                    RebalancingIncentiveAction::DistributeIncentive(incentive_coin) => {
+                        (None, Some(incentive_coin))
+                    }
+                    RebalancingIncentiveAction::None => (None, None),
+                };
+
+                // if fee is present, subtract the fee from tokens_in
+                if let Some(fee_coins) = fee {
+                    for coin in fee_coins {
+                        tokens_in.sub(coin)?;
+                    }
+                }
+
+                let in_amount = tokens_in.amount_of(&alloyed_denom);
+
+                ensure!(
+                    in_amount <= token_in_max_amount,
+                    ContractError::ExcessiveRequiredTokenIn {
+                        limit: token_in_max_amount,
+                        required: in_amount
+                    }
+                );
 
                 let response = set_data_if_sudo(
                     response,
@@ -223,7 +456,7 @@ impl Transmuter {
                     },
                 )?;
 
-                (in_amount, tokens_out.to_vec(), response)
+                (in_amount, tokens_out.to_vec(), incentive, response)
             }
         };
 
@@ -277,31 +510,7 @@ impl Transmuter {
         }?
         .to_string();
 
-        let denoms_in_corrupted_asset_group = pool
-            .asset_groups
-            .iter()
-            .flat_map(|(_, asset_group)| {
-                if asset_group.is_corrupted() {
-                    asset_group.denoms().to_vec()
-                } else {
-                    vec![]
-                }
-            })
-            .collect::<Vec<_>>();
-
-        let is_force_exit_corrupted_assets = tokens_out.iter().all(|coin| {
-            let total_liquidity = pool
-                .get_pool_asset_by_denom(&coin.denom)
-                .map(|asset| asset.amount())
-                .unwrap_or_default();
-
-            let is_redeeming_total_liquidity = coin.amount == total_liquidity;
-            let is_under_corrupted_asset_group =
-                denoms_in_corrupted_asset_group.contains(&coin.denom);
-
-            is_redeeming_total_liquidity
-                && (is_under_corrupted_asset_group || pool.is_corrupted_asset(&coin.denom))
-        });
+        let is_force_exit_corrupted_assets = check_is_force_exit_corrupted_assets(&tokens_out);
 
         // If all tokens out are corrupted assets and exit with all remaining liquidity
         // then ignore the limiters and remove the corrupted assets from the pool
@@ -339,16 +548,18 @@ impl Transmuter {
 
         self.pool.save(deps.storage, &pool)?;
 
+        let mut tokens_out: Coins = Coins::try_from(tokens_out)?;
+        if let Some(incentive) = incentive {
+            tokens_out.add(incentive)?;
+        }
+        let tokens_out = tokens_out.to_vec();
+
         let bank_send_msg = BankMsg::Send {
             to_address: sender.to_string(),
             amount: tokens_out,
         };
 
-        let alloyed_asset_to_burn = coin(
-            in_amount.u128(),
-            self.alloyed_asset.get_alloyed_denom(deps.storage)?,
-        )
-        .into();
+        let alloyed_asset_to_burn = coin(in_amount.u128(), alloyed_denom).into();
 
         // burn alloyed assets
         let burn_msg = MsgBurn {
@@ -645,23 +856,28 @@ impl Transmuter {
             .into_iter()
             .map(|scope| {
                 let ideal_balance = ideal_balances.get(&scope).copied().unwrap_or_default();
+                let prev_normalized_balance = prev_normalized_balance
+                    .get(&scope)
+                    .copied()
+                    .unwrap_or_else(|| Decimal::zero());
 
-                ImpactFactorParamGroup::new(
-                    prev_normalized_balance
-                        .get(&scope)
-                        .copied()
-                        .unwrap_or_else(|| Decimal::zero()),
-                    update_normalized_balance
-                        .get(&scope)
-                        .copied()
-                        .unwrap_or_else(|| Decimal::zero()),
+                let updated_normalized_balance = update_normalized_balance
+                    .get(&scope)
+                    .copied()
+                    .unwrap_or_else(|| Decimal::zero());
+
+                let upper_limit = upper_limits
+                    .get(&scope)
+                    .copied()
+                    .unwrap_or_else(|| Decimal::one());
+
+                Ok::<_, ContractError>(ImpactFactorParamGroup::new(
+                    prev_normalized_balance,
+                    updated_normalized_balance,
                     ideal_balance.lower,
                     ideal_balance.upper,
-                    upper_limits
-                        .get(&scope)
-                        .copied()
-                        .unwrap_or_else(|| Decimal::one()),
-                )
+                    upper_limit,
+                )?)
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -674,7 +890,7 @@ impl Transmuter {
                     return Ok(RebalancingIncentiveAction::None);
                 }
 
-                let mut fee_coins = vec![];
+                let mut fee_coins = Coins::default();
                 for token_in in tokens_in {
                     let fee_amount: Uint128 = calculate_rebalancing_fee(
                         rebalancing_incentive_config.lambda,
@@ -687,7 +903,7 @@ impl Transmuter {
                     let fee_coin = coin(fee_amount.u128(), token_in.denom.clone());
 
                     incentive_pool.collect(fee_coin.clone())?;
-                    fee_coins.push(fee_coin);
+                    fee_coins.add(fee_coin)?;
                 }
 
                 self.incentive_pool.save(deps.storage, &incentive_pool)?;
@@ -967,11 +1183,14 @@ mod tests {
 
     use super::*;
     use cosmwasm_std::{
-        coin, coins,
-        testing::{mock_dependencies, mock_env, MOCK_CONTRACT_ADDR},
+        coin, coins, from_json,
+        testing::{
+            mock_dependencies, mock_env, MockApi, MockQuerier, MockStorage, MOCK_CONTRACT_ADDR,
+        },
+        Empty, OwnedDeps, SubMsg,
     };
     use itertools::Itertools;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
 
     #[rstest]
     #[case("denom1", "denom2", Ok(SwapVariant::TokenToToken))]
@@ -1072,6 +1291,12 @@ mod tests {
     ) {
         let mut deps = mock_dependencies();
         let transmuter = Transmuter::new();
+
+        transmuter
+            .rebalancing_incentive_config
+            .save(&mut deps.storage, &RebalancingIncentiveConfig::default())
+            .unwrap();
+
         transmuter
             .alloyed_asset
             .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
@@ -2670,7 +2895,9 @@ mod tests {
         // ceil(500000000000000 * 0.707106781186547524 * 10%) = 35355339059328
         assert_eq!(
             action,
-            RebalancingIncentiveAction::CollectFee(coins(35355339059328u128, "alloyed"))
+            RebalancingIncentiveAction::CollectFee(
+                coins(35355339059328u128, "alloyed").try_into().unwrap()
+            )
         );
 
         let incentive_pool = transmuter.incentive_pool.load(&deps.storage).unwrap();
@@ -2710,10 +2937,14 @@ mod tests {
         // ceil(100000000000000 * 0.012110214464277872 * 10%) = 121102144643u128
         assert_eq!(
             action,
-            RebalancingIncentiveAction::CollectFee(vec![
-                coin(605510723214u128, "denom1"),
-                coin(121102144643u128, "denom2"),
-            ])
+            RebalancingIncentiveAction::CollectFee(
+                vec![
+                    coin(605510723214u128, "denom1"),
+                    coin(121102144643u128, "denom2"),
+                ]
+                .try_into()
+                .unwrap()
+            )
         );
 
         let incentive_pool = transmuter.incentive_pool.load(&deps.storage).unwrap();
@@ -2759,7 +2990,9 @@ mod tests {
 
         assert_eq!(
             action,
-            RebalancingIncentiveAction::CollectFee(coins(7031250000000u128, "denom1"))
+            RebalancingIncentiveAction::CollectFee(
+                coins(7031250000000u128, "denom1").try_into().unwrap()
+            )
         );
 
         let incentive_pool = transmuter.incentive_pool.load(&deps.storage).unwrap();
@@ -2810,7 +3043,9 @@ mod tests {
 
         assert_eq!(
             action,
-            RebalancingIncentiveAction::CollectFee(coins(50000000000000u128, "denom1"))
+            RebalancingIncentiveAction::CollectFee(
+                coins(50000000000000u128, "denom1").try_into().unwrap()
+            )
         );
 
         let incentive_pool = transmuter.incentive_pool.load(&deps.storage).unwrap();
@@ -2878,7 +3113,9 @@ mod tests {
 
         assert_eq!(
             action,
-            RebalancingIncentiveAction::CollectFee(vec![coin(126132533998, "alloyed")]) // ceiled
+            RebalancingIncentiveAction::CollectFee(
+                vec![coin(126132533998, "alloyed")].try_into().unwrap()
+            )
         );
 
         let incentive_pool = transmuter.incentive_pool.load(&deps.storage).unwrap();
@@ -3000,4 +3237,377 @@ mod tests {
             RebalancingIncentiveAction::DistributeIncentive(coin(112500000500000u128, "denom2"))
         );
     }
+
+    // TODO: test the following with rebalancing incentive pass (x (incentive, fee))
+    // swap_tokens_to_alloyed_assets
+    // swap_alloyed_asset_to_token
+    // swap_non_alloyed_exact_amount_in
+    // swap_non_alloyed_exact_amount_out
+
+    type MockDeps = OwnedDeps<MockStorage, MockApi, MockQuerier, Empty>;
+
+    #[rstest]
+    fn test_swap_between_token_and_alloyed_exact_in_with_incentive_mechanism_balanced_start(
+        #[from(deps_with_incentive_config_balanced)] mut deps: MockDeps,
+    ) {
+        let transmuter = Transmuter::new();
+        let mint_to_address = deps.api.addr_make("mint_to_address");
+        let env = mock_env();
+
+        // swap expect fee
+        let amount_in = 1000000000000000u128;
+        let expected_fee_amount = 7031250000000u128;
+        let amount_in_after_fee = amount_in - expected_fee_amount;
+        let expected_out_amount = (amount_in - expected_fee_amount) * 10u128;
+
+        let res = transmuter
+            .swap_tokens_to_alloyed_asset(
+                Entrypoint::Sudo,
+                SwapToAlloyedConstraint::ExactIn {
+                    tokens_in: &coins(amount_in, "denom1"),
+                    token_out_min_amount: expected_out_amount.into(),
+                },
+                mint_to_address.clone(),
+                deps.as_mut(),
+                env.clone(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            res.messages,
+            vec![SubMsg::new(MsgMint {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(coin(expected_out_amount, "alloyed").into()),
+                mint_to_address: mint_to_address.to_string(),
+            }),]
+        );
+
+        assert_eq!(
+            from_json::<SwapExactAmountInResponseData>(res.data.unwrap()).unwrap(),
+            SwapExactAmountInResponseData {
+                token_out_amount: expected_out_amount.into(),
+            }
+        );
+
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            pool.pool_assets,
+            vec![
+                Asset::new(
+                    Uint128::from(500000000000000u128 + amount_in_after_fee),
+                    "denom1",
+                    1u128
+                )
+                .unwrap(),
+                Asset::new(Uint128::from(3000000000000000u128), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(20000000000000000u128), "denom3", 100u128).unwrap(),
+            ]
+        );
+
+        let incentive_pool = transmuter.incentive_pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            incentive_pool,
+            IncentivePool {
+                balances: vec![(
+                    "denom1".to_string(),
+                    IncentivePoolBalance::new(expected_fee_amount)
+                )]
+                .into_iter()
+                .collect(),
+            }
+        );
+
+        deps.querier
+            .bank
+            .update_balance(MOCK_CONTRACT_ADDR, coins(expected_out_amount, "alloyed"));
+
+        // // swap expect incentive
+        // // incentive diff due to fee calculation happens before actual pool update and reduce the token in,
+        // // thus the actual pool movement is actually smaller than one used to calculate fee
+        let incentive_diff = 131303841126u128;
+        let amount_in = amount_in_after_fee * 10u128;
+        let expected_incentive_amount = expected_fee_amount - incentive_diff;
+        let expected_out_amount = amount_in_after_fee + expected_incentive_amount;
+        let sender = mint_to_address.clone();
+
+        let res = transmuter
+            .swap_alloyed_asset_to_tokens(
+                Entrypoint::Sudo,
+                SwapFromAlloyedConstraint::ExactIn {
+                    token_out_denom: "denom1",
+                    token_out_min_amount: expected_out_amount.into(),
+                    token_in_amount: amount_in.into(),
+                },
+                BurnTarget::SentFunds,
+                sender.clone(),
+                deps.as_mut(),
+                env.clone(),
+            )
+            .unwrap();
+
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            pool.pool_assets,
+            vec![
+                Asset::new(Uint128::from(500000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(3000000000000000u128), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(20000000000000000u128), "denom3", 100u128).unwrap(),
+            ]
+        );
+
+        let incentive_pool = transmuter.incentive_pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            incentive_pool,
+            IncentivePool {
+                balances: vec![(
+                    "denom1".to_string(),
+                    IncentivePoolBalance::new(incentive_diff)
+                )]
+                .into_iter()
+                .collect(),
+            }
+        );
+
+        assert_eq!(
+            from_json::<SwapExactAmountInResponseData>(res.data.unwrap()).unwrap(),
+            SwapExactAmountInResponseData {
+                token_out_amount: expected_out_amount.into(),
+            }
+        );
+
+        assert_eq!(
+            res.messages,
+            vec![
+                SubMsg::new(MsgBurn {
+                    sender: MOCK_CONTRACT_ADDR.to_string(),
+                    amount: Some(coin(amount_in, "alloyed").into()),
+                    burn_from_address: MOCK_CONTRACT_ADDR.to_string(),
+                }),
+                SubMsg::new(BankMsg::Send {
+                    to_address: sender.to_string(),
+                    amount: vec![coin(expected_out_amount, "denom1")],
+                })
+            ]
+        );
+    }
+
+    #[rstest]
+    fn test_swap_between_token_and_alloyed_exact_out_with_incentive_mechanism_balanced_start(
+        #[from(deps_with_incentive_config_balanced)] mut deps: MockDeps,
+    ) {
+        let transmuter = Transmuter::new();
+        let mint_to_address = deps.api.addr_make("mint_to_address");
+        let env = mock_env();
+
+        // swap expect fee
+        let amount_in = 1000000000000000u128;
+        let amount_out = 1000000000000000u128 * 10u128;
+        let expected_fee_amount = 7031250000000u128;
+        let amount_in_after_fee = amount_in - expected_fee_amount;
+        let expected_out_amount = amount_out - (expected_fee_amount * 10u128);
+
+        let res = transmuter
+            .swap_tokens_to_alloyed_asset(
+                Entrypoint::Sudo,
+                SwapToAlloyedConstraint::ExactOut {
+                    token_in_denom: "denom1",
+                    token_in_max_amount: amount_in_after_fee.into(),
+                    token_out_amount: amount_out.into(),
+                },
+                mint_to_address.clone(),
+                deps.as_mut(),
+                env.clone(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            res.messages,
+            vec![SubMsg::new(MsgMint {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(coin(expected_out_amount, "alloyed").into()),
+                mint_to_address: mint_to_address.to_string(),
+            }),]
+        );
+
+        assert_eq!(
+            from_json::<SwapExactAmountOutResponseData>(res.data.unwrap()).unwrap(),
+            SwapExactAmountOutResponseData {
+                token_in_amount: amount_in_after_fee.into(),
+            }
+        );
+
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            pool.pool_assets,
+            vec![
+                Asset::new(
+                    Uint128::from(500000000000000u128 + amount_in_after_fee),
+                    "denom1",
+                    1u128
+                )
+                .unwrap(),
+                Asset::new(Uint128::from(3000000000000000u128), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(20000000000000000u128), "denom3", 100u128).unwrap(),
+            ]
+        );
+
+        let incentive_pool = transmuter.incentive_pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            incentive_pool,
+            IncentivePool {
+                balances: vec![(
+                    "denom1".to_string(),
+                    IncentivePoolBalance::new(expected_fee_amount)
+                )]
+                .into_iter()
+                .collect(),
+            }
+        );
+
+        deps.querier
+            .bank
+            .update_balance(MOCK_CONTRACT_ADDR, coins(expected_out_amount, "alloyed"));
+
+        // swap expect incentive
+        // incentive diff due to fee calculation happens before actual pool update and reduce the token in,
+        // thus the actual pool movement is actually smaller than one used to calculate fee
+        let incentive_diff = 131303841126u128;
+        let amount_in = amount_in_after_fee * 10u128;
+        let input_amount_out = amount_in_after_fee;
+        let expected_incentive_amount = expected_fee_amount - incentive_diff;
+        let expected_out_amount = input_amount_out + expected_incentive_amount;
+        let sender = mint_to_address.clone();
+
+        let res = transmuter
+            .swap_alloyed_asset_to_tokens(
+                Entrypoint::Sudo,
+                SwapFromAlloyedConstraint::ExactOut {
+                    tokens_out: &coins(input_amount_out, "denom1"),
+                    token_in_max_amount: amount_in.into(),
+                },
+                BurnTarget::SentFunds,
+                sender.clone(),
+                deps.as_mut(),
+                env.clone(),
+            )
+            .unwrap();
+
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            pool.pool_assets,
+            vec![
+                Asset::new(Uint128::from(500000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(3000000000000000u128), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(20000000000000000u128), "denom3", 100u128).unwrap(),
+            ]
+        );
+
+        let incentive_pool = transmuter.incentive_pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            incentive_pool,
+            IncentivePool {
+                balances: vec![(
+                    "denom1".to_string(),
+                    IncentivePoolBalance::new(incentive_diff)
+                )]
+                .into_iter()
+                .collect(),
+            }
+        );
+
+        assert_eq!(
+            from_json::<SwapExactAmountOutResponseData>(res.data.unwrap()).unwrap(),
+            SwapExactAmountOutResponseData {
+                token_in_amount: amount_in.into(),
+            }
+        );
+
+        assert_eq!(
+            res.messages,
+            vec![
+                SubMsg::new(MsgBurn {
+                    sender: MOCK_CONTRACT_ADDR.to_string(),
+                    amount: Some(coin(amount_in, "alloyed").into()),
+                    burn_from_address: MOCK_CONTRACT_ADDR.to_string(),
+                }),
+                SubMsg::new(BankMsg::Send {
+                    to_address: sender.to_string(),
+                    amount: vec![coin(expected_out_amount, "denom1")],
+                })
+            ]
+        );
+    }
+
+    fn deps_with_incentive_config(pool_assets: Vec<Asset>) -> MockDeps {
+        let mut deps = mock_dependencies();
+        let transmuter = Transmuter::new();
+        transmuter
+            .rebalancing_incentive_config
+            .save(&mut deps.storage, &RebalancingIncentiveConfig::default())
+            .unwrap();
+
+        let pool = TransmuterPool {
+            pool_assets,
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
+            )]),
+        };
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_normalization_factor(&mut deps.storage, Uint128::new(10))
+            .unwrap();
+
+        let rebalancing_incentive_config = RebalancingIncentiveConfig {
+            lambda: Decimal::percent(10),
+            ideal_balances: vec![
+                (
+                    Scope::denom("denom1"),
+                    IdealBalance::new(Decimal::percent(10), Decimal::percent(60)),
+                ),
+                (
+                    Scope::asset_group("group1"),
+                    IdealBalance::new(Decimal::percent(20), Decimal::percent(60)),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        };
+
+        transmuter
+            .rebalancing_incentive_config
+            .save(&mut deps.storage, &rebalancing_incentive_config)
+            .unwrap();
+
+        transmuter
+            .incentive_pool
+            .save(&mut deps.storage, &IncentivePool::default())
+            .unwrap();
+
+        deps
+    }
+
+    #[fixture]
+    fn deps_with_incentive_config_balanced() -> MockDeps {
+        deps_with_incentive_config(vec![
+            Asset::new(Uint128::from(500000000000000u128), "denom1", 1u128).unwrap(),
+            Asset::new(Uint128::from(3000000000000000u128), "denom2", 10u128).unwrap(),
+            Asset::new(Uint128::from(20000000000000000u128), "denom3", 100u128).unwrap(),
+        ])
+    }
+
+    // TODO:
+    // - on exact out, discount with calculated incentive on token in rather than adding to token out
+    // - handle multiple token out case
+    // - add test for imbalanced start
+    //   - test_swap_between_token_and_alloyed_exact_out_with_incentive_mechanism_imbalanced_start
+    //   - test_swap_between_token_and_alloyed_exact_in_with_incentive_mechanism_imbalanced_start
+    // - add test for swap token <-> token
 }

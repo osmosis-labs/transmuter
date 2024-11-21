@@ -173,16 +173,19 @@ impl ImpactFactorParamGroup {
             }
         );
 
-        // Check if the normalized balance exceeds the upper limit
-        ensure!(
-            prev_normalized_balance <= upper_limit,
-            TransmuterMathError::NormalizedBalanceExceedsUpperLimit
-        );
+        // Cap normalized_balance at upper_limit, since this is already the worst case possible for each impact factor component
+        // This also avoid early checking limiter as it shouldn't be concerned by incentive calculation
+        let prev_normalized_balance = if prev_normalized_balance > upper_limit {
+            upper_limit
+        } else {
+            prev_normalized_balance
+        };
 
-        ensure!(
-            update_normalized_balance <= upper_limit,
-            TransmuterMathError::NormalizedBalanceExceedsUpperLimit
-        );
+        let update_normalized_balance = if update_normalized_balance > upper_limit {
+            upper_limit
+        } else {
+            update_normalized_balance
+        };
 
         Ok(Self {
             prev_normalized_balance,
@@ -795,13 +798,19 @@ mod tests {
     #[case::invalid(Decimal::percent(50), Decimal::percent(60), Decimal::percent(40), Decimal::percent(50), Decimal::percent(110), Err(TransmuterMathError::OutOfNormalizedRange { var_name: "upper_limit".to_string() }))]
     #[case::invalid(Decimal::percent(50), Decimal::percent(60), Decimal::percent(40), Decimal::percent(110), Decimal::percent(60), Err(TransmuterMathError::OutOfNormalizedRange { var_name: "ideal_balance_upper_bound".to_string() }))]
     #[case::invalid(Decimal::percent(50), Decimal::percent(60), Decimal::percent(110), Decimal::percent(50), Decimal::percent(60), Err(TransmuterMathError::OutOfNormalizedRange { var_name: "ideal_balance_lower_bound".to_string() }))]
-    #[case::invalid(
+    #[case::capped(
         Decimal::percent(110),
         Decimal::percent(60),
         Decimal::percent(40),
         Decimal::percent(50),
         Decimal::percent(60),
-        Err(TransmuterMathError::NormalizedBalanceExceedsUpperLimit)
+        Ok(ImpactFactorParamGroup{
+            prev_normalized_balance: upper_limit,
+            update_normalized_balance,
+            ideal_balance_lower_bound,
+            ideal_balance_upper_bound,
+            upper_limit,
+        })
     )]
     #[case::invalid(
         Decimal::percent(50),
@@ -809,7 +818,13 @@ mod tests {
         Decimal::percent(40),
         Decimal::percent(50),
         Decimal::percent(60),
-        Err(TransmuterMathError::NormalizedBalanceExceedsUpperLimit)
+        Ok(ImpactFactorParamGroup{
+            prev_normalized_balance,
+            update_normalized_balance: upper_limit,
+            ideal_balance_lower_bound,
+            ideal_balance_upper_bound,
+            upper_limit,
+        })
     )]
     fn test_impact_factor_param_group_new(
         #[case] prev_normalized_balance: Decimal,

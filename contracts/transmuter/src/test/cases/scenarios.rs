@@ -78,7 +78,7 @@ fn test_join_pool() {
         .unwrap_err();
 
     assert_contract_err(
-        ContractError::InvalidTransmuteDenom {
+        ContractError::InvalidJoinPoolDenom {
             denom: "urandom".to_string(),
             expected_denom: vec![AXL_USDC.to_string(), COSMOS_USDC.to_string()],
         },
@@ -472,6 +472,10 @@ fn test_exit_pool() {
         .with_account("user", vec![coin(1_500, AXL_USDC)])
         .with_account("provider_1", vec![coin(100_000, COSMOS_USDC)])
         .with_account("provider_2", vec![coin(100_000, COSMOS_USDC)])
+        .with_account(
+            "other_provider",
+            vec![coin(100_000, COSMOS_USDC), coin(100_000, AXL_USDC)],
+        )
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_configs: vec![
                 AssetConfig::from_denom_str(AXL_USDC),
@@ -485,6 +489,14 @@ fn test_exit_pool() {
         .build(&app);
 
     // join pool
+    t.contract
+        .execute(
+            &ExecMsg::JoinPool {},
+            &[coin(100_000, AXL_USDC), coin(100_000, COSMOS_USDC)],
+            &t.accounts["other_provider"],
+        )
+        .unwrap();
+
     t.contract
         .execute(
             &ExecMsg::JoinPool {},
@@ -563,12 +575,12 @@ fn test_exit_pool() {
     let GetTotalSharesResponse { total_shares } =
         t.contract.query(&QueryMsg::GetTotalShares {}).unwrap();
 
-    assert_eq!(total_shares, Uint128::new(200_000 - 500));
+    assert_eq!(total_shares, Uint128::new(400_000 - 500));
 
     // check balances
     t.assert_contract_balances(&[
-        coin(1500 - 500, AXL_USDC),
-        coin(200_000 - 1500, COSMOS_USDC),
+        coin(100_000 + 1500 - 500, AXL_USDC),
+        coin(300_000 - 1500, COSMOS_USDC),
     ]);
 
     let GetTotalPoolLiquidityResponse {
@@ -581,8 +593,8 @@ fn test_exit_pool() {
     assert_eq!(
         total_pool_liquidity,
         vec![
-            coin(1500 - 500, AXL_USDC),
-            coin(200_000 - 1500, COSMOS_USDC)
+            coin(100_000 + 1500 - 500, AXL_USDC),
+            coin(300_000 - 1500, COSMOS_USDC)
         ]
     );
 
@@ -611,10 +623,13 @@ fn test_exit_pool() {
     let GetTotalSharesResponse { total_shares } =
         t.contract.query(&QueryMsg::GetTotalShares {}).unwrap();
 
-    assert_eq!(total_shares, Uint128::new(200_000 - 500 - 1000 - 99_000));
+    assert_eq!(total_shares, Uint128::new(400_000 - 500 - 1000 - 99_000));
 
     // check balances
-    t.assert_contract_balances(&[coin(200_000 - 1500 - 99_000, COSMOS_USDC)]);
+    t.assert_contract_balances(&[
+        coin(100_000, AXL_USDC),
+        coin(300_000 - 1500 - 99_000, COSMOS_USDC),
+    ]);
 
     let GetTotalPoolLiquidityResponse {
         total_pool_liquidity,
@@ -626,8 +641,8 @@ fn test_exit_pool() {
     assert_eq!(
         total_pool_liquidity,
         vec![
-            coin(0, AXL_USDC),
-            coin(200_000 - 1500 - 99_000, COSMOS_USDC)
+            coin(100_000, AXL_USDC),
+            coin(300_000 - 1500 - 99_000, COSMOS_USDC)
         ]
     );
 
@@ -656,7 +671,7 @@ fn test_exit_pool() {
         .contract
         .execute(
             &ExecMsg::ExitPool {
-                tokens_out: vec![coin(1, AXL_USDC)],
+                tokens_out: vec![coin(100_001, AXL_USDC)],
             },
             &[],
             &t.accounts["provider_1"],
@@ -665,8 +680,8 @@ fn test_exit_pool() {
 
     assert_contract_err(
         ContractError::InsufficientPoolAsset {
-            required: coin(1, AXL_USDC),
-            available: coin(0, AXL_USDC),
+            required: coin(100_001, AXL_USDC),
+            available: coin(100_000, AXL_USDC),
         },
         err,
     );
