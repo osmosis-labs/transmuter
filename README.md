@@ -14,6 +14,8 @@ A CosmWasm contract for X:Y swapping between multiple tokens with no fees.
 |         | `osmosis-1`   | [`254`](https://celatone.osmosis.zone/osmosis-1/codes/254/info)     |
 | `3.0.0` | `osmo-test-5` | [`8319`](https://celatone.osmosis.zone/osmo-test-5/codes/8319)      |
 |         | `osmosis-1`   | [`814`](https://celatone.osmosis.zone/osmosis-1/codes/814)          |
+| `3.2.0` | `osmo-test-5` | [`11749`](https://celatone.osmosis.zone/osmo-test-5/codes/11749)      |
+|         | `osmosis-1`   | [`996`](https://celatone.osmosis.zone/osmosis-1/codes/996)          |
 
 ## Overview
 
