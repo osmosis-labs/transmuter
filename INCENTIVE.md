@@ -259,6 +259,30 @@ $$
 
 Then raise all fee rate to $r_c$ until it recovers, so that we can make sure we have large enough incentive pool to incentivize all rebalance.
 
+## Asset Groups
+
+When dealing with asset groups, we need to consider how balance changes affect both individual assets and their groups. Let's consider a scenario with:
+- Asset group $G$ containing denoms $d_1$ and $d_2$
+- A separate denom $d'$ not in group $G$
+
+The fee/incentive calculation follows these rules:
+
+1. **Intra-group swaps** (e.g., $d_1 \leftrightarrow d_2$):
+   - The group-level calculation $v_G(b_G, b'_G) = 0$ always
+   - This is because swapping between assets in the same group doesn't affect the group's overall balance
+   - Individual asset calculations $v_{d_1}$ and $v_{d_2}$ are still performed as normal
+
+2. **Inter-group swaps** (e.g., $d_1 \leftrightarrow d'$):
+   - Calculate group-level effect: $v_G(b_G, b'_G)$
+   - Calculate individual asset effects: $v_{d_1}(b_{d_1}, b'_{d_1})$ and $v_{d'}(b_{d'}, b'_{d'})$
+   - The final fee/incentive is the sum of these values
+   - Note: This means the same balance change can contribute to both group-level and individual asset-level incentives
+
+This approach allows us to:
+- Maintain separate incentive mechanisms for both individual assets and their groups
+- Ensure that balance changes are properly incentivized at both levels
+- Handle cases where a swap might be beneficial for one level but harmful for another
+
 ## Handling Corrupted Asset
 
 When any assets marked as corrupted, override the following params for those assets:
