@@ -1,11 +1,10 @@
+use crate::{asset::AssetConfig, contract::Transmuter, ContractError};
 use cosmwasm_std::{
     coin,
     testing::{message_info, mock_dependencies, mock_env},
     Coin, Decimal, Uint128,
 };
-use sylvia::types::{ExecCtx, InstantiateCtx, QueryCtx};
-
-use crate::{asset::AssetConfig, contract::Transmuter, ContractError};
+use sylvia::ctx::{ExecCtx, InstantiateCtx, QueryCtx};
 
 #[test]
 fn test_spot_price_on_balanced_liquidity_must_be_one() {
@@ -30,11 +29,7 @@ fn test_spot_price(liquidity: &[Coin]) {
 
     transmuter
         .instantiate(
-            InstantiateCtx {
-                deps: deps.as_mut(),
-                env: mock_env(),
-                info: message_info(&creator, &[]),
-            },
+            InstantiateCtx::from((deps.as_mut(), mock_env(), message_info(&creator, &[]))),
             vec![
                 AssetConfig::from_denom_str("denom0"),
                 AssetConfig::from_denom_str("denom1"),
@@ -56,20 +51,17 @@ fn test_spot_price(liquidity: &[Coin]) {
 
     let creator = deps.api.addr_make("creator");
     transmuter
-        .join_pool(ExecCtx {
-            deps: deps.as_mut(),
-            env: mock_env(),
-            info: message_info(&creator, liquidity),
-        })
+        .join_pool(ExecCtx::from((
+            deps.as_mut(),
+            mock_env(),
+            message_info(&creator, liquidity),
+        )))
         .unwrap();
 
     assert_eq!(
         transmuter
             .spot_price(
-                QueryCtx {
-                    deps: deps.as_ref(),
-                    env: mock_env(),
-                },
+                QueryCtx::from((deps.as_ref(), mock_env())),
                 "denom0".to_string(),
                 "denom0".to_string(),
             )
@@ -82,10 +74,7 @@ fn test_spot_price(liquidity: &[Coin]) {
     assert_eq!(
         transmuter
             .spot_price(
-                QueryCtx {
-                    deps: deps.as_ref(),
-                    env: mock_env(),
-                },
+                QueryCtx::from((deps.as_ref(), mock_env())),
                 "random_denom".to_string(),
                 "denom0".to_string(),
             )
@@ -98,10 +87,7 @@ fn test_spot_price(liquidity: &[Coin]) {
     assert_eq!(
         transmuter
             .spot_price(
-                QueryCtx {
-                    deps: deps.as_ref(),
-                    env: mock_env(),
-                },
+                QueryCtx::from((deps.as_ref(), mock_env())),
                 "denom1".to_string(),
                 "random_denom".to_string(),
             )
@@ -114,10 +100,7 @@ fn test_spot_price(liquidity: &[Coin]) {
     assert_eq!(
         transmuter
             .spot_price(
-                QueryCtx {
-                    deps: deps.as_ref(),
-                    env: mock_env(),
-                },
+                QueryCtx::from((deps.as_ref(), mock_env())),
                 "denom0".to_string(),
                 "denom1".to_string(),
             )

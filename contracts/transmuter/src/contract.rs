@@ -24,10 +24,7 @@ use osmosis_std::types::{
     osmosis::tokenfactory::v1beta1::{MsgCreateDenom, MsgCreateDenomResponse, MsgSetDenomMetadata},
 };
 
-use sylvia::{
-    contract,
-    types::{ExecCtx, InstantiateCtx, QueryCtx},
-};
+use sylvia::{contract, ctx};
 
 /// version info for migration
 pub const CONTRACT_NAME: &str = "crates.io:transmuter";
@@ -77,7 +74,9 @@ impl Transmuter {
     #[sv::msg(instantiate)]
     pub fn instantiate(
         &self,
-        InstantiateCtx { deps, env, info }: InstantiateCtx,
+        ctx::InstantiateCtx {
+            deps, env, info, ..
+        }: ctx::InstantiateCtx,
         pool_asset_configs: Vec<AssetConfig>,
         alloyed_asset_subdenom: String,
         alloyed_asset_normalization_factor: Uint128,
@@ -162,7 +161,7 @@ impl Transmuter {
     #[sv::msg(exec)]
     fn rescale_normalization_factor(
         &self,
-        ExecCtx { deps, env: _, info }: ExecCtx,
+        ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         numerator: Uint128,
         denominator: Uint128,
     ) -> Result<Response, ContractError> {
@@ -197,7 +196,9 @@ impl Transmuter {
     #[sv::msg(exec)]
     fn add_new_assets(
         &self,
-        ExecCtx { deps, env, info }: ExecCtx,
+        ctx::ExecCtx {
+            deps, env, info, ..
+        }: ctx::ExecCtx,
         asset_configs: Vec<AssetConfig>,
     ) -> Result<Response, ContractError> {
         non_empty_input_required("asset_configs", &asset_configs)?;
@@ -249,7 +250,7 @@ impl Transmuter {
     #[sv::msg(exec)]
     fn create_asset_group(
         &self,
-        ExecCtx { deps, env: _, info }: ExecCtx,
+        ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         label: String,
         denoms: Vec<String>,
     ) -> Result<Response, ContractError> {
@@ -273,7 +274,7 @@ impl Transmuter {
     #[sv::msg(exec)]
     fn remove_asset_group(
         &self,
-        ExecCtx { deps, env: _, info }: ExecCtx,
+        ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         label: String,
     ) -> Result<Response, ContractError> {
         nonpayable(&info.funds)?;
@@ -314,7 +315,7 @@ impl Transmuter {
     #[sv::msg(exec)]
     fn mark_corrupted_scopes(
         &self,
-        ExecCtx { deps, env: _, info }: ExecCtx,
+        ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         scopes: Vec<Scope>,
     ) -> Result<Response, ContractError> {
         non_empty_input_required("scopes", &scopes)?;
@@ -344,7 +345,7 @@ impl Transmuter {
     #[sv::msg(exec)]
     fn unmark_corrupted_scopes(
         &self,
-        ExecCtx { deps, env: _, info }: ExecCtx,
+        ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         scopes: Vec<Scope>,
     ) -> Result<Response, ContractError> {
         non_empty_input_required("scopes", &scopes)?;
@@ -374,7 +375,7 @@ impl Transmuter {
     #[sv::msg(exec)]
     fn register_limiter(
         &self,
-        ExecCtx { deps, env: _, info }: ExecCtx,
+        ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         scope: Scope,
         label: String,
         limiter_params: LimiterParams,
@@ -444,7 +445,7 @@ impl Transmuter {
     #[sv::msg(exec)]
     fn deregister_limiter(
         &self,
-        ExecCtx { deps, env: _, info }: ExecCtx,
+        ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         scope: Scope,
         label: String,
     ) -> Result<Response, ContractError> {
@@ -469,7 +470,7 @@ impl Transmuter {
     #[sv::msg(exec)]
     fn set_change_limiter_boundary_offset(
         &self,
-        ExecCtx { deps, env: _, info }: ExecCtx,
+        ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         scope: Scope,
         label: String,
         boundary_offset: Decimal,
@@ -502,7 +503,7 @@ impl Transmuter {
     #[sv::msg(exec)]
     fn set_static_limiter_upper_limit(
         &self,
-        ExecCtx { deps, env: _, info }: ExecCtx,
+        ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         scope: Scope,
         label: String,
         upper_limit: Decimal,
@@ -532,7 +533,9 @@ impl Transmuter {
     #[sv::msg(exec)]
     pub fn set_alloyed_denom_metadata(
         &self,
-        ExecCtx { deps, env, info }: ExecCtx,
+        ctx::ExecCtx {
+            deps, env, info, ..
+        }: ctx::ExecCtx,
         metadata: Metadata,
     ) -> Result<Response, ContractError> {
         nonpayable(&info.funds)?;
@@ -553,7 +556,7 @@ impl Transmuter {
     #[sv::msg(exec)]
     fn set_active_status(
         &self,
-        ExecCtx { deps, env: _, info }: ExecCtx,
+        ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         active: bool,
     ) -> Result<Response, ContractError> {
         nonpayable(&info.funds)?;
@@ -591,7 +594,9 @@ impl Transmuter {
     #[sv::msg(exec)]
     pub fn join_pool(
         &self,
-        ExecCtx { deps, env, info }: ExecCtx,
+        ctx::ExecCtx {
+            deps, env, info, ..
+        }: ctx::ExecCtx,
     ) -> Result<Response, ContractError> {
         self.swap_tokens_to_alloyed_asset(
             Entrypoint::Exec,
@@ -612,7 +617,9 @@ impl Transmuter {
     #[sv::msg(exec)]
     pub fn exit_pool(
         &self,
-        ExecCtx { deps, env, info }: ExecCtx,
+        ctx::ExecCtx {
+            deps, env, info, ..
+        }: ctx::ExecCtx,
         tokens_out: Vec<Coin>,
     ) -> Result<Response, ContractError> {
         // it will deduct shares directly from the sender's account
@@ -637,7 +644,7 @@ impl Transmuter {
     #[sv::msg(query)]
     fn list_asset_configs(
         &self,
-        QueryCtx { deps, env: _ }: QueryCtx,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
     ) -> Result<ListAssetConfigsResponse, ContractError> {
         let pool = self.pool.load(deps.storage)?;
         let alloyed_asset_config = AssetConfig {
@@ -658,7 +665,7 @@ impl Transmuter {
     #[sv::msg(query)]
     fn list_limiters(
         &self,
-        QueryCtx { deps, env: _ }: QueryCtx,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
     ) -> Result<ListLimitersResponse, ContractError> {
         let limiters = self.limiters.list_limiters(deps.storage)?;
 
@@ -668,7 +675,7 @@ impl Transmuter {
     #[sv::msg(query)]
     fn list_asset_groups(
         &self,
-        QueryCtx { deps, env: _ }: QueryCtx,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
     ) -> Result<ListAssetGroupsResponse, ContractError> {
         let pool = self.pool.load(deps.storage)?;
 
@@ -680,7 +687,7 @@ impl Transmuter {
     #[sv::msg(query)]
     pub fn get_shares(
         &self,
-        QueryCtx { deps, env: _ }: QueryCtx,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
         address: String,
     ) -> Result<GetSharesResponse, ContractError> {
         Ok(GetSharesResponse {
@@ -693,7 +700,7 @@ impl Transmuter {
     #[sv::msg(query)]
     pub(crate) fn get_share_denom(
         &self,
-        QueryCtx { deps, env: _ }: QueryCtx,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
     ) -> Result<GetShareDenomResponse, ContractError> {
         Ok(GetShareDenomResponse {
             share_denom: self.alloyed_asset.get_alloyed_denom(deps.storage)?,
@@ -701,14 +708,17 @@ impl Transmuter {
     }
 
     #[sv::msg(query)]
-    pub(crate) fn get_swap_fee(&self, _ctx: QueryCtx) -> Result<GetSwapFeeResponse, ContractError> {
+    pub(crate) fn get_swap_fee(
+        &self,
+        _ctx: ctx::QueryCtx,
+    ) -> Result<GetSwapFeeResponse, ContractError> {
         Ok(GetSwapFeeResponse { swap_fee: SWAP_FEE })
     }
 
     #[sv::msg(query)]
     pub(crate) fn is_active(
         &self,
-        QueryCtx { deps, env: _ }: QueryCtx,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
     ) -> Result<IsActiveResponse, ContractError> {
         Ok(IsActiveResponse {
             is_active: self.active_status.load(deps.storage)?,
@@ -718,7 +728,7 @@ impl Transmuter {
     #[sv::msg(query)]
     pub(crate) fn get_total_shares(
         &self,
-        QueryCtx { deps, env: _ }: QueryCtx,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
     ) -> Result<GetTotalSharesResponse, ContractError> {
         let total_shares = self.alloyed_asset.get_total_supply(deps)?;
         Ok(GetTotalSharesResponse { total_shares })
@@ -727,7 +737,7 @@ impl Transmuter {
     #[sv::msg(query)]
     pub(crate) fn get_total_pool_liquidity(
         &self,
-        QueryCtx { deps, env: _ }: QueryCtx,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
     ) -> Result<GetTotalPoolLiquidityResponse, ContractError> {
         let pool = self.pool.load(deps.storage)?;
 
@@ -739,7 +749,7 @@ impl Transmuter {
     #[sv::msg(query)]
     pub(crate) fn spot_price(
         &self,
-        QueryCtx { deps, env: _ }: QueryCtx,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
         base_asset_denom: String,
         quote_asset_denom: String,
     ) -> Result<SpotPriceResponse, ContractError> {
@@ -793,7 +803,7 @@ impl Transmuter {
     #[sv::msg(query)]
     pub(crate) fn calc_out_amt_given_in(
         &self,
-        QueryCtx { deps, env: _ }: QueryCtx,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
         token_in: Coin,
         token_out_denom: String,
         swap_fee: Decimal,
@@ -808,7 +818,7 @@ impl Transmuter {
     #[sv::msg(query)]
     pub(crate) fn calc_in_amt_given_out(
         &self,
-        QueryCtx { deps, env: _ }: QueryCtx,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
         token_out: Coin,
         token_in_denom: String,
         swap_fee: Decimal,
@@ -823,7 +833,7 @@ impl Transmuter {
     #[sv::msg(query)]
     pub(crate) fn get_corrupted_scopes(
         &self,
-        QueryCtx { deps, env: _ }: QueryCtx,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
     ) -> Result<GetCorrruptedScopesResponse, ContractError> {
         let pool = self.pool.load(deps.storage)?;
 
@@ -848,7 +858,7 @@ impl Transmuter {
     #[sv::msg(exec)]
     pub fn transfer_admin(
         &self,
-        ExecCtx { deps, env: _, info }: ExecCtx,
+        ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         candidate: String,
     ) -> Result<Response, ContractError> {
         let candidate_addr = deps.api.addr_validate(&candidate)?;
@@ -864,7 +874,7 @@ impl Transmuter {
     #[sv::msg(exec)]
     pub fn cancel_admin_transfer(
         &self,
-        ExecCtx { deps, env: _, info }: ExecCtx,
+        ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
     ) -> Result<Response, ContractError> {
         self.role.admin.cancel_transfer(deps, info.sender)?;
 
@@ -874,7 +884,7 @@ impl Transmuter {
     #[sv::msg(exec)]
     pub fn reject_admin_transfer(
         &self,
-        ExecCtx { deps, env: _, info }: ExecCtx,
+        ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
     ) -> Result<Response, ContractError> {
         self.role.admin.reject_transfer(deps, info.sender)?;
 
@@ -884,7 +894,7 @@ impl Transmuter {
     #[sv::msg(exec)]
     pub fn claim_admin(
         &self,
-        ExecCtx { deps, env: _, info }: ExecCtx,
+        ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
     ) -> Result<Response, ContractError> {
         let sender_string = info.sender.to_string();
         self.role.admin.claim(deps, info.sender)?;
@@ -897,7 +907,7 @@ impl Transmuter {
     #[sv::msg(query)]
     fn get_admin(
         &self,
-        QueryCtx { deps, env: _ }: QueryCtx,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
     ) -> Result<GetAdminResponse, ContractError> {
         Ok(GetAdminResponse {
             admin: self.role.admin.current(deps)?,
@@ -907,7 +917,7 @@ impl Transmuter {
     #[sv::msg(query)]
     fn get_admin_candidate(
         &self,
-        QueryCtx { deps, env: _ }: QueryCtx,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
     ) -> Result<GetAdminCandidateResponse, ContractError> {
         Ok(GetAdminCandidateResponse {
             admin_candidate: self.role.admin.candidate(deps)?,
@@ -918,7 +928,7 @@ impl Transmuter {
     #[sv::msg(exec)]
     pub fn assign_moderator(
         &self,
-        ExecCtx { deps, env: _, info }: ExecCtx,
+        ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         address: String,
     ) -> Result<Response, ContractError> {
         let moderator_address = deps.api.addr_validate(&address)?;
@@ -934,7 +944,7 @@ impl Transmuter {
     #[sv::msg(query)]
     fn get_moderator(
         &self,
-        QueryCtx { deps, env: _ }: QueryCtx,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
     ) -> Result<GetModeratorResponse, ContractError> {
         Ok(GetModeratorResponse {
             moderator: self.role.moderator.get(deps)?,
