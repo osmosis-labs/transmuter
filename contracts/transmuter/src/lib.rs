@@ -37,10 +37,7 @@ mod entry_points {
                 _ => {
                     ensure!(
                         CONTRACT
-                            .is_active(sylvia::types::QueryCtx {
-                                deps: $deps.as_ref(),
-                                env: $env.clone()
-                            })?
+                            .is_active(sylvia::ctx::QueryCtx::from(($deps.as_ref(), $env.clone())))?
                             .is_active,
                         ContractError::InactivePool {}
                     );

@@ -49,7 +49,7 @@ cw2 = "2.0.0"
 osmosis-std = "0.26.0"
 schemars = "0.8.12"
 serde = {version = "1.0.183", default-features = false, features = ["derive"]}
-sylvia = "1.2.1"
+sylvia = "1.3.5"
 thiserror = {version = "1.0.44"}
 transmuter_math = {version = "1.0.0", path = "../../packages/transmuter_math"}
 
