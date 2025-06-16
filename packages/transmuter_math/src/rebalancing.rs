@@ -101,7 +101,7 @@ impl Zone {
         balance_shift: &BalanceShift,
         ideal: Range,
     ) -> SignedDecimal256 {
-        let overlap = self.range.get_overlap(balance_shift.range().clone());
+        let overlap = self.range.intersect(balance_shift.range());
 
         let Some(overlap) = overlap else {
             return SignedDecimal256::zero();

@@ -59,7 +59,7 @@ impl Range {
     ///
     /// This function finds the intersection of two ranges, returning a new range
     /// that represents the common segment between them.
-    pub fn get_overlap(&self, other: Range) -> Option<Range> {
+    pub fn intersect(&self, other: &Range) -> Option<Range> {
         let overlap_start = if self.start.value() > other.start.value() {
             self.start
         } else if other.start.value() > self.start.value() {
@@ -486,12 +486,12 @@ mod tests {
             Bound::Exclusive(Decimal::percent(30))
         ).ok()
     )]
-    fn test_range_get_overlap(
+    fn test_range_intersect(
         #[case] range1: Range,
         #[case] range2: Range,
         #[case] expected: Option<Range>,
     ) {
-        let overlap = range1.get_overlap(range2);
+        let overlap = range1.intersect(&range2);
 
         if let Some(overlap) = overlap {
             let expected = expected.expect("overlap is Some");
