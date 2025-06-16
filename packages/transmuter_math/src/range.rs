@@ -174,6 +174,16 @@ mod tests {
         Bound::Inclusive(Decimal::percent(10)),
         true
     )]
+    #[case::invalid_exclusive_range_reversed(
+        Bound::Exclusive(Decimal::percent(90)),
+        Bound::Exclusive(Decimal::percent(10)),
+        false
+    )]
+    #[case::invalid_mixed_range_reversed(
+        Bound::Exclusive(Decimal::percent(90)),
+        Bound::Inclusive(Decimal::percent(10)),
+        false
+    )]
     fn test_range_new(#[case] start: Bound, #[case] end: Bound, #[case] should_succeed: bool) {
         let result = Range::new(start, end);
         assert_eq!(result.is_ok(), should_succeed);
@@ -271,6 +281,22 @@ mod tests {
         Decimal::percent(90),
         false
     )]
+    #[case::exclusive_range_contains_value_just_inside(
+        Range::new(
+            Bound::Exclusive(Decimal::percent(10)),
+            Bound::Exclusive(Decimal::percent(90))
+        ).unwrap(),
+        Decimal::percent(11),
+        true
+    )]
+    #[case::exclusive_range_contains_value_just_outside(
+        Range::new(
+            Bound::Exclusive(Decimal::percent(10)),
+            Bound::Exclusive(Decimal::percent(90))
+        ).unwrap(),
+        Decimal::percent(89),
+        true
+    )]
     fn test_range_contains(#[case] range: Range, #[case] value: Decimal, #[case] expected: bool) {
         assert_eq!(range.contains(value), expected);
     }
@@ -361,6 +387,104 @@ mod tests {
             Bound::Exclusive(Decimal::percent(30))
         ).unwrap(),
         None
+    )]
+    #[case::partial_overlap_with_different_bound_types(
+        Range::new(
+            Bound::Inclusive(Decimal::percent(10)),
+            Bound::Exclusive(Decimal::percent(30))
+        ).unwrap(),
+        Range::new(
+            Bound::Exclusive(Decimal::percent(20)),
+            Bound::Inclusive(Decimal::percent(40))
+        ).unwrap(),
+        Range::new(
+            Bound::Exclusive(Decimal::percent(20)),
+            Bound::Exclusive(Decimal::percent(30))
+        ).ok()
+    )]
+    #[case::ranges_with_same_start_different_ends(
+        Range::new(
+            Bound::Inclusive(Decimal::percent(10)),
+            Bound::Inclusive(Decimal::percent(30))
+        ).unwrap(),
+        Range::new(
+            Bound::Inclusive(Decimal::percent(10)),
+            Bound::Inclusive(Decimal::percent(20))
+        ).unwrap(),
+        Range::new(
+            Bound::Inclusive(Decimal::percent(10)),
+            Bound::Inclusive(Decimal::percent(20))
+        ).ok()
+    )]
+    #[case::ranges_with_same_end_different_starts(
+        Range::new(
+            Bound::Inclusive(Decimal::percent(20)),
+            Bound::Inclusive(Decimal::percent(30))
+        ).unwrap(),
+        Range::new(
+            Bound::Inclusive(Decimal::percent(10)),
+            Bound::Inclusive(Decimal::percent(30))
+        ).unwrap(),
+        Range::new(
+            Bound::Inclusive(Decimal::percent(20)),
+            Bound::Inclusive(Decimal::percent(30))
+        ).ok()
+    )]
+    #[case::ranges_with_exclusive_bounds_on_both_sides(
+        Range::new(
+            Bound::Exclusive(Decimal::percent(10)),
+            Bound::Exclusive(Decimal::percent(30))
+        ).unwrap(),
+        Range::new(
+            Bound::Exclusive(Decimal::percent(20)),
+            Bound::Exclusive(Decimal::percent(40))
+        ).unwrap(),
+        Range::new(
+            Bound::Exclusive(Decimal::percent(20)),
+            Bound::Exclusive(Decimal::percent(30))
+        ).ok()
+    )]
+    #[case::ranges_with_same_value_but_different_bound_types(
+        Range::new(
+            Bound::Inclusive(Decimal::percent(10)),
+            Bound::Inclusive(Decimal::percent(30))
+        ).unwrap(),
+        Range::new(
+            Bound::Exclusive(Decimal::percent(10)),
+            Bound::Exclusive(Decimal::percent(30))
+        ).unwrap(),
+        Range::new(
+            Bound::Exclusive(Decimal::percent(10)),
+            Bound::Exclusive(Decimal::percent(30))
+        ).ok()
+    )]
+    #[case::ranges_with_same_value_but_different_bound_types_exclusive_start(
+        Range::new(
+            Bound::Inclusive(Decimal::percent(10)),
+            Bound::Inclusive(Decimal::percent(30))
+        ).unwrap(),
+        Range::new(
+            Bound::Exclusive(Decimal::percent(10)),
+            Bound::Inclusive(Decimal::percent(30))
+        ).unwrap(),
+        Range::new(
+            Bound::Exclusive(Decimal::percent(10)),
+            Bound::Inclusive(Decimal::percent(30))
+        ).ok()
+    )]
+    #[case::ranges_with_same_value_but_different_bound_types_exclusive_end(
+        Range::new(
+            Bound::Inclusive(Decimal::percent(10)),
+            Bound::Inclusive(Decimal::percent(30))
+        ).unwrap(),
+        Range::new(
+            Bound::Inclusive(Decimal::percent(10)),
+            Bound::Exclusive(Decimal::percent(30))
+        ).unwrap(),
+        Range::new(
+            Bound::Inclusive(Decimal::percent(10)),
+            Bound::Exclusive(Decimal::percent(30))
+        ).ok()
     )]
     fn test_range_get_overlap(
         #[case] range1: Range,
