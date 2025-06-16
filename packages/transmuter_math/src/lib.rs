@@ -1,14 +1,11 @@
 mod division;
 mod errors;
 mod helpers;
-mod range;
-
 pub mod rebalancing;
 
 pub use cosmwasm_std::{Decimal, Timestamp, Uint64};
 pub use division::Division;
 pub use errors::TransmuterMathError;
-pub use range::{Bound, Range};
 
 pub fn compressed_moving_average(
     latest_removed_division: Option<Division>,

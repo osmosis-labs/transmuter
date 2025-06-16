@@ -1,6 +1,6 @@
 use cosmwasm_std::{CheckedFromRatioError, DivideByZeroError, OverflowError};
 
-use crate::Bound;
+use crate::rebalancing::range::Bound;
 
 #[derive(thiserror::Error, Debug, PartialEq)]
 pub enum TransmuterMathError {
