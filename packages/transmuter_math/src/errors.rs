@@ -1,5 +1,7 @@
 use cosmwasm_std::{CheckedFromRatioError, Decimal, DivideByZeroError, OverflowError};
 
+use crate::Bound;
+
 #[derive(thiserror::Error, Debug, PartialEq)]
 pub enum TransmuterMathError {
     /// Time invariant error, this should never happen
@@ -22,5 +24,5 @@ pub enum TransmuterMathError {
     CheckedFromRatioError(#[from] CheckedFromRatioError),
 
     #[error("Invalid range: start={0}, end={1}")]
-    InvalidRange(Decimal, Decimal),
+    InvalidRange(Bound, Bound),
 }

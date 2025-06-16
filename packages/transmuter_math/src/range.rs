@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use cosmwasm_std::Decimal;
 
 use crate::TransmuterMathError as Error;
@@ -20,6 +22,15 @@ impl Bound {
     }
 }
 
+impl Display for Bound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Inclusive(v) => write!(f, "Inclusive({})", v),
+            Self::Exclusive(v) => write!(f, "Exclusive({})", v),
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct Range {
     start: Bound,
@@ -28,8 +39,17 @@ pub struct Range {
 
 impl Range {
     pub fn new(start: Bound, end: Bound) -> Result<Self, Error> {
+        if start.value() == end.value() {
+            match (start, end) {
+                (Bound::Inclusive(_), Bound::Exclusive(_)) => return Err(Error::InvalidRange(start, end)),
+                (Bound::Exclusive(_), Bound::Inclusive(_)) => return Err(Error::InvalidRange(start, end)),
+                (Bound::Exclusive(_), Bound::Exclusive(_)) => return Err(Error::InvalidRange(start, end)),
+                (Bound::Inclusive(_), Bound::Inclusive(_)) => (), // single point range is valid
+            }
+        }
+
         if start.value() > end.value() {
-            return Err(Error::InvalidRange(start.value(), end.value()));
+            return Err(Error::InvalidRange(start, end));
         }
 
         Ok(Self { start, end })
@@ -119,30 +139,40 @@ mod tests {
     }
 
     #[rstest]
-    #[case(
+    #[case::valid_inclusive_range(
         Bound::Inclusive(Decimal::percent(10)),
         Bound::Inclusive(Decimal::percent(90)),
         true
     )]
-    #[case(
+    #[case::invalid_inclusive_range_reversed(
         Bound::Inclusive(Decimal::percent(90)),
         Bound::Inclusive(Decimal::percent(10)),
         false
     )]
-    #[case(
+    #[case::valid_exclusive_range(
         Bound::Exclusive(Decimal::percent(10)),
         Bound::Exclusive(Decimal::percent(90)),
         true
     )]
-    #[case(
+    #[case::invalid_exclusive_range_same_point(
         Bound::Exclusive(Decimal::percent(50)),
         Bound::Exclusive(Decimal::percent(50)),
-        true
+        false
     )]
-    #[case(
-        Bound::Exclusive(Decimal::percent(90)),
+    #[case::invalid_mixed_range_same_point_inclusive_exclusive(
+        Bound::Inclusive(Decimal::percent(10)),
         Bound::Exclusive(Decimal::percent(10)),
         false
+    )]
+    #[case::invalid_mixed_range_same_point_exclusive_inclusive(
+        Bound::Exclusive(Decimal::percent(10)),
+        Bound::Inclusive(Decimal::percent(10)),
+        false
+    )]
+    #[case::valid_single_point_range(
+        Bound::Inclusive(Decimal::percent(10)),
+        Bound::Inclusive(Decimal::percent(10)),
+        true
     )]
     fn test_range_new(#[case] start: Bound, #[case] end: Bound, #[case] should_succeed: bool) {
         let result = Range::new(start, end);
@@ -153,7 +183,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case(
+    #[case::inclusive_range_contains_middle_value(
         Range::new(
             Bound::Inclusive(Decimal::percent(10)),
             Bound::Inclusive(Decimal::percent(90))
@@ -161,7 +191,7 @@ mod tests {
         Decimal::percent(50),
         true
     )]
-    #[case(
+    #[case::inclusive_range_contains_start_value(
         Range::new(
             Bound::Inclusive(Decimal::percent(10)),
             Bound::Inclusive(Decimal::percent(90))
@@ -169,7 +199,7 @@ mod tests {
         Decimal::percent(10),
         true
     )]
-    #[case(
+    #[case::inclusive_range_contains_end_value(
         Range::new(
             Bound::Inclusive(Decimal::percent(10)),
             Bound::Inclusive(Decimal::percent(90))
@@ -177,7 +207,7 @@ mod tests {
         Decimal::percent(90),
         true
     )]
-    #[case(
+    #[case::inclusive_range_does_not_contain_value_below_start(
         Range::new(
             Bound::Inclusive(Decimal::percent(10)),
             Bound::Inclusive(Decimal::percent(90))
@@ -185,7 +215,7 @@ mod tests {
         Decimal::percent(5),
         false
     )]
-    #[case(
+    #[case::inclusive_range_does_not_contain_value_above_end(
         Range::new(
             Bound::Inclusive(Decimal::percent(10)),
             Bound::Inclusive(Decimal::percent(90))
@@ -193,7 +223,7 @@ mod tests {
         Decimal::percent(95),
         false
     )]
-    #[case(
+    #[case::exclusive_range_does_not_contain_start_value(
         Range::new(
             Bound::Exclusive(Decimal::percent(10)),
             Bound::Exclusive(Decimal::percent(90))
@@ -201,7 +231,7 @@ mod tests {
         Decimal::percent(10),
         false
     )]
-    #[case(
+    #[case::exclusive_range_does_not_contain_end_value(
         Range::new(
             Bound::Exclusive(Decimal::percent(10)),
             Bound::Exclusive(Decimal::percent(90))
@@ -209,7 +239,7 @@ mod tests {
         Decimal::percent(90),
         false
     )]
-    #[case(
+    #[case::mixed_range_exclusive_start_does_not_contain_start_value(
         Range::new(
             Bound::Exclusive(Decimal::percent(10)),
             Bound::Inclusive(Decimal::percent(90))
@@ -217,7 +247,7 @@ mod tests {
         Decimal::percent(10),
         false
     )]
-    #[case(
+    #[case::mixed_range_exclusive_start_contains_end_value(
         Range::new(
             Bound::Exclusive(Decimal::percent(10)), 
             Bound::Inclusive(Decimal::percent(90))
@@ -225,7 +255,7 @@ mod tests {
         Decimal::percent(90),
         true
     )]
-    #[case(
+    #[case::mixed_range_inclusive_start_contains_start_value(
         Range::new(
             Bound::Inclusive(Decimal::percent(10)),
             Bound::Exclusive(Decimal::percent(90))
@@ -233,7 +263,7 @@ mod tests {
         Decimal::percent(10),
         true
     )]
-    #[case(
+    #[case::mixed_range_inclusive_start_does_not_contain_end_value(
         Range::new(
             Bound::Inclusive(Decimal::percent(10)),
             Bound::Exclusive(Decimal::percent(90))
@@ -246,7 +276,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case(
+    #[case::smaller_range_inside_larger_range(
         Range::new(
             Bound::Inclusive(Decimal::percent(10)),
             Bound::Inclusive(Decimal::percent(90))
@@ -260,7 +290,7 @@ mod tests {
             Bound::Inclusive(Decimal::percent(80))
         ).ok()
     )]
-    #[case(
+    #[case::larger_range_contains_smaller_range(
         Range::new(
             Bound::Inclusive(Decimal::percent(20)),
             Bound::Inclusive(Decimal::percent(80))
@@ -274,7 +304,7 @@ mod tests {
             Bound::Inclusive(Decimal::percent(80))
         ).ok()
     )]
-    #[case(
+    #[case::no_overlap_between_ranges(
         Range::new(
             Bound::Inclusive(Decimal::percent(10)),
             Bound::Inclusive(Decimal::percent(30))
@@ -285,7 +315,7 @@ mod tests {
         ).unwrap(),
         None
     )]
-    #[case(
+    #[case::ranges_touch_at_single_point_inclusive(
         Range::new(
             Bound::Inclusive(Decimal::percent(10)),
             Bound::Inclusive(Decimal::percent(30))
@@ -299,18 +329,7 @@ mod tests {
             Bound::Inclusive(Decimal::percent(30))
         ).ok()
     )]
-    #[case(
-        Range::new(
-            Bound::Inclusive(Decimal::percent(10)),
-            Bound::Exclusive(Decimal::percent(30))
-        ).unwrap(),
-        Range::new(
-            Bound::Inclusive(Decimal::percent(30)),
-            Bound::Inclusive(Decimal::percent(40))
-        ).unwrap(),
-        None
-    )]
-    #[case(
+    #[case::ranges_touch_at_single_point_exclusive_start_first_range(
         Range::new(
             Bound::Inclusive(Decimal::percent(10)),
             Bound::Inclusive(Decimal::percent(30)),
@@ -318,6 +337,28 @@ mod tests {
         Range::new(
             Bound::Exclusive(Decimal::percent(30)),
             Bound::Inclusive(Decimal::percent(40))
+        ).unwrap(),
+        None
+    )]
+    #[case::ranges_touch_at_single_point_exclusive_start_second_range(
+        Range::new(
+            Bound::Exclusive(Decimal::percent(30)),
+            Bound::Inclusive(Decimal::percent(40))
+        ).unwrap(),
+        Range::new(
+            Bound::Inclusive(Decimal::percent(10)),
+            Bound::Inclusive(Decimal::percent(30)),
+        ).unwrap(),
+        None
+    )]
+    #[case::ranges_touch_at_single_point_exclusive_end_first_range(
+        Range::new(
+            Bound::Inclusive(Decimal::percent(30)),
+            Bound::Inclusive(Decimal::percent(40))
+        ).unwrap(),
+        Range::new(
+            Bound::Inclusive(Decimal::percent(10)),
+            Bound::Exclusive(Decimal::percent(30))
         ).unwrap(),
         None
     )]
