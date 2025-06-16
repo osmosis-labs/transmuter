@@ -68,7 +68,7 @@ impl Range {
             // If values are equal, prefer exclusive bound
             match (self.start, other.start) {
                 (Bound::Exclusive(v), _) | (_, Bound::Exclusive(v)) => Bound::Exclusive(v),
-                _ => Bound::Inclusive(self.start.value()),
+                (Bound::Inclusive(_), Bound::Inclusive(_)) => Bound::Inclusive(self.start.value()),
             }
         };
 
@@ -80,7 +80,7 @@ impl Range {
             // If values are equal, prefer exclusive bound
             match (self.end, other.end) {
                 (Bound::Exclusive(v), _) | (_, Bound::Exclusive(v)) => Bound::Exclusive(v),
-                _ => Bound::Inclusive(self.end.value()),
+                (Bound::Inclusive(_), Bound::Inclusive(_)) => Bound::Inclusive(self.end.value()),
             }
         };
 
