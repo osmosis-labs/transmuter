@@ -31,3 +31,5 @@ pub fn compute_adjustment_value(
 
     Ok(adjustment * SignedDecimal256::from(balance_total))
 }
+
+// TODO: test 3

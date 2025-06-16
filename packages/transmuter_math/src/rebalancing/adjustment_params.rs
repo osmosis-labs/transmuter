@@ -7,10 +7,10 @@ use thiserror::Error;
 
 #[derive(Debug)]
 pub struct AdjustmentParams {
-    ideal_start: Decimal,
-    ideal_end: Decimal,
-    critical_start: Decimal,
-    critical_end: Decimal,
+    ideal_upper: Decimal,
+    ideal_lower: Decimal,
+    critical_upper: Decimal,
+    critical_lower: Decimal,
     limit: Decimal,
     adjustment_rate_strained: Decimal,
     adjustment_rate_critical: Decimal,
@@ -29,32 +29,32 @@ pub enum AdjustmentParamsError {
 
 impl AdjustmentParams {
     pub fn new(
-        ideal_start: Decimal,
-        ideal_end: Decimal,
-        critical_start: Decimal,
-        critical_end: Decimal,
+        ideal_upper: Decimal,
+        ideal_lower: Decimal,
+        critical_upper: Decimal,
+        critical_lower: Decimal,
         limit: Decimal,
         adjustment_rate_strained: Decimal,
         adjustment_rate_critical: Decimal,
     ) -> Result<Self, AdjustmentParamsError> {
         // Validate critical range is within [0, limit]
-        if critical_start < Decimal::zero() || critical_end > limit {
+        if critical_upper < Decimal::zero() || critical_lower > limit {
             return Err(AdjustmentParamsError::CriticalRangeOutOfBounds { limit });
         }
 
         // Validate ideal range is within critical range
-        if ideal_start < critical_start || ideal_end > critical_end {
+        if ideal_upper < critical_upper || ideal_lower > critical_lower {
             return Err(AdjustmentParamsError::IdealRangeOutOfBounds {
-                critical_start,
-                critical_end,
+                critical_start: critical_upper,
+                critical_end: critical_lower,
             });
         }
 
         Ok(Self {
-            ideal_start,
-            ideal_end,
-            critical_start,
-            critical_end,
+            ideal_upper,
+            ideal_lower,
+            critical_upper,
+            critical_lower,
             limit,
             adjustment_rate_strained,
             adjustment_rate_critical,
@@ -63,8 +63,8 @@ impl AdjustmentParams {
 
     pub fn ideal(&self) -> Range {
         Range::new(
-            Bound::Inclusive(self.ideal_start),
-            Bound::Inclusive(self.ideal_end),
+            Bound::Inclusive(self.ideal_upper),
+            Bound::Inclusive(self.ideal_lower),
         )
         .unwrap()
     }
@@ -73,34 +73,34 @@ impl AdjustmentParams {
         // critical low: [0, critical.start) - highest incentive to move out
         let critical_low = Zone::new(
             Bound::Inclusive(Decimal::zero()),
-            Bound::Exclusive(self.critical_start),
+            Bound::Exclusive(self.critical_upper),
             self.adjustment_rate_critical,
         );
 
         // strained low: [critical.start, ideal.start) - moderate incentive to move up
         let strained_low = Zone::new(
-            Bound::Inclusive(self.critical_start),
-            Bound::Exclusive(self.ideal_start),
+            Bound::Inclusive(self.critical_upper),
+            Bound::Exclusive(self.ideal_upper),
             self.adjustment_rate_strained,
         );
 
         // ideal zone: [ideal.start, ideal.end] - neutral, no fees or incentives
         let ideal = Zone::new(
-            Bound::Inclusive(self.ideal_start),
-            Bound::Inclusive(self.ideal_end),
+            Bound::Inclusive(self.ideal_upper),
+            Bound::Inclusive(self.ideal_lower),
             Decimal::zero(),
         );
 
         // strained high: (ideal.end, critical.end] - moderate incentive to move down
         let strained_high = Zone::new(
-            Bound::Exclusive(self.ideal_end),
-            Bound::Inclusive(self.critical_end),
+            Bound::Exclusive(self.ideal_lower),
+            Bound::Inclusive(self.critical_lower),
             self.adjustment_rate_strained,
         );
 
         // critical high: (critical.end, limit] - highest incentive to move out
         let critical_high = Zone::new(
-            Bound::Exclusive(self.critical_end),
+            Bound::Exclusive(self.critical_lower),
             Bound::Inclusive(self.limit),
             self.adjustment_rate_critical,
         );
