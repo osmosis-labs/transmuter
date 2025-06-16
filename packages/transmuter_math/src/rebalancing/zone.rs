@@ -6,6 +6,7 @@ use cosmwasm_std::{Decimal, SignedDecimal256};
 use std::ops::Neg;
 
 /// Represents a zone in the balance range
+#[derive(Debug, PartialEq, Eq)]
 pub struct Zone {
     range: Range,
     adjustment_rate: Decimal,

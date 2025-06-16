@@ -1,6 +1,6 @@
 use cosmwasm_std::{CheckedFromRatioError, DivideByZeroError, OverflowError};
 
-use crate::rebalancing::range::Bound;
+use crate::rebalancing::{adjustment_params::AdjustmentParamsError, range::Bound};
 
 #[derive(thiserror::Error, Debug, PartialEq)]
 pub enum TransmuterMathError {
@@ -25,4 +25,7 @@ pub enum TransmuterMathError {
 
     #[error("Invalid range: start={0}, end={1}")]
     InvalidRange(Bound, Bound),
+
+    #[error("{0}")]
+    AdjustmentParamsError(#[from] AdjustmentParamsError),
 }

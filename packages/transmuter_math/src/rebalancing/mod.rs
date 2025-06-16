@@ -21,10 +21,12 @@ pub fn compute_adjustment_value(
     params: AdjustmentParams,
 ) -> Result<SignedDecimal256, Error> {
     let balance_shift = BalanceShift::new(balance, balance_new)?;
+    let ideal = params.ideal().clone();
+
     let adjustment = params
         .zones()
         .iter()
-        .map(|zone| zone.compute_adjustment_rate(&balance_shift, params.ideal))
+        .map(|zone| zone.compute_adjustment_rate(&balance_shift, ideal))
         .sum::<SignedDecimal256>();
 
     Ok(adjustment * SignedDecimal256::from(balance_total))

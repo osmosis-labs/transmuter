@@ -5,7 +5,7 @@ use cosmwasm_std::Decimal;
 use crate::TransmuterMathError as Error;
 
 /// Represents a bound in a range, which can be either inclusive or exclusive
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Bound {
     /// Inclusive bound - the value is included in the range
     Inclusive(Decimal),
@@ -31,7 +31,7 @@ impl Display for Bound {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Range {
     start: Bound,
     end: Bound,
