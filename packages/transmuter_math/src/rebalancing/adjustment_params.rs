@@ -7,8 +7,10 @@ use thiserror::Error;
 
 #[derive(Debug)]
 pub struct AdjustmentParams {
-    ideal: Range,
-    critical: Range,
+    ideal_start: Decimal,
+    ideal_end: Decimal,
+    critical_start: Decimal,
+    critical_end: Decimal,
     limit: Decimal,
     adjustment_rate_strained: Decimal,
     adjustment_rate_critical: Decimal,
@@ -27,72 +29,78 @@ pub enum AdjustmentParamsError {
 
 impl AdjustmentParams {
     pub fn new(
-        ideal: Range,
-        critical: Range,
+        ideal_start: Decimal,
+        ideal_end: Decimal,
+        critical_start: Decimal,
+        critical_end: Decimal,
         limit: Decimal,
         adjustment_rate_strained: Decimal,
         adjustment_rate_critical: Decimal,
     ) -> Result<Self, AdjustmentParamsError> {
         // Validate critical range is within [0, limit]
-        if critical.start().value() < Decimal::zero() || critical.end().value() > limit {
+        if critical_start < Decimal::zero() || critical_end > limit {
             return Err(AdjustmentParamsError::CriticalRangeOutOfBounds { limit });
         }
 
         // Validate ideal range is within critical range
-        if ideal.start().value() < critical.start().value()
-            || ideal.end().value() > critical.end().value()
-        {
+        if ideal_start < critical_start || ideal_end > critical_end {
             return Err(AdjustmentParamsError::IdealRangeOutOfBounds {
-                critical_start: critical.start().value(),
-                critical_end: critical.end().value(),
+                critical_start,
+                critical_end,
             });
         }
 
         Ok(Self {
-            ideal,
-            critical,
+            ideal_start,
+            ideal_end,
+            critical_start,
+            critical_end,
             limit,
             adjustment_rate_strained,
             adjustment_rate_critical,
         })
     }
 
-    pub fn ideal(&self) -> &Range {
-        &self.ideal
+    pub fn ideal(&self) -> Range {
+        Range::new(
+            Bound::Inclusive(self.ideal_start),
+            Bound::Inclusive(self.ideal_end),
+        )
+        .unwrap()
     }
 
     pub fn zones(&self) -> [Zone; 5] {
         // critical low: [0, critical.start) - highest incentive to move out
         let critical_low = Zone::new(
             Bound::Inclusive(Decimal::zero()),
-            Bound::Exclusive(self.critical.start().value()),
+            Bound::Exclusive(self.critical_start),
             self.adjustment_rate_critical,
         );
 
         // strained low: [critical.start, ideal.start) - moderate incentive to move up
         let strained_low = Zone::new(
-            Bound::Inclusive(self.critical.start().value()),
-            Bound::Exclusive(self.ideal.start().value()),
+            Bound::Inclusive(self.critical_start),
+            Bound::Exclusive(self.ideal_start),
             self.adjustment_rate_strained,
         );
 
         // ideal zone: [ideal.start, ideal.end] - neutral, no fees or incentives
         let ideal = Zone::new(
-            Bound::Inclusive(self.ideal.start().value()),
-            Bound::Inclusive(self.ideal.end().value()),
+            Bound::Inclusive(self.ideal_start),
+            Bound::Inclusive(self.ideal_end),
             Decimal::zero(),
         );
 
         // strained high: (ideal.end, critical.end] - moderate incentive to move down
         let strained_high = Zone::new(
-            Bound::Exclusive(self.ideal.end().value()),
-            Bound::Inclusive(self.critical.end().value()),
+            Bound::Exclusive(self.ideal_end),
+            Bound::Inclusive(self.critical_end),
             self.adjustment_rate_strained,
         );
 
         // critical high: (critical.end, limit] - highest incentive to move out
         let critical_high = Zone::new(
-            Bound::Exclusive(self.critical.end().value()),
+            Bound::Exclusive(self.critical_end),
             Bound::Inclusive(self.limit),
             self.adjustment_rate_critical,
         );
@@ -114,16 +122,10 @@ mod tests {
     #[test]
     fn test_zones() {
         let params = AdjustmentParams::new(
-            Range::new(
-                Bound::Inclusive(Decimal::percent(40)),
-                Bound::Inclusive(Decimal::percent(60)),
-            )
-            .unwrap(),
-            Range::new(
-                Bound::Inclusive(Decimal::percent(20)),
-                Bound::Inclusive(Decimal::percent(80)),
-            )
-            .unwrap(),
+            Decimal::percent(40),
+            Decimal::percent(60),
+            Decimal::percent(20),
+            Decimal::percent(80),
             Decimal::percent(90),
             Decimal::percent(1),
             Decimal::percent(2),
@@ -171,16 +173,10 @@ mod tests {
     fn test_validation() {
         // Test critical range out of bounds
         let err = AdjustmentParams::new(
-            Range::new(
-                Bound::Inclusive(Decimal::percent(40)),
-                Bound::Inclusive(Decimal::percent(60)),
-            )
-            .unwrap(),
-            Range::new(
-                Bound::Inclusive(Decimal::percent(20)),
-                Bound::Inclusive(Decimal::percent(100)), // Exceeds limit
-            )
-            .unwrap(),
+            Decimal::percent(40),
+            Decimal::percent(60),
+            Decimal::percent(20),
+            Decimal::percent(100), // Exceeds limit
             Decimal::percent(90),
             Decimal::percent(1),
             Decimal::percent(2),
@@ -195,16 +191,10 @@ mod tests {
 
         // Test ideal range out of bounds
         let err = AdjustmentParams::new(
-            Range::new(
-                Bound::Inclusive(Decimal::percent(10)), // Below critical start
-                Bound::Inclusive(Decimal::percent(60)),
-            )
-            .unwrap(),
-            Range::new(
-                Bound::Inclusive(Decimal::percent(20)),
-                Bound::Inclusive(Decimal::percent(80)),
-            )
-            .unwrap(),
+            Decimal::percent(10), // Below critical start
+            Decimal::percent(60),
+            Decimal::percent(20),
+            Decimal::percent(80),
             Decimal::percent(90),
             Decimal::percent(1),
             Decimal::percent(2),
