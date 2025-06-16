@@ -25,6 +25,10 @@ pub enum AdjustmentParamsError {
         critical_start: Decimal,
         critical_end: Decimal,
     },
+    #[error("ideal range must be ordered (upper <= lower)")]
+    InvalidIdealRange,
+    #[error("critical range must be ordered (upper <= lower)")]
+    InvalidCriticalRange,
 }
 
 impl AdjustmentParams {
@@ -37,6 +41,14 @@ impl AdjustmentParams {
         adjustment_rate_strained: Decimal,
         adjustment_rate_critical: Decimal,
     ) -> Result<Self, AdjustmentParamsError> {
+        // Validate ranges are properly ordered
+        if ideal_upper > ideal_lower {
+            return Err(AdjustmentParamsError::InvalidIdealRange);
+        }
+        if critical_upper > critical_lower {
+            return Err(AdjustmentParamsError::InvalidCriticalRange);
+        }
+
         // Validate critical range is within [0, limit]
         if critical_upper < Decimal::zero() || critical_lower > limit {
             return Err(AdjustmentParamsError::CriticalRangeOutOfBounds { limit });
@@ -118,94 +130,258 @@ impl AdjustmentParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn test_zones() {
-        let params = AdjustmentParams::new(
-            Decimal::percent(40),
-            Decimal::percent(60),
-            Decimal::percent(20),
-            Decimal::percent(80),
-            Decimal::percent(90),
-            Decimal::percent(1),
-            Decimal::percent(2),
-        )
-        .unwrap();
+    #[rstest]
+    #[case::valid_parameters(
+        Decimal::percent(40),
+        Decimal::percent(60),
+        Decimal::percent(20),
+        Decimal::percent(80),
+        Decimal::percent(90),
+        Decimal::percent(1),
+        Decimal::percent(2),
+        true
+    )]
+    #[case::critical_upper_exceeds_limit(
+        Decimal::percent(40),
+        Decimal::percent(60),
+        Decimal::percent(20),
+        Decimal::percent(100),
+        Decimal::percent(90),
+        Decimal::percent(1),
+        Decimal::percent(2),
+        false
+    )]
+    #[case::ideal_lower_below_critical_lower(
+        Decimal::percent(10),
+        Decimal::percent(60),
+        Decimal::percent(20),
+        Decimal::percent(80),
+        Decimal::percent(90),
+        Decimal::percent(1),
+        Decimal::percent(2),
+        false
+    )]
+    #[case::ideal_upper_above_critical_upper(
+        Decimal::percent(40),
+        Decimal::percent(90),
+        Decimal::percent(20),
+        Decimal::percent(80),
+        Decimal::percent(90),
+        Decimal::percent(1),
+        Decimal::percent(2),
+        false
+    )]
+    #[case::ideal_range_reversed(
+        Decimal::percent(60),
+        Decimal::percent(40),
+        Decimal::percent(20),
+        Decimal::percent(80),
+        Decimal::percent(90),
+        Decimal::percent(1),
+        Decimal::percent(2),
+        false
+    )]
+    #[case::critical_range_reversed(
+        Decimal::percent(40),
+        Decimal::percent(60),
+        Decimal::percent(80),
+        Decimal::percent(20),
+        Decimal::percent(90),
+        Decimal::percent(1),
+        Decimal::percent(2),
+        false
+    )]
+    #[case::zero_adjustment_rates(
+        Decimal::percent(40),
+        Decimal::percent(60),
+        Decimal::percent(20),
+        Decimal::percent(80),
+        Decimal::percent(90),
+        Decimal::zero(),
+        Decimal::zero(),
+        true
+    )]
+    #[case::zero_limit(
+        Decimal::percent(40),
+        Decimal::percent(60),
+        Decimal::percent(20),
+        Decimal::percent(80),
+        Decimal::zero(),
+        Decimal::percent(1),
+        Decimal::percent(2),
+        false
+    )]
+    #[case::max_limit(
+        Decimal::percent(40),
+        Decimal::percent(60),
+        Decimal::percent(20),
+        Decimal::percent(80),
+        Decimal::percent(100),
+        Decimal::percent(1),
+        Decimal::percent(2),
+        true
+    )]
+    fn test_adjustment_params_validation(
+        #[case] ideal_upper: Decimal,
+        #[case] ideal_lower: Decimal,
+        #[case] critical_upper: Decimal,
+        #[case] critical_lower: Decimal,
+        #[case] limit: Decimal,
+        #[case] adjustment_rate_strained: Decimal,
+        #[case] adjustment_rate_critical: Decimal,
+        #[case] should_succeed: bool,
+    ) {
+        let result = AdjustmentParams::new(
+            ideal_upper,
+            ideal_lower,
+            critical_upper,
+            critical_lower,
+            limit,
+            adjustment_rate_strained,
+            adjustment_rate_critical,
+        );
 
-        let expected_zones = [
-            // critical low: [0, critical.start)
+        assert_eq!(result.is_ok(), should_succeed);
+    }
+
+    #[rstest]
+    #[case::normal_zones(
+        Decimal::percent(40),
+        Decimal::percent(60),
+        Decimal::percent(20),
+        Decimal::percent(80),
+        Decimal::percent(90),
+        Decimal::percent(1),
+        Decimal::percent(2),
+        [
+            // critical low: [0, critical.upper)
             Zone::new(
                 Bound::Inclusive(Decimal::zero()),
                 Bound::Exclusive(Decimal::percent(20)),
                 Decimal::percent(2),
             ),
-            // strained low: [critical.start, ideal.start)
+            // strained low: [critical.upper, ideal.upper)
             Zone::new(
                 Bound::Inclusive(Decimal::percent(20)),
                 Bound::Exclusive(Decimal::percent(40)),
                 Decimal::percent(1),
             ),
-            // ideal zone: [ideal.start, ideal.end]
+            // ideal zone: [ideal.upper, ideal.lower]
             Zone::new(
                 Bound::Inclusive(Decimal::percent(40)),
                 Bound::Inclusive(Decimal::percent(60)),
                 Decimal::zero(),
             ),
-            // strained high: (ideal.end, critical.end]
+            // strained high: (ideal.lower, critical.lower]
             Zone::new(
                 Bound::Exclusive(Decimal::percent(60)),
                 Bound::Inclusive(Decimal::percent(80)),
                 Decimal::percent(1),
             ),
-            // critical high: (critical.end, limit]
+            // critical high: (critical.lower, limit]
             Zone::new(
                 Bound::Exclusive(Decimal::percent(80)),
                 Bound::Inclusive(Decimal::percent(90)),
                 Decimal::percent(2),
             ),
-        ];
+        ]
+    )]
+    #[case::tight_ranges(
+        Decimal::percent(49),
+        Decimal::percent(51),
+        Decimal::percent(45),
+        Decimal::percent(55),
+        Decimal::percent(100),
+        Decimal::percent(1),
+        Decimal::percent(2),
+        [
+            Zone::new(
+                Bound::Inclusive(Decimal::zero()),
+                Bound::Exclusive(Decimal::percent(45)),
+                Decimal::percent(2),
+            ),
+            Zone::new(
+                Bound::Inclusive(Decimal::percent(45)),
+                Bound::Exclusive(Decimal::percent(49)),
+                Decimal::percent(1),
+            ),
+            Zone::new(
+                Bound::Inclusive(Decimal::percent(49)),
+                Bound::Inclusive(Decimal::percent(51)),
+                Decimal::zero(),
+            ),
+            Zone::new(
+                Bound::Exclusive(Decimal::percent(51)),
+                Bound::Inclusive(Decimal::percent(55)),
+                Decimal::percent(1),
+            ),
+            Zone::new(
+                Bound::Exclusive(Decimal::percent(55)),
+                Bound::Inclusive(Decimal::percent(100)),
+                Decimal::percent(2),
+            ),
+        ]
+    )]
+    #[case::minimal_ranges(
+        Decimal::percent(49),
+        Decimal::percent(51),
+        Decimal::percent(48),
+        Decimal::percent(52),
+        Decimal::percent(100),
+        Decimal::percent(1),
+        Decimal::percent(2),
+        [
+            Zone::new(
+                Bound::Inclusive(Decimal::zero()),
+                Bound::Exclusive(Decimal::percent(48)),
+                Decimal::percent(2),
+            ),
+            Zone::new(
+                Bound::Inclusive(Decimal::percent(48)),
+                Bound::Exclusive(Decimal::percent(49)),
+                Decimal::percent(1),
+            ),
+            Zone::new(
+                Bound::Inclusive(Decimal::percent(49)),
+                Bound::Inclusive(Decimal::percent(51)),
+                Decimal::zero(),
+            ),
+            Zone::new(
+                Bound::Exclusive(Decimal::percent(51)),
+                Bound::Inclusive(Decimal::percent(52)),
+                Decimal::percent(1),
+            ),
+            Zone::new(
+                Bound::Exclusive(Decimal::percent(52)),
+                Bound::Inclusive(Decimal::percent(100)),
+                Decimal::percent(2),
+            ),
+        ]
+    )]
+    fn test_zones(
+        #[case] ideal_upper: Decimal,
+        #[case] ideal_lower: Decimal,
+        #[case] critical_upper: Decimal,
+        #[case] critical_lower: Decimal,
+        #[case] limit: Decimal,
+        #[case] adjustment_rate_strained: Decimal,
+        #[case] adjustment_rate_critical: Decimal,
+        #[case] expected_zones: [Zone; 5],
+    ) {
+        let params = AdjustmentParams::new(
+            ideal_upper,
+            ideal_lower,
+            critical_upper,
+            critical_lower,
+            limit,
+            adjustment_rate_strained,
+            adjustment_rate_critical,
+        )
+        .unwrap();
 
         let actual_zones = params.zones();
         assert_eq!(actual_zones, expected_zones);
-    }
-
-    #[test]
-    fn test_validation() {
-        // Test critical range out of bounds
-        let err = AdjustmentParams::new(
-            Decimal::percent(40),
-            Decimal::percent(60),
-            Decimal::percent(20),
-            Decimal::percent(100), // Exceeds limit
-            Decimal::percent(90),
-            Decimal::percent(1),
-            Decimal::percent(2),
-        )
-        .unwrap_err();
-        assert_eq!(
-            err,
-            AdjustmentParamsError::CriticalRangeOutOfBounds {
-                limit: Decimal::percent(90)
-            }
-        );
-
-        // Test ideal range out of bounds
-        let err = AdjustmentParams::new(
-            Decimal::percent(10), // Below critical start
-            Decimal::percent(60),
-            Decimal::percent(20),
-            Decimal::percent(80),
-            Decimal::percent(90),
-            Decimal::percent(1),
-            Decimal::percent(2),
-        )
-        .unwrap_err();
-        assert_eq!(
-            err,
-            AdjustmentParamsError::IdealRangeOutOfBounds {
-                critical_start: Decimal::percent(20),
-                critical_end: Decimal::percent(80),
-            }
-        );
     }
 }
