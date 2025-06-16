@@ -1,4 +1,4 @@
-use cosmwasm_std::{CheckedFromRatioError, Decimal, DivideByZeroError, OverflowError};
+use cosmwasm_std::{CheckedFromRatioError, DivideByZeroError, OverflowError};
 
 use crate::Bound;
 
