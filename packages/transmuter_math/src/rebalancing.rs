@@ -1,15 +1,66 @@
+use std::ops::Neg;
+
 use crate::TransmuterMathError as Error;
+use cosmwasm_std::{Decimal, SignedDecimal256};
+
+/// Represents a bound in a range, which can be either inclusive or exclusive
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum Bound {
+    /// Inclusive bound - the value is included in the range
+    Inclusive(Decimal),
+    /// Exclusive bound - the value is not included in the range
+    Exclusive(Decimal),
+}
+
+impl Bound {
+    /// Returns the underlying decimal value
+    pub fn value(&self) -> Decimal {
+        match self {
+            Self::Inclusive(v) | Self::Exclusive(v) => *v,
+        }
+    }
+
+    /// Returns true if the given value is within this bound
+    pub fn contains(&self, value: Decimal) -> bool {
+        match self {
+            Self::Inclusive(bound) => value <= *bound,
+            Self::Exclusive(bound) => value < *bound,
+        }
+    }
+}
+
+/// Compute fee or incentive adjustment for a single asset's balance movement.
+///
+/// This function calculates the incentive/rebate (if positive) or fee (if negative)
+/// for a swap that moves an asset's balance from balance to balance_new. The goal is to
+/// encourage movements toward the ideal balance range [ideal.start, ideal.end] and
+/// discourage movements away from it.
+pub fn compute_adjustment_value(
+    balance: Decimal,
+    balance_new: Decimal,
+    balance_total: Decimal,
+    params: AdjustmentParams,
+) -> Result<SignedDecimal256, Error> {
+    let balance_shift = BalanceShift::new(balance, balance_new)?;
+    let adjustment = params
+        .zones()
+        .iter()
+        .map(|zone| zone.compute_adjustment_rate(&balance_shift, params.ideal))
+        .sum::<SignedDecimal256>();
+
+    Ok(adjustment * SignedDecimal256::from(balance_total))
+}
 
 #[derive(Copy, Clone, Debug)]
 pub struct Range {
-    start: f64,
-    end: f64,
+    start: Bound,
+    end: Bound,
 }
 
 impl Range {
-    pub fn new(start: f64, end: f64) -> Result<Self, Error> {
-        if start > end {
-            return Err(Error::InvalidRange(start, end));
+    pub fn new(start: Bound, end: Bound) -> Result<Self, Error> {
+        if start.value() > end.value() {
+            return Err(Error::InvalidRange(start.value(), end.value()));
         }
 
         Ok(Self { start, end })
@@ -23,13 +74,39 @@ impl Range {
         // Find the intersection of the two ranges
         // segment_start: The later of the two range starts
         // segment_end: The earlier of the two range ends
-        let segment_start = other.start.max(self.start);
-        let segment_end = other.end.min(self.end);
+        let segment_start = if self.start.value() > other.start.value() {
+            self.start
+        } else if other.start.value() > self.start.value() {
+            other.start
+        } else {
+            // If values are equal, prefer inclusive bound
+            match (self.start, other.start) {
+                (Bound::Inclusive(v), _) | (_, Bound::Inclusive(v)) => Bound::Inclusive(v),
+                _ => Bound::Exclusive(self.start.value()),
+            }
+        };
+
+        let segment_end = if self.end.value() < other.end.value() {
+            self.end
+        } else if other.end.value() < self.end.value() {
+            other.end
+        } else {
+            // If values are equal, prefer inclusive bound
+            match (self.end, other.end) {
+                (Bound::Inclusive(v), _) | (_, Bound::Inclusive(v)) => Bound::Inclusive(v),
+                _ => Bound::Exclusive(self.end.value()),
+            }
+        };
 
         Range {
             start: segment_start,
             end: segment_end,
         }
+    }
+
+    /// Returns true if the range contains the given value
+    pub fn contains(&self, value: Decimal) -> bool {
+        self.start.contains(value) && self.end.contains(value)
     }
 }
 
@@ -44,26 +121,15 @@ pub enum BalanceDirection {
     Neutral,
 }
 
-/// Represents the impact of a balance shift on the balance
+/// Represents the impact type of a balance shift on the balance
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum BalanceShiftImpact {
+pub enum BalanceShiftImpactType {
     /// Shift away from ideal
     Debalance,
     /// Shift towards ideal
     Rebalance,
     /// No impact
     Neutral,
-}
-
-impl BalanceShiftImpact {
-    /// Returns the numeric value of the impact (-1 for debalance, 1 for rebalance, 0 for neutral)
-    pub fn as_f64(&self) -> f64 {
-        match self {
-            Self::Debalance => -1.0,
-            Self::Rebalance => 1.0,
-            Self::Neutral => 0.0,
-        }
-    }
 }
 
 /// Represents a balance change with its range and direction
@@ -75,15 +141,11 @@ pub struct BalanceShift {
 
 impl BalanceShift {
     /// Creates a new balance shift from an old balance to a new balance
-    ///
-    /// # Arguments
-    /// * `balance` - The initial balance
-    /// * `balance_new` - The new balance
-    ///
-    /// # Returns
-    /// * `Result<Self, Error>` - The balance shift or an error if the range is invalid
-    pub fn new(balance: f64, balance_new: f64) -> Result<Self, Error> {
-        let range = Range::new(balance.min(balance_new), balance.max(balance_new))?;
+    pub fn new(balance: Decimal, balance_new: Decimal) -> Result<Self, Error> {
+        let range = Range::new(
+            Bound::Inclusive(balance.min(balance_new)),
+            Bound::Inclusive(balance.max(balance_new)),
+        )?;
 
         let direction = if balance < balance_new {
             BalanceDirection::Increasing
@@ -105,40 +167,41 @@ impl BalanceShift {
         &self.range
     }
 
-    /// Returns the impact of this balance shift relative to the ideal range
-    pub fn get_impact(&self, ideal: Range) -> BalanceShiftImpact {
+    /// Returns the impact type of this balance shift relative to the ideal range
+    pub fn get_impact_type(&self, ideal: Range) -> BalanceShiftImpactType {
         if self.direction == BalanceDirection::Neutral {
-            return BalanceShiftImpact::Neutral;
+            return BalanceShiftImpactType::Neutral;
         }
 
-        let is_below_ideal = self.range.end <= ideal.start;
-        let is_above_ideal = self.range.start >= ideal.end;
-        let is_ideal_zone = self.range.start == ideal.start && self.range.end == ideal.end;
+        let is_below_ideal = self.range.end.value() <= ideal.start.value();
+        let is_above_ideal = self.range.start.value() >= ideal.end.value();
+        let is_ideal_zone = self.range.start.value() == ideal.start.value()
+            && self.range.end.value() == ideal.end.value();
 
         if is_ideal_zone {
-            return BalanceShiftImpact::Neutral;
+            return BalanceShiftImpactType::Neutral;
         }
 
         match self.direction {
             BalanceDirection::Increasing => {
                 if is_below_ideal {
-                    BalanceShiftImpact::Rebalance
+                    BalanceShiftImpactType::Rebalance
                 } else if is_above_ideal {
-                    BalanceShiftImpact::Debalance
+                    BalanceShiftImpactType::Debalance
                 } else {
-                    BalanceShiftImpact::Neutral
+                    BalanceShiftImpactType::Neutral
                 }
             }
             BalanceDirection::Decreasing => {
                 if is_above_ideal {
-                    BalanceShiftImpact::Rebalance
+                    BalanceShiftImpactType::Rebalance
                 } else if is_below_ideal {
-                    BalanceShiftImpact::Debalance
+                    BalanceShiftImpactType::Debalance
                 } else {
-                    BalanceShiftImpact::Neutral
+                    BalanceShiftImpactType::Neutral
                 }
             }
-            BalanceDirection::Neutral => BalanceShiftImpact::Neutral,
+            BalanceDirection::Neutral => BalanceShiftImpactType::Neutral,
         }
     }
 }
@@ -146,35 +209,47 @@ impl BalanceShift {
 pub struct AdjustmentParams {
     pub ideal: Range,
     pub critical: Range,
-    pub limit: f64,
-    pub adjustment_rate_strained: f64,
-    pub adjustment_rate_critical: f64,
+    pub limit: Decimal,
+    pub adjustment_rate_strained: Decimal,
+    pub adjustment_rate_critical: Decimal,
 }
 
 impl AdjustmentParams {
     pub fn zones(&self) -> [Zone; 5] {
         // critical low: [0, critical.start) - highest incentive to move out
-        let critical_low = Zone::new(0.0, self.critical.start, self.adjustment_rate_critical);
+        let critical_low = Zone::new(
+            Bound::Inclusive(Decimal::zero()),
+            Bound::Exclusive(self.critical.start.value()),
+            self.adjustment_rate_critical,
+        );
 
         // strained low: [critical.start, ideal.start) - moderate incentive to move up
         let strained_low = Zone::new(
-            self.critical.start,
-            self.ideal.start,
+            Bound::Inclusive(self.critical.start.value()),
+            Bound::Exclusive(self.ideal.start.value()),
             self.adjustment_rate_strained,
         );
 
         // ideal zone: [ideal.start, ideal.end] - neutral, no fees or incentives
-        let ideal = Zone::new(self.ideal.start, self.ideal.end, 0.0);
+        let ideal = Zone::new(
+            Bound::Inclusive(self.ideal.start.value()),
+            Bound::Inclusive(self.ideal.end.value()),
+            Decimal::zero(),
+        );
 
         // strained high: (ideal.end, critical.end] - moderate incentive to move down
         let strained_high = Zone::new(
-            self.ideal.end,
-            self.critical.end,
+            Bound::Exclusive(self.ideal.end.value()),
+            Bound::Inclusive(self.critical.end.value()),
             self.adjustment_rate_strained,
         );
 
         // critical high: (critical.end, limit] - highest incentive to move out
-        let critical_high = Zone::new(self.critical.end, self.limit, self.adjustment_rate_critical);
+        let critical_high = Zone::new(
+            Bound::Exclusive(self.critical.end.value()),
+            Bound::Inclusive(self.limit),
+            self.adjustment_rate_critical,
+        );
 
         [
             critical_low,
@@ -188,55 +263,42 @@ impl AdjustmentParams {
 
 pub struct Zone {
     range: Range,
-    adjustment_rate: f64,
+    adjustment_rate: Decimal,
 }
 
 impl Zone {
-    pub fn new(start: f64, end: f64, adjustment_rate: f64) -> Self {
+    pub fn new(start: Bound, end: Bound, adjustment_rate: Decimal) -> Self {
         Self {
             range: Range::new(start, end).unwrap(),
             adjustment_rate,
         }
     }
 
-    pub fn compute_adjustment_rate(&self, balance_shift: &BalanceShift, ideal: Range) -> f64 {
+    /// Compute the adjustment rate for a given balance shift and ideal range accumulated within this zone.
+    pub fn compute_adjustment_rate(
+        &self,
+        balance_shift: &BalanceShift,
+        ideal: Range,
+    ) -> SignedDecimal256 {
         let overlap = self.range.get_overlap(balance_shift.range().clone());
 
-        if overlap.end <= overlap.start {
-            return 0.0;
+        if overlap.end.value() <= overlap.start.value() {
+            return SignedDecimal256::zero();
         }
 
-        let direction = balance_shift.get_impact(ideal);
-        let segment_length = overlap.end - overlap.start;
-        direction.as_f64() * self.adjustment_rate * segment_length
+        let impact_type = balance_shift.get_impact_type(ideal);
+        let segment_length = overlap.end.value() - overlap.start.value();
+
+        let unsigned_cumulative_adjustment = self.adjustment_rate * segment_length;
+
+        match impact_type {
+            BalanceShiftImpactType::Debalance => {
+                SignedDecimal256::from(unsigned_cumulative_adjustment).neg()
+            }
+            BalanceShiftImpactType::Rebalance => {
+                SignedDecimal256::from(unsigned_cumulative_adjustment)
+            }
+            BalanceShiftImpactType::Neutral => SignedDecimal256::zero(),
+        }
     }
-}
-
-/// Compute fee or incentive adjustment for a single asset's balance movement.
-///
-/// This function calculates the incentive/rebate (if positive) or fee (if negative)
-/// for a swap that moves an asset's balance from balance to balance_new. The goal is to
-/// encourage movements toward the ideal balance range [ideal.start, ideal.end] and
-/// discourage movements away from it.
-///
-/// # Arguments
-/// * `balance` - The initial balance
-/// * `balance_new` - The new balance
-/// * `balance_total` - The total balance of the asset
-/// * `params` - The adjustment parameters
-///
-/// # Returns
-/// * `Result<f64, Error>` - The adjustment value or an error if the range is invalid
-pub fn compute_adjustment_value(
-    balance: f64,
-    balance_new: f64,
-    balance_total: f64,
-    params: AdjustmentParams,
-) -> Result<f64, Error> {
-    let balance_shift = BalanceShift::new(balance, balance_new)?;
-    let adjustment = params.zones().iter().fold(0.0, |acc, zone| {
-        acc + zone.compute_adjustment_rate(&balance_shift, params.ideal)
-    });
-
-    Ok(adjustment * balance_total)
 }

@@ -1,4 +1,4 @@
-use cosmwasm_std::{CheckedFromRatioError, DivideByZeroError, OverflowError};
+use cosmwasm_std::{CheckedFromRatioError, Decimal, DivideByZeroError, OverflowError};
 
 #[derive(thiserror::Error, Debug, PartialEq)]
 pub enum TransmuterMathError {
@@ -22,5 +22,5 @@ pub enum TransmuterMathError {
     CheckedFromRatioError(#[from] CheckedFromRatioError),
 
     #[error("Invalid range: start={0}, end={1}")]
-    InvalidRange(f64, f64),
+    InvalidRange(Decimal, Decimal),
 }
