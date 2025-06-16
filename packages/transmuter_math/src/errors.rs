@@ -20,4 +20,7 @@ pub enum TransmuterMathError {
 
     #[error("{0}")]
     CheckedFromRatioError(#[from] CheckedFromRatioError),
+
+    #[error("Invalid range: start={0}, end={1}")]
+    InvalidRange(f64, f64),
 }
