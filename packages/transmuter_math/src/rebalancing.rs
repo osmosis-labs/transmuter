@@ -103,9 +103,9 @@ impl Zone {
     ) -> SignedDecimal256 {
         let overlap = self.range.get_overlap(balance_shift.range().clone());
 
-        if overlap.end().value() <= overlap.start().value() {
+        let Some(overlap) = overlap else {
             return SignedDecimal256::zero();
-        }
+        };
 
         let impact_type = balance_shift.get_impact_type(ideal);
         let segment_length = overlap.end().value() - overlap.start().value();
