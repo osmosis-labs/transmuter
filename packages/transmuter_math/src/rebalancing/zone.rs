@@ -26,22 +26,15 @@ impl Zone {
         balance_shift: &BalanceShift,
         ideal: Range,
     ) -> StdResult<SignedDecimal256> {
-        let overlap = self.range.intersect(balance_shift.range());
-
-        let Some(overlap) = overlap else {
+        let Some(zoned_balance_shift) = balance_shift.overlap(self.range) else {
             return Ok(SignedDecimal256::zero());
         };
 
-        let impact_type = balance_shift.get_impact_type(ideal);
-        let segment_length = overlap
-            .end()
-            .value()
-            .checked_sub(overlap.start().value())
-            .map_err(|_| StdError::generic_err("Overflow in segment length calculation"))?;
+        let impact_type = zoned_balance_shift.get_impact_type(ideal);
 
         let unsigned_cumulative_adjustment = self
             .adjustment_rate
-            .checked_mul(segment_length)
+            .checked_mul(zoned_balance_shift.length())
             .map_err(|_| StdError::generic_err("Overflow in adjustment calculation"))?;
 
         let result = match impact_type {
@@ -128,6 +121,42 @@ mod tests {
         BalanceShift::new(Decimal::percent(10), Decimal::percent(19)).unwrap(),
         Range::new(Bound::Inclusive(Decimal::percent(30)), Bound::Inclusive(Decimal::percent(40))).unwrap(),
         SignedDecimal256::from(Decimal::from_ratio(9u128, 10000u128))  // 0.09%
+    )]
+    #[case::zone_specific_rebalance(
+        Zone::new(Bound::Inclusive(Decimal::percent(10)), Bound::Inclusive(Decimal::percent(20)), Decimal::percent(1)),
+        BalanceShift::new(Decimal::percent(5), Decimal::percent(25)).unwrap(),  // Crosses multiple zones
+        Range::new(Bound::Inclusive(Decimal::percent(30)), Bound::Inclusive(Decimal::percent(40))).unwrap(),
+        SignedDecimal256::from(Decimal::from_ratio(10u128, 10000u128))  // 0.1% - only counts the rebalance part in this zone
+    )]
+    #[case::zone_specific_debalance(
+        Zone::new(Bound::Inclusive(Decimal::percent(10)), Bound::Inclusive(Decimal::percent(20)), Decimal::percent(1)),
+        BalanceShift::new(Decimal::percent(25), Decimal::percent(5)).unwrap(),  // Crosses multiple zones
+        Range::new(Bound::Inclusive(Decimal::percent(30)), Bound::Inclusive(Decimal::percent(40))).unwrap(),
+        SignedDecimal256::from(Decimal::from_ratio(10u128, 10000u128)).neg()  // -0.1% - only counts the debalance part in this zone
+    )]
+    #[case::zone_specific_neutral(
+        Zone::new(Bound::Inclusive(Decimal::percent(10)), Bound::Inclusive(Decimal::percent(20)), Decimal::percent(1)),
+        BalanceShift::new(Decimal::percent(15), Decimal::percent(25)).unwrap(),  // Crosses multiple zones
+        Range::new(Bound::Inclusive(Decimal::percent(15)), Bound::Inclusive(Decimal::percent(25))).unwrap(),
+        SignedDecimal256::zero()  // Neutral because this zone overlaps with ideal range
+    )]
+    #[case::start_from_ideal_rebalance(
+        Zone::new(Bound::Inclusive(Decimal::percent(10)), Bound::Inclusive(Decimal::percent(20)), Decimal::percent(1)),
+        BalanceShift::new(Decimal::percent(15), Decimal::percent(5)).unwrap(),  // Starts from ideal (15%) and moves down
+        Range::new(Bound::Inclusive(Decimal::percent(15)), Bound::Inclusive(Decimal::percent(25))).unwrap(),
+        SignedDecimal256::from(Decimal::from_ratio(5u128, 10000u128)).neg()  // -0.05% - debalance because moving away from ideal
+    )]
+    #[case::start_from_ideal_debalance(
+        Zone::new(Bound::Inclusive(Decimal::percent(10)), Bound::Inclusive(Decimal::percent(20)), Decimal::percent(1)),
+        BalanceShift::new(Decimal::percent(15), Decimal::percent(25)).unwrap(),  // Starts from ideal (15%) and moves up
+        Range::new(Bound::Inclusive(Decimal::percent(5)), Bound::Inclusive(Decimal::percent(15))).unwrap(),
+        SignedDecimal256::from(Decimal::from_ratio(5u128, 10000u128)).neg()  // -0.05% - debalance because moving away from ideal
+    )]
+    #[case::start_from_ideal_neutral(
+        Zone::new(Bound::Inclusive(Decimal::percent(10)), Bound::Inclusive(Decimal::percent(20)), Decimal::percent(1)),
+        BalanceShift::new(Decimal::percent(15), Decimal::percent(17)).unwrap(),  // Starts from ideal (15%) and moves within ideal
+        Range::new(Bound::Inclusive(Decimal::percent(15)), Bound::Inclusive(Decimal::percent(25))).unwrap(),
+        SignedDecimal256::zero()  // Neutral because moving within ideal range
     )]
     fn test_compute_adjustment_rate(
         #[case] zone: Zone,

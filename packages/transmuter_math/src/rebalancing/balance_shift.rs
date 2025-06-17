@@ -49,6 +49,22 @@ impl BalanceShift {
         Ok(Self { range, direction })
     }
 
+    /// Returns the overlap of the balance shift with the given range
+    pub fn overlap(&self, range: Range) -> Option<Self> {
+        Some(Self {
+            range: self.range.intersect(&range)?,
+            direction: self.direction,
+        })
+    }
+
+    /// Returns the length of the balance shift
+    pub fn length(&self) -> Decimal {
+        self.range
+            .end()
+            .value()
+            .saturating_sub(self.range.start().value())
+    }
+
     /// Returns the direction of the balance change
     pub fn direction(&self) -> BalanceShiftDirection {
         self.direction
