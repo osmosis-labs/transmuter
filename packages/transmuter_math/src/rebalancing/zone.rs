@@ -15,7 +15,7 @@ pub struct Zone {
 impl Zone {
     pub fn new(start: Bound, end: Bound, adjustment_rate: Decimal) -> Self {
         Self {
-            range: Range::new(start, end).unwrap(),
+            range: Range::new(inclusive_if_zero(start), inclusive_if_zero(end)).unwrap(),
             adjustment_rate,
         }
     }
@@ -55,6 +55,14 @@ impl Zone {
         };
 
         Ok(result)
+    }
+}
+
+fn inclusive_if_zero(bound: Bound) -> Bound {
+    if bound.value() == Decimal::zero() {
+        Bound::Inclusive(Decimal::zero())
+    } else {
+        bound
     }
 }
 
