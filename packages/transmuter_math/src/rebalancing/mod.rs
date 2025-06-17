@@ -115,7 +115,7 @@ mod tests {
         ],
         Uint128::new(1000)
     )]
-    fn test_compute_adjustment_value_extreme_cases(
+    fn test_compute_adjustment_value_extreme_cases_properties(
         #[case] balances: Vec<(Decimal, Decimal)>,
         #[case] balance_total: Uint128,
     ) {
@@ -150,5 +150,83 @@ mod tests {
         let sum_new: Decimal = balances.iter().map(|(_, b)| *b).sum();
         assert_eq!(sum_old, Decimal::percent(100));
         assert_eq!(sum_new, Decimal::percent(100));
+    }
+
+    #[rstest]
+    #[case::no_movement(
+        Decimal::percent(50),  // balance
+        Decimal::percent(50),  // balance_new
+        Uint128::new(1000),   // balance_total
+        Int256::zero()        // expected_adjustment
+    )]
+    #[case::moving_into_ideal_range(
+        Decimal::percent(10),  // balance
+        Decimal::percent(33),  // balance_new
+        Uint128::new(1000),   // balance_total
+        Int256::from(11)      // expected_adjustment (positive, rounded down)
+    )]
+    #[case::moving_out_of_ideal_range(
+        Decimal::percent(33),  // balance
+        Decimal::percent(10),  // balance_new
+        Uint128::new(1000),   // balance_total
+        Int256::from(-11)     // expected_adjustment (negative, rounded up)
+    )]
+    #[case::small_movement_into_ideal(
+        Decimal::percent(20),  // balance
+        Decimal::percent(25),  // balance_new
+        Uint128::new(1000),   // balance_total
+        Int256::from(0)       // expected_adjustment (positive, rounded down)
+    )]
+    #[case::small_movement_out_of_ideal(
+        Decimal::percent(25),  // balance
+        Decimal::percent(20),  // balance_new
+        Uint128::new(1000),   // balance_total
+        Int256::from(-1)      // expected_adjustment (negative, rounded up)
+    )]
+    #[case::crossing_all_zones_into_ideal(
+        Decimal::percent(5),   // balance (below critical lower)
+        Decimal::percent(50),  // balance_new (into ideal range)
+        Uint128::new(1000),   // balance_total
+        Int256::from(16)     // expected_adjustment (positive, combines critical and strained rates)
+    )]
+    #[case::crossing_all_zones_out_of_ideal(
+        Decimal::percent(50),  // balance (in ideal range)
+        Decimal::percent(5),   // balance_new (below critical lower)
+        Uint128::new(1000),   // balance_total
+        Int256::from(-16)     // expected_adjustment (negative, combines critical and strained rates)
+    )]
+    #[case::crossing_critical_to_strained(
+        Decimal::percent(5),   // balance (below critical lower)
+        Decimal::percent(25),  // balance_new (into strained range)
+        Uint128::new(1000),   // balance_total
+        Int256::from(15)      // expected_adjustment (positive, critical rate)
+    )]
+    #[case::crossing_strained_to_critical(
+        Decimal::percent(25),  // balance (in strained range)
+        Decimal::percent(5),   // balance_new (below critical lower)
+        Uint128::new(1000),   // balance_total
+        Int256::from(-16)     // expected_adjustment (negative, critical rate)
+    )]
+    fn test_compute_adjustment_value(
+        #[case] balance: Decimal,
+        #[case] balance_new: Decimal,
+        #[case] balance_total: Uint128,
+        #[case] expected_adjustment: Int256,
+    ) {
+        let params = AdjustmentParams::new(
+            Decimal::percent(70),  // ideal_upper
+            Decimal::percent(30),  // ideal_lower
+            Decimal::percent(80),  // critical_upper
+            Decimal::percent(20),  // critical_lower
+            Decimal::percent(100), // limit
+            Decimal::percent(1),   // adjustment_rate_strained
+            Decimal::percent(10),  // adjustment_rate_critical
+        )
+        .unwrap();
+
+        let adjustment =
+            compute_adjustment_value(balance, balance_new, balance_total, params).unwrap();
+
+        assert_eq!(adjustment, expected_adjustment);
     }
 }
