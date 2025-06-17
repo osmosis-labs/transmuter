@@ -6,7 +6,7 @@ pub mod zone;
 use crate::TransmuterMathError as Error;
 use adjustment_params::AdjustmentParams;
 use balance_shift::BalanceShift;
-use cosmwasm_std::{Decimal, SignedDecimal256};
+use cosmwasm_std::{Decimal, SignedDecimal256, StdError, StdResult};
 
 /// Compute fee or incentive adjustment for a single asset's balance movement.
 ///
@@ -27,9 +27,14 @@ pub fn compute_adjustment_value(
         .zones()
         .iter()
         .map(|zone| zone.compute_adjustment_rate(&balance_shift, ideal))
-        .sum::<SignedDecimal256>();
+        .collect::<StdResult<Vec<SignedDecimal256>>>()?
+        .iter()
+        .fold(Ok(SignedDecimal256::zero()), |acc, x| {
+            acc.and_then(|sum| {
+                sum.checked_add(*x)
+                    .map_err(|_| StdError::generic_err("Overflow in adjustment sum"))
+            })
+        })?;
 
-    Ok(adjustment * SignedDecimal256::from(balance_total))
+    Ok(adjustment.checked_mul(SignedDecimal256::from(balance_total))?)
 }
-
-// TODO: test 3

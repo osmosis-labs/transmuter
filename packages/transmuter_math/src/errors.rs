@@ -1,4 +1,4 @@
-use cosmwasm_std::{CheckedFromRatioError, DivideByZeroError, OverflowError};
+use cosmwasm_std::{CheckedFromRatioError, DivideByZeroError, OverflowError, StdError};
 
 use crate::rebalancing::{adjustment_params::AdjustmentParamsError, range::Bound};
 
@@ -28,4 +28,7 @@ pub enum TransmuterMathError {
 
     #[error("{0}")]
     AdjustmentParamsError(#[from] AdjustmentParamsError),
+
+    #[error("{0}")]
+    StdError(#[from] StdError),
 }

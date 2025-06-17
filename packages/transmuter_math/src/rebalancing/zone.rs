@@ -2,7 +2,7 @@ use crate::rebalancing::{
     balance_shift::{BalanceShift, BalanceShiftImpactType},
     range::{Bound, Range},
 };
-use cosmwasm_std::{Decimal, SignedDecimal256};
+use cosmwasm_std::{Decimal, SignedDecimal256, StdError, StdResult};
 use std::ops::Neg;
 
 /// Represents a zone in the balance range
@@ -25,19 +25,26 @@ impl Zone {
         &self,
         balance_shift: &BalanceShift,
         ideal: Range,
-    ) -> SignedDecimal256 {
+    ) -> StdResult<SignedDecimal256> {
         let overlap = self.range.intersect(balance_shift.range());
 
         let Some(overlap) = overlap else {
-            return SignedDecimal256::zero();
+            return Ok(SignedDecimal256::zero());
         };
 
         let impact_type = balance_shift.get_impact_type(ideal);
-        let segment_length = overlap.end().value() - overlap.start().value();
+        let segment_length = overlap
+            .end()
+            .value()
+            .checked_sub(overlap.start().value())
+            .map_err(|_| StdError::generic_err("Overflow in segment length calculation"))?;
 
-        let unsigned_cumulative_adjustment = self.adjustment_rate * segment_length;
+        let unsigned_cumulative_adjustment = self
+            .adjustment_rate
+            .checked_mul(segment_length)
+            .map_err(|_| StdError::generic_err("Overflow in adjustment calculation"))?;
 
-        match impact_type {
+        let result = match impact_type {
             BalanceShiftImpactType::Debalance => {
                 SignedDecimal256::from(unsigned_cumulative_adjustment).neg()
             }
@@ -45,7 +52,9 @@ impl Zone {
                 SignedDecimal256::from(unsigned_cumulative_adjustment)
             }
             BalanceShiftImpactType::Neutral => SignedDecimal256::zero(),
-        }
+        };
+
+        Ok(result)
     }
 }
 
@@ -120,7 +129,7 @@ mod tests {
     ) {
         assert_eq!(
             zone.compute_adjustment_rate(&balance_shift, ideal),
-            expected
+            Ok(expected)
         );
     }
 
@@ -151,7 +160,7 @@ mod tests {
                 Bound::Inclusive(ideal_end)
             ).unwrap();
 
-            let adjustment = zone.compute_adjustment_rate(&balance_shift, ideal);
+            let adjustment = zone.compute_adjustment_rate(&balance_shift, ideal).unwrap();
 
             // Property 1: Zero adjustment rate always results in zero adjustment
             if adjustment_rate.is_zero() {
@@ -172,8 +181,8 @@ mod tests {
             if balance_shift.get_impact_type(ideal) == BalanceShiftImpactType::Debalance
             || balance_shift.get_impact_type(ideal) == BalanceShiftImpactType::Rebalance {
                 let rebalance_shift = BalanceShift::new(shift_end, shift_start).unwrap();
-                let rebalance_adjustment = zone.compute_adjustment_rate(&rebalance_shift, ideal);
-                prop_assert_eq!(adjustment, -rebalance_adjustment);
+                let rebalance_adjustment = zone.compute_adjustment_rate(&rebalance_shift, ideal).unwrap();
+                prop_assert_eq!(adjustment, rebalance_adjustment.neg());
             }
         }
     }
