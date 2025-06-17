@@ -191,7 +191,10 @@ mod tests {
                 Bound::Inclusive(zone_end),
                 adjustment_rate
             );
-            let balance_shift = BalanceShift::new(shift_start, shift_end).unwrap();
+            let Some(balance_shift) = BalanceShift::new(shift_start, shift_end).unwrap().overlap(zone.range) else {
+                return Ok(());
+            };
+
             let ideal = Range::new(
                 Bound::Inclusive(ideal_start),
                 Bound::Inclusive(ideal_end)

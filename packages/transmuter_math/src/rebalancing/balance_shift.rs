@@ -83,10 +83,10 @@ impl BalanceShift {
 
         let is_below_ideal = self.range.end().value() <= ideal.start().value();
         let is_above_ideal = self.range.start().value() >= ideal.end().value();
-        let is_ideal_zone = self.range.start().value() == ideal.start().value()
-            && self.range.end().value() == ideal.end().value();
+        let is_within_ideal = self.range.start().value() >= ideal.start().value()
+            && self.range.end().value() <= ideal.end().value();
 
-        if is_ideal_zone {
+        if is_within_ideal {
             return BalanceShiftImpactType::Neutral;
         }
 

@@ -73,6 +73,7 @@ fn round_adjustment(adjustment: SignedDecimal256) -> Result<Int256, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adjustment_params::AdjustmentParams;
     use rstest::rstest;
 
     #[rstest]
@@ -87,5 +88,67 @@ mod tests {
     #[case(SignedDecimal256::zero(), Int256::zero())] // 0.0 -> 0
     fn test_round_adjustment(#[case] input: SignedDecimal256, #[case] expected: Int256) {
         assert_eq!(round_adjustment(input).unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::balanced_state(
+        vec![
+            (Decimal::percent(33), Decimal::percent(33)),
+            (Decimal::percent(33), Decimal::percent(33)),
+            (Decimal::percent(34), Decimal::percent(34)),
+        ],
+        Uint128::new(1000)
+    )]
+    #[case::extreme_imbalance(
+        vec![
+            (Decimal::zero(), Decimal::zero()),
+            (Decimal::zero(), Decimal::zero()),
+            (Decimal::percent(100), Decimal::percent(100)),
+        ],
+        Uint128::new(1000)
+    )]
+    #[case::moving_to_balance(
+        vec![
+            (Decimal::percent(10), Decimal::percent(33)),
+            (Decimal::percent(10), Decimal::percent(33)),
+            (Decimal::percent(80), Decimal::percent(34)),
+        ],
+        Uint128::new(1000)
+    )]
+    fn test_compute_adjustment_value_extreme_cases(
+        #[case] balances: Vec<(Decimal, Decimal)>,
+        #[case] balance_total: Uint128,
+    ) {
+        // Create extreme adjustment parameters with 100% rate
+        let params = AdjustmentParams::new(
+            Decimal::percent(70),  // ideal_upper
+            Decimal::percent(30),  // ideal_lower
+            Decimal::percent(80),  // critical_upper
+            Decimal::percent(20),  // critical_lower
+            Decimal::percent(100), // limit
+            Decimal::percent(100), // adjustment_rate_strained
+            Decimal::percent(100), // adjustment_rate_critical
+        )
+        .unwrap();
+
+        // Calculate adjustments for each asset
+        let adjustments: Vec<Int256> = balances
+            .iter()
+            .map(|(balance, balance_new)| {
+                compute_adjustment_value(*balance, *balance_new, balance_total, params.clone())
+                    .unwrap()
+            })
+            .collect();
+
+        // Verify adjustments are within bounds
+        for adj in &adjustments {
+            assert!(adj.abs() <= Int256::from(balance_total));
+        }
+
+        // Verify sum of balances is 100%
+        let sum_old: Decimal = balances.iter().map(|(b, _)| *b).sum();
+        let sum_new: Decimal = balances.iter().map(|(_, b)| *b).sum();
+        assert_eq!(sum_old, Decimal::percent(100));
+        assert_eq!(sum_new, Decimal::percent(100));
     }
 }
