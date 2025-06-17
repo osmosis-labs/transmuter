@@ -13,4 +13,5 @@ cosmwasm-std = {workspace = true}
 thiserror = "1.0.63"
 
 [dev-dependencies]
+proptest = "1.4.0"
 rstest = "0.25.0"
