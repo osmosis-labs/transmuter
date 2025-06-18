@@ -976,8 +976,7 @@ mod tests {
 
     use cosmwasm_std::testing::{message_info, mock_dependencies, mock_env};
     use cosmwasm_std::{
-        attr, coin, from_json, BankMsg, Binary, BlockInfo, MsgResponse, Storage, SubMsgResponse,
-        SubMsgResult,
+        attr, coin, from_json, BankMsg, Binary, MsgResponse, Storage, SubMsgResponse, SubMsgResult,
     };
     use osmosis_std::types::osmosis::tokenfactory::v1beta1::MsgBurn;
 
@@ -1428,7 +1427,6 @@ mod tests {
         );
 
         // warm up the limiters
-        let env = increase_block_height(&env, 1);
         deps.querier
             .bank
             .update_balance(&someone, vec![coin(4, alloyed_denom.clone())]);
@@ -1443,8 +1441,6 @@ mod tests {
         let info = message_info(&someone, &[]);
         execute(deps.as_mut(), env.clone(), info.clone(), exit_pool_msg).unwrap();
 
-        let env = increase_block_height(&env, 1);
-
         deps.querier
             .bank
             .update_balance("someone", vec![coin(4, alloyed_denom.clone())]);
@@ -1458,8 +1454,6 @@ mod tests {
         });
         let info = message_info(&someone, &[]);
         execute(deps.as_mut(), env.clone(), info.clone(), exit_pool_msg).unwrap();
-
-        let env = increase_block_height(&env, 1);
 
         for scope in corrupted_scopes {
             let expected_err = ContractError::CorruptedScopeRelativelyIncreased {
@@ -1874,7 +1868,6 @@ mod tests {
         assert_eq!(corrupted_scopes, vec![Scope::asset_group("group1")]);
 
         // Exit pool with all corrupted assets
-        let env = increase_block_height(&env, 1);
         let info = message_info(&user, &[]);
         let exit_pool_msg = ContractExecMsg::Transmuter(ExecMsg::ExitPool {
             tokens_out: vec![
@@ -1919,18 +1912,6 @@ mod tests {
             limiters,
             vec![("denom::stbtc".to_string(), "big_static_limiter".to_string())]
         );
-    }
-
-    fn increase_block_height(env: &Env, height: u64) -> Env {
-        let block_time = 5; // hypothetical block time
-        Env {
-            block: BlockInfo {
-                height: env.block.height + height,
-                time: env.block.time.plus_seconds(block_time * height),
-                chain_id: env.block.chain_id.clone(),
-            },
-            ..env.clone()
-        }
     }
 
     fn total_liquidity_of(denom: &str, storage: &dyn Storage) -> Coin {
