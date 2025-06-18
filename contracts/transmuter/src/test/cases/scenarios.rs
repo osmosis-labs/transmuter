@@ -7,7 +7,7 @@ use crate::{
         GetShareDenomResponse, GetSharesResponse, GetTotalPoolLiquidityResponse,
         GetTotalSharesResponse, ListLimitersResponse,
     },
-    limiter::{ChangeLimiter, Limiter, LimiterParams, StaticLimiter, WindowConfig},
+    limiter::{Limiter, LimiterParams, StaticLimiter},
     scope::Scope,
     test::{
         modules::cosmwasm_pool::CosmwasmPool,
@@ -15,7 +15,7 @@ use crate::{
     },
     ContractError,
 };
-use cosmwasm_std::{coin, Decimal, Uint128, Uint64};
+use cosmwasm_std::{coin, Decimal, Uint128};
 
 use osmosis_std::types::{
     cosmos::bank::v1beta1::MsgSend,
@@ -955,77 +955,6 @@ fn test_limiters() {
         })
         .build(&app);
 
-    // register limiters
-    let config_1h = WindowConfig {
-        window_size: Uint64::from(3_600_000_000_000u64), // 1 hrs
-        division_count: Uint64::from(2u64),              // 30 mins each
-    };
-
-    let config_1w = WindowConfig {
-        window_size: Uint64::from(25_920_000_000_000u64), // 7 days
-        division_count: Uint64::from(2u64),               // 3.5 days each
-    };
-
-    t.contract
-        .execute(
-            &ExecMsg::RegisterLimiter {
-                scope: Scope::Denom(AXL_USDC.to_string()),
-                label: "1h".to_string(),
-                limiter_params: LimiterParams::ChangeLimiter {
-                    window_config: config_1h.clone(),
-                    boundary_offset: Decimal::percent(10),
-                },
-            },
-            &[],
-            &t.accounts["admin"],
-        )
-        .unwrap();
-
-    t.contract
-        .execute(
-            &ExecMsg::RegisterLimiter {
-                scope: Scope::Denom(AXL_USDC.to_string()),
-                label: "1w".to_string(),
-                limiter_params: LimiterParams::ChangeLimiter {
-                    window_config: config_1w.clone(),
-                    boundary_offset: Decimal::percent(5),
-                },
-            },
-            &[],
-            &t.accounts["admin"],
-        )
-        .unwrap();
-
-    t.contract
-        .execute(
-            &ExecMsg::RegisterLimiter {
-                scope: Scope::Denom(COSMOS_USDC.to_string()),
-                label: "1h".to_string(),
-                limiter_params: LimiterParams::ChangeLimiter {
-                    window_config: config_1h.clone(),
-                    boundary_offset: Decimal::percent(10),
-                },
-            },
-            &[],
-            &t.accounts["admin"],
-        )
-        .unwrap();
-
-    t.contract
-        .execute(
-            &ExecMsg::RegisterLimiter {
-                scope: Scope::Denom(COSMOS_USDC.to_string()),
-                label: "1w".to_string(),
-                limiter_params: LimiterParams::ChangeLimiter {
-                    window_config: config_1w.clone(),
-                    boundary_offset: Decimal::percent(5),
-                },
-            },
-            &[],
-            &t.accounts["admin"],
-        )
-        .unwrap();
-
     t.contract
         .execute(
             &ExecMsg::RegisterLimiter {
@@ -1045,34 +974,10 @@ fn test_limiters() {
     // assert that queried limiters = assigned limiters
     assert_eq!(
         limiters,
-        vec![
-            (
-                (Scope::denom(AXL_USDC).key(), "1h".to_string()),
-                Limiter::ChangeLimiter(
-                    ChangeLimiter::new(config_1h.clone(), Decimal::percent(10)).unwrap()
-                )
-            ),
-            (
-                (Scope::denom(AXL_USDC).key(), "1w".to_string()),
-                Limiter::ChangeLimiter(
-                    ChangeLimiter::new(config_1w.clone(), Decimal::percent(5)).unwrap()
-                )
-            ),
-            (
-                (Scope::denom(COSMOS_USDC).key(), "1h".to_string()),
-                Limiter::ChangeLimiter(
-                    ChangeLimiter::new(config_1h, Decimal::percent(10)).unwrap()
-                )
-            ),
-            (
-                (Scope::denom(COSMOS_USDC).key(), "1w".to_string()),
-                Limiter::ChangeLimiter(ChangeLimiter::new(config_1w, Decimal::percent(5)).unwrap())
-            ),
-            (
-                (Scope::denom(COSMOS_USDC).key(), "static".to_string()),
-                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(55)).unwrap())
-            ),
-        ]
+        vec![(
+            (Scope::denom(COSMOS_USDC).key(), "static".to_string()),
+            Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(55)).unwrap())
+        ),]
     );
 
     // join pool - weight = 50:50

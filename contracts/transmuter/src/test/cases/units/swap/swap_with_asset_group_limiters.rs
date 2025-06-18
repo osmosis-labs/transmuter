@@ -1,11 +1,7 @@
-use cosmwasm_std::{coin, Decimal, Uint128, Uint64};
+use cosmwasm_std::{coin, Decimal, Uint128};
 
 use crate::{
-    asset::AssetConfig,
-    contract::sv::ExecMsg,
-    limiter::{LimiterParams, WindowConfig},
-    scope::Scope,
-    ContractError,
+    asset::AssetConfig, contract::sv::ExecMsg, limiter::LimiterParams, scope::Scope, ContractError,
 };
 
 use super::{pool_with_single_lp, test_swap_failed_case, test_swap_success_case, SwapMsg};
@@ -57,12 +53,8 @@ fn test_swap_with_asset_group_limiters() {
             &ExecMsg::RegisterLimiter {
                 scope: Scope::asset_group("group1"),
                 label: "limiter1".to_string(),
-                limiter_params: LimiterParams::ChangeLimiter {
-                    window_config: WindowConfig {
-                        window_size: Uint64::from(1000u64),
-                        division_count: Uint64::from(5u64),
-                    },
-                    boundary_offset: Decimal::percent(10),
+                limiter_params: LimiterParams::StaticLimiter {
+                    upper_limit: Decimal::percent(10),
                 },
             },
             &[],
