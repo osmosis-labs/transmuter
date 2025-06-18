@@ -1816,7 +1816,7 @@ mod tests {
         });
         execute(deps.as_mut(), env.clone(), info.clone(), create_group_msg).unwrap();
 
-        // Set change limiter for btc group
+        // Set static limiter for btc group
         let info = message_info(&admin, &[]);
         let set_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
             scope: Scope::asset_group("group1"),
@@ -1827,7 +1827,7 @@ mod tests {
         });
         execute(deps.as_mut(), env.clone(), info.clone(), set_limiter_msg).unwrap();
 
-        // set change limiter for stbtc
+        // set static limiter for stbtc
         let set_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
             scope: Scope::denom("stbtc"),
             label: "big_static_limiter".to_string(),
