@@ -448,7 +448,7 @@ mod tests {
                 .register(
                     &mut deps.storage,
                     Scope::denom("denoma"),
-                    "1m",
+                    "a10",
                     LimiterParams::StaticLimiter {
                         upper_limit: Decimal::percent(10),
                     },
@@ -506,87 +506,16 @@ mod tests {
                 }
             );
 
-            limiter
-                .deregister(&mut deps.storage, Scope::denom("denoma"), "a10")
-                .unwrap();
-
-            assert_eq!(
-                limiter.list_limiters(&deps.storage).unwrap(),
-                vec![(
-                    (Scope::denom("denoma").key(), "b10".to_string()),
-                    Limiter::StaticLimiter(StaticLimiter {
-                        upper_limit: Decimal::percent(10),
-                    })
-                )]
-            );
-
+            // Should fail: cannot remove the last limiter for denoma
             let err = limiter
-                .deregister(&mut deps.storage, Scope::denom("denoma"), "b10")
+                .deregister(&mut deps.storage, Scope::denom("denoma"), "a10")
                 .unwrap_err();
-
             assert_eq!(
                 err,
                 ContractError::EmptyLimiterNotAllowed {
                     scope: Scope::denom("denoma")
                 }
             );
-
-            assert_eq!(
-                limiter.list_limiters(&deps.storage).unwrap(),
-                vec![(
-                    (Scope::denom("denoma").key(), "b10".to_string()),
-                    Limiter::StaticLimiter(StaticLimiter {
-                        upper_limit: Decimal::percent(10),
-                    })
-                )]
-            );
-            limiter
-                .register(
-                    &mut deps.storage,
-                    Scope::denom("denomb"),
-                    "1m",
-                    LimiterParams::StaticLimiter {
-                        upper_limit: Decimal::percent(10),
-                    },
-                )
-                .unwrap();
-
-            let err = limiter
-                .deregister(&mut deps.storage, Scope::denom("denomb"), "b10")
-                .unwrap_err();
-
-            assert_eq!(
-                err,
-                ContractError::EmptyLimiterNotAllowed {
-                    scope: Scope::denom("denomb")
-                }
-            );
-
-            limiter
-                .register(
-                    &mut deps.storage,
-                    Scope::denom("denomb"),
-                    "b10s",
-                    LimiterParams::StaticLimiter {
-                        upper_limit: Decimal::percent(10),
-                    },
-                )
-                .unwrap();
-
-            let err = limiter
-                .deregister(&mut deps.storage, Scope::denom("denoma"), "a10")
-                .unwrap_err();
-
-            assert_eq!(
-                err,
-                ContractError::EmptyLimiterNotAllowed {
-                    scope: Scope::denom("denoma")
-                }
-            );
-
-            limiter
-                .deregister(&mut deps.storage, Scope::denom("denomb"), "b10")
-                .unwrap();
 
             assert_eq!(
                 limiter.list_limiters(&deps.storage).unwrap(),
@@ -599,6 +528,85 @@ mod tests {
                     ),
                     (
                         (Scope::denom("denomb").key(), "b10".to_string()),
+                        Limiter::StaticLimiter(StaticLimiter {
+                            upper_limit: Decimal::percent(10),
+                        })
+                    )
+                ]
+            );
+
+            // Add a second limiter to denoma, now removal is allowed
+            limiter
+                .register(
+                    &mut deps.storage,
+                    Scope::denom("denoma"),
+                    "a10s",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(10),
+                    },
+                )
+                .unwrap();
+
+            limiter
+                .deregister(&mut deps.storage, Scope::denom("denoma"), "a10")
+                .unwrap();
+
+            assert_eq!(
+                limiter.list_limiters(&deps.storage).unwrap(),
+                vec![
+                    (
+                        (Scope::denom("denoma").key(), "a10s".to_string()),
+                        Limiter::StaticLimiter(StaticLimiter {
+                            upper_limit: Decimal::percent(10),
+                        })
+                    ),
+                    (
+                        (Scope::denom("denomb").key(), "b10".to_string()),
+                        Limiter::StaticLimiter(StaticLimiter {
+                            upper_limit: Decimal::percent(10),
+                        })
+                    )
+                ]
+            );
+
+            // Should fail: cannot remove the last limiter for denomb
+            let err = limiter
+                .deregister(&mut deps.storage, Scope::denom("denomb"), "b10")
+                .unwrap_err();
+            assert_eq!(
+                err,
+                ContractError::EmptyLimiterNotAllowed {
+                    scope: Scope::denom("denomb")
+                }
+            );
+
+            // Add a second limiter to denomb, now removal is allowed
+            limiter
+                .register(
+                    &mut deps.storage,
+                    Scope::denom("denomb"),
+                    "b10s",
+                    LimiterParams::StaticLimiter {
+                        upper_limit: Decimal::percent(10),
+                    },
+                )
+                .unwrap();
+
+            limiter
+                .deregister(&mut deps.storage, Scope::denom("denomb"), "b10")
+                .unwrap();
+
+            assert_eq!(
+                limiter.list_limiters(&deps.storage).unwrap(),
+                vec![
+                    (
+                        (Scope::denom("denoma").key(), "a10s".to_string()),
+                        Limiter::StaticLimiter(StaticLimiter {
+                            upper_limit: Decimal::percent(10),
+                        })
+                    ),
+                    (
+                        (Scope::denom("denomb").key(), "b10s".to_string()),
                         Limiter::StaticLimiter(StaticLimiter {
                             upper_limit: Decimal::percent(10),
                         })
