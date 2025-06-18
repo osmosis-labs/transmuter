@@ -1332,6 +1332,7 @@ mod tests {
 
         execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
 
+        let info = message_info(&admin, &[]);
         // set limiters
         for denom in ["wbtc", "tbtc", "nbtc", "stbtc"] {
             let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
@@ -1354,7 +1355,6 @@ mod tests {
             denoms: vec!["nbtc".to_string(), "stbtc".to_string()],
         });
 
-        let info = message_info(&admin, &[]);
         execute(
             deps.as_mut(),
             env.clone(),
@@ -1371,6 +1371,7 @@ mod tests {
             tokens_out: vec![coin(1_000, "nbtc")],
         });
 
+        // Use empty funds for nonpayable execute
         let info = message_info(&someone, &[]);
         execute(deps.as_mut(), env.clone(), info.clone(), exit_pool_msg).unwrap();
 
@@ -1750,7 +1751,7 @@ mod tests {
                 .list_limiters_by_scope(&deps.storage, &Scope::denom("tbtc"))
                 .unwrap()
                 .len(),
-            2
+            1
         );
     }
 
@@ -1916,7 +1917,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             limiters,
-            vec![("denom::stbtc".to_string(), "big_change_limiter".to_string())]
+            vec![("denom::stbtc".to_string(), "big_static_limiter".to_string())]
         );
     }
 
