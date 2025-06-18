@@ -1,6 +1,6 @@
 use cosmwasm_std::{
     CheckedFromRatioError, CheckedMultiplyRatioError, Coin, ConversionOverflowError, Decimal,
-    DecimalRangeExceeded, DivideByZeroError, OverflowError, StdError, Timestamp, Uint128, Uint64,
+    DecimalRangeExceeded, DivideByZeroError, OverflowError, StdError, Uint128, Uint64,
 };
 use thiserror::Error;
 
@@ -129,37 +129,11 @@ pub enum ContractError {
     #[error("Amount of coin to be operated on must be greater than zero")]
     ZeroValueOperation {},
 
-    #[error("Window size must be greater than zero")]
-    ZeroWindowSize {},
-
-    #[error("Boundary must be greater than zero")]
-    ZeroBoundaryOffset {},
-
     #[error("Upper limit must be greater than zero")]
     ZeroUpperLimit {},
 
     #[error("Upper limit must not exceed 100%")]
     ExceedHundredPercentUpperLimit {},
-
-    #[error("Window must be evenly divisible by division size")]
-    UnevenWindowDivision {},
-
-    #[error("Division count must not exceed {max_division_count}")]
-    DivisionCountExceeded { max_division_count: Uint64 },
-
-    #[error("Moving average is undefined due to zero elapsed time since limiter started tracking")]
-    UndefinedMovingAverage {},
-
-    /// Time invariant error, this should never happen
-    #[error("Time must be monotonically increasing")]
-    NonMonotonicTime {},
-
-    /// Time invariant error, this should never happen
-    #[error("Division's update should occur before division ended: updated_at: {updated_at}, ended_at: {ended_at}")]
-    UpdateAfterDivisionEnded {
-        updated_at: Timestamp,
-        ended_at: Timestamp,
-    },
 
     #[error("Limiter does not exist for scope: {scope}, label: {label}")]
     LimiterDoesNotExist { scope: Scope, label: String },
