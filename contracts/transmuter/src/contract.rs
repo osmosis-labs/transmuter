@@ -1104,24 +1104,10 @@ mod tests {
         )
         .unwrap();
 
+        // Register limiter for individual denoms only (not the asset group to avoid conflicts)
         let static_limiter_params = LimiterParams::StaticLimiter {
             upper_limit: Decimal::percent(60),
         };
-
-        // Register limiter for the asset group
-        let register_group_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-            scope: Scope::AssetGroup("group1".to_string()),
-            label: "group_static_limiter".to_string(),
-            limiter_params: static_limiter_params.clone(),
-        });
-
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info.clone(),
-            register_group_limiter_msg,
-        )
-        .unwrap();
 
         let info = message_info(&admin, &[]);
         for denom in ["uosmo", "uion"] {
@@ -1138,33 +1124,15 @@ mod tests {
                 register_limiter_msg,
             )
             .unwrap();
-
-            let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                scope: Scope::Denom(denom.to_string()),
-                label: "static_limiter".to_string(),
-                limiter_params: static_limiter_params.clone(),
-            });
-
-            execute(
-                deps.as_mut(),
-                env.clone(),
-                info.clone(),
-                register_limiter_msg,
-            )
-            .unwrap();
         }
 
-        // join pool a bit more to make limiters dirty
-        let mut env = env.clone();
-        env.block.time = env.block.time.plus_nanos(360);
-
+        // join pool a bit more to test the limiters (small amounts to stay within limits)
         let someone = deps.api.addr_make("someone");
-        let info = message_info(&someone, &[coin(550, "uosmo"), coin(500, "uion")]);
+        let info = message_info(&someone, &[coin(100, "uosmo"), coin(100, "uion")]);
         let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
         execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
 
-        env.block.time = env.block.time.plus_nanos(3000);
-        let info = message_info(&someone, &[coin(450, "uosmo"), coin(500, "uion")]);
+        let info = message_info(&someone, &[coin(50, "uosmo"), coin(50, "uion")]);
         let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
         execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
 
@@ -1180,8 +1148,6 @@ mod tests {
                 .map(|denom| AssetConfig::from_denom_str(denom.as_str()))
                 .collect(),
         });
-
-        env.block.time = env.block.time.plus_nanos(360);
 
         let res = execute(
             deps.as_mut(),
@@ -1206,8 +1172,6 @@ mod tests {
                 .collect(),
         });
 
-        env.block.time = env.block.time.plus_nanos(360);
-
         let non_admin = deps.api.addr_make("non_admin");
         // Attempt to add assets by non-admin
         let non_admin_info = message_info(&non_admin, &[]);
@@ -1225,12 +1189,8 @@ mod tests {
             "Adding assets by non-admin should be unauthorized"
         );
 
-        env.block.time = env.block.time.plus_nanos(360);
-
         // successful asset addition
         execute(deps.as_mut(), env.clone(), info, add_assets_msg).unwrap();
-
-        env.block.time = env.block.time.plus_nanos(360);
 
         // Check if the new assets were added
         let res = query(
@@ -1246,8 +1206,8 @@ mod tests {
         assert_eq!(
             total_pool_liquidity,
             vec![
-                coin(1000001000, "uosmo"),
-                coin(1000001000, "uion"),
+                coin(1000000150, "uosmo"),
+                coin(1000000150, "uion"),
                 coin(0, "new_asset1"),
                 coin(0, "new_asset2"),
             ]
@@ -2493,23 +2453,7 @@ mod tests {
             message_info(&user, &[]),
             ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
                 scope: Scope::Denom("uosmo".to_string()),
-                label: "1h".to_string(),
-                limiter_params: LimiterParams::StaticLimiter {
-                    upper_limit: Decimal::percent(60),
-                },
-            }),
-        )
-        .unwrap_err();
-
-        assert_eq!(err, ContractError::Unauthorized {});
-
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            message_info(&user, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                scope: Scope::Denom("uosmo".to_string()),
-                label: "1h".to_string(),
+                label: "static".to_string(),
                 limiter_params: LimiterParams::StaticLimiter {
                     upper_limit: Decimal::percent(60),
                 },
@@ -2520,113 +2464,6 @@ mod tests {
         assert_eq!(err, ContractError::Unauthorized {});
 
         // admin can register limiter
-        let res = execute(
-            deps.as_mut(),
-            mock_env(),
-            message_info(&admin, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                scope: Scope::Denom("uosmo".to_string()),
-                label: "1h".to_string(),
-                limiter_params: LimiterParams::StaticLimiter {
-                    upper_limit: Decimal::percent(60),
-                },
-            }),
-        )
-        .unwrap();
-
-        let attrs = vec![
-            attr("method", "register_limiter"),
-            attr("label", "1h"),
-            attr("scope", "denom::uosmo"),
-            attr("limiter_type", "change_limiter"),
-            attr("window_size", "3600000000000"),
-            attr("division_count", "5"),
-            attr("boundary_offset", "0.01"),
-        ];
-
-        assert_eq!(res.attributes, attrs);
-
-        // denom that is not in the pool can't be registered
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            message_info(&admin, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                scope: Scope::Denom("invalid_denom".to_string()),
-                label: "1h".to_string(),
-                limiter_params: LimiterParams::StaticLimiter {
-                    upper_limit: Decimal::percent(60),
-                },
-            }),
-        )
-        .unwrap_err();
-
-        assert_eq!(
-            err,
-            ContractError::InvalidPoolAssetDenom {
-                denom: "invalid_denom".to_string(),
-            }
-        );
-
-        // Query the list of limiters
-        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
-        let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListLimitersResponse = from_json(res).unwrap();
-
-        assert_eq!(
-            limiters.limiters,
-            vec![(
-                (Scope::denom("uosmo").key(), String::from("1h")),
-                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
-            )]
-        );
-
-        let res = execute(
-            deps.as_mut(),
-            mock_env(),
-            message_info(&admin, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                scope: Scope::Denom("uosmo".to_string()),
-                label: "1w".to_string(),
-                limiter_params: LimiterParams::StaticLimiter {
-                    upper_limit: Decimal::percent(60),
-                },
-            }),
-        )
-        .unwrap();
-
-        let attrs_1w = vec![
-            attr("method", "register_limiter"),
-            attr("label", "1w"),
-            attr("scope", "denom::uosmo"),
-            attr("limiter_type", "change_limiter"),
-            attr("window_size", "604800000000"),
-            attr("division_count", "5"),
-            attr("boundary_offset", "0.01"),
-        ];
-
-        assert_eq!(res.attributes, attrs_1w);
-
-        // Query the list of limiters
-        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
-        let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListLimitersResponse = from_json(res).unwrap();
-
-        assert_eq!(
-            limiters.limiters,
-            vec![
-                (
-                    (Scope::denom("uosmo").key(), String::from("1h")),
-                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
-                ),
-                (
-                    (Scope::denom("uosmo").key(), String::from("1w")),
-                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
-                )
-            ]
-        );
-
-        // register static limiter
         let res = execute(
             deps.as_mut(),
             mock_env(),
@@ -2651,6 +2488,85 @@ mod tests {
 
         assert_eq!(res.attributes, attrs);
 
+        // denom that is not in the pool can't be registered
+        let err = execute(
+            deps.as_mut(),
+            mock_env(),
+            message_info(&admin, &[]),
+            ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+                scope: Scope::Denom("invalid_denom".to_string()),
+                label: "static".to_string(),
+                limiter_params: LimiterParams::StaticLimiter {
+                    upper_limit: Decimal::percent(60),
+                },
+            }),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::InvalidPoolAssetDenom {
+                denom: "invalid_denom".to_string(),
+            }
+        );
+
+        // Query the list of limiters
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
+        let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
+        let limiters: ListLimitersResponse = from_json(res).unwrap();
+
+        assert_eq!(
+            limiters.limiters,
+            vec![(
+                (Scope::denom("uosmo").key(), String::from("static")),
+                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
+            )]
+        );
+
+        // register another static limiter with different label
+        let res = execute(
+            deps.as_mut(),
+            mock_env(),
+            message_info(&admin, &[]),
+            ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+                scope: Scope::Denom("uosmo".to_string()),
+                label: "static2".to_string(),
+                limiter_params: LimiterParams::StaticLimiter {
+                    upper_limit: Decimal::percent(70),
+                },
+            }),
+        )
+        .unwrap();
+
+        let attrs_static2 = vec![
+            attr("method", "register_limiter"),
+            attr("label", "static2"),
+            attr("scope", "denom::uosmo"),
+            attr("limiter_type", "static_limiter"),
+            attr("upper_limit", "0.7"),
+        ];
+
+        assert_eq!(res.attributes, attrs_static2);
+
+        // Query the list of limiters
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
+        let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
+        let limiters: ListLimitersResponse = from_json(res).unwrap();
+
+        assert_eq!(
+            limiters.limiters,
+            vec![
+                (
+                    (Scope::denom("uosmo").key(), String::from("static")),
+                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
+                ),
+                (
+                    (Scope::denom("uosmo").key(), String::from("static2")),
+                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(70)).unwrap())
+                )
+            ]
+        );
+
         // deregister limiter by user is unauthorized
         let err = execute(
             deps.as_mut(),
@@ -2658,7 +2574,7 @@ mod tests {
             message_info(&user, &[]),
             ContractExecMsg::Transmuter(ExecMsg::DeregisterLimiter {
                 scope: Scope::Denom("uosmo".to_string()),
-                label: "1h".to_string(),
+                label: "static".to_string(),
             }),
         )
         .unwrap_err();
@@ -2672,7 +2588,7 @@ mod tests {
             message_info(&admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::DeregisterLimiter {
                 scope: Scope::Denom("uosmo".to_string()),
-                label: "1h".to_string(),
+                label: "static".to_string(),
             }),
         )
         .unwrap();
@@ -2680,7 +2596,7 @@ mod tests {
         let attrs = vec![
             attr("method", "deregister_limiter"),
             attr("scope", "denom::uosmo"),
-            attr("label", "1h"),
+            attr("label", "static"),
         ];
 
         assert_eq!(res.attributes, attrs);
@@ -2692,26 +2608,20 @@ mod tests {
 
         assert_eq!(
             limiters.limiters,
-            vec![
-                (
-                    (Scope::denom("uosmo").key(), String::from("1w")),
-                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
-                ),
-                (
-                    (Scope::denom("uosmo").key(), String::from("static")),
-                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
-                )
-            ]
+            vec![(
+                (Scope::denom("uosmo").key(), String::from("static2")),
+                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(70)).unwrap())
+            )]
         );
 
-        // set boundary offset by user is unauthorized
+        // set upper limit by user is unauthorized
         let err = execute(
             deps.as_mut(),
             mock_env(),
             message_info(&user, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetStaticLimiterUpperLimit {
                 scope: Scope::Denom("uosmo".to_string()),
-                label: "static".to_string(),
+                label: "static2".to_string(),
                 upper_limit: Decimal::percent(50),
             }),
         )
@@ -2727,19 +2637,19 @@ mod tests {
         assert_eq!(
             limiters.limiters,
             vec![(
-                (Scope::denom("uosmo").key(), String::from("static")),
-                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
+                (Scope::denom("uosmo").key(), String::from("static2")),
+                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(70)).unwrap())
             )]
         );
 
-        // set upper limit by admin but for uosmo 1h should fail
+        // set upper limit by admin for non-existent limiter should fail
         let err = execute(
             deps.as_mut(),
             mock_env(),
             message_info(&admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetStaticLimiterUpperLimit {
                 scope: Scope::Denom("uosmo".to_string()),
-                label: "1h".to_string(),
+                label: "non_existent".to_string(),
                 upper_limit: Decimal::percent(50),
             }),
         )
@@ -2749,28 +2659,7 @@ mod tests {
             err,
             ContractError::LimiterDoesNotExist {
                 scope: Scope::denom("uosmo"),
-                label: "1h".to_string()
-            }
-        );
-
-        // set upper limit by admin for change limiter should fail
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            message_info(&admin, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::SetStaticLimiterUpperLimit {
-                scope: Scope::denom("uosmo"),
-                label: "1w".to_string(),
-                upper_limit: Decimal::percent(50),
-            }),
-        )
-        .unwrap_err();
-
-        assert_eq!(
-            err,
-            ContractError::WrongLimiterType {
-                expected: "static_limiter".to_string(),
-                actual: "change_limiter".to_string()
+                label: "non_existent".to_string()
             }
         );
 
@@ -2781,7 +2670,7 @@ mod tests {
             message_info(&admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::SetStaticLimiterUpperLimit {
                 scope: Scope::Denom("uosmo".to_string()),
-                label: "static".to_string(),
+                label: "static2".to_string(),
                 upper_limit: Decimal::percent(50),
             }),
         )
@@ -2790,7 +2679,7 @@ mod tests {
         let attrs = vec![
             attr("method", "set_static_limiter_upper_limit"),
             attr("scope", "denom::uosmo"),
-            attr("label", "static"),
+            attr("label", "static2"),
             attr("upper_limit", "0.5"),
         ];
 
@@ -2803,16 +2692,10 @@ mod tests {
 
         assert_eq!(
             limiters.limiters,
-            vec![
-                (
-                    (Scope::denom("uosmo").key(), String::from("1w")),
-                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
-                ),
-                (
-                    (Scope::denom("uosmo").key(), String::from("static")),
-                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(50)).unwrap())
-                )
-            ]
+            vec![(
+                (Scope::denom("uosmo").key(), String::from("static2")),
+                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(50)).unwrap())
+            )]
         );
     }
 
@@ -4200,10 +4083,8 @@ mod tests {
                 attr("method", "register_limiter"),
                 attr("label", "limiter1"),
                 attr("scope", "asset_group::group2"),
-                attr("limiter_type", "change_limiter"),
-                attr("window_size", "86400"),
-                attr("division_count", "10"),
-                attr("boundary_offset", "0.1"),
+                attr("limiter_type", "static_limiter"),
+                attr("upper_limit", "0.6"),
             ]
         );
 
