@@ -31,6 +31,8 @@ impl Display for Bound {
     }
 }
 
+/// A mathematical primitive representing a range of real numbers (represented as [Decimal]), inclusive or exclusive.
+/// `start` must be less than or equal to `end`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Range {
     start: Bound,

@@ -25,10 +25,10 @@ pub fn compute_adjustment_value(
     let balance_shift = BalanceShift::new(balance, balance_new)?;
     let ideal = params.ideal().clone();
 
-    let adjustment = params
+    let total_effective_adjustment_rate = params
         .zones()
         .iter()
-        .map(|zone| zone.compute_adjustment_rate(&balance_shift, ideal))
+        .map(|zone| zone.compute_effective_adjustment_rate(&balance_shift, ideal))
         .collect::<StdResult<Vec<SignedDecimal256>>>()?
         .iter()
         .fold(Ok(SignedDecimal256::zero()), |acc, x| {
@@ -39,10 +39,9 @@ pub fn compute_adjustment_value(
         })?;
 
     // Calculate the adjustment value
-    let adjustment_value = adjustment.checked_mul(SignedDecimal256::from_atomics(
-        Int256::from(balance_total),
-        0,
-    )?)?;
+    let adjustment_value = total_effective_adjustment_rate.checked_mul(
+        SignedDecimal256::from_atomics(Int256::from(balance_total), 0)?,
+    )?;
 
     round_adjustment(adjustment_value)
 }

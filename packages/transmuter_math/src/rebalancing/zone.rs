@@ -5,7 +5,12 @@ use crate::rebalancing::{
 use cosmwasm_std::{Decimal, SignedDecimal256, StdError, StdResult};
 use std::ops::Neg;
 
-/// Represents a zone in the balance range
+/// A [Range] with an adjustment rate. Used to determine rate of adjustment for a given [BalanceShift].
+///
+/// - If the [BalanceShift] is within this zone, the adjustment rate is applied to the balance shift
+///   relative how much it is overlapping with this zone times the adjustment rate.
+///
+/// - If the [BalanceShift] is outside this zone, the adjustment rate is not applied.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Zone {
     range: Range,
@@ -20,8 +25,8 @@ impl Zone {
         }
     }
 
-    /// Compute the adjustment rate for a given balance shift and ideal range accumulated within this zone.
-    pub fn compute_adjustment_rate(
+    /// Compute the effective adjustment rate for a given balance shift and ideal range accumulated within this zone.
+    pub fn compute_effective_adjustment_rate(
         &self,
         balance_shift: &BalanceShift,
         ideal: Range,
@@ -158,14 +163,14 @@ mod tests {
         Range::new(Bound::Inclusive(Decimal::percent(15)), Bound::Inclusive(Decimal::percent(25))).unwrap(),
         SignedDecimal256::zero()  // Neutral because moving within ideal range
     )]
-    fn test_compute_adjustment_rate(
+    fn test_compute_effective_adjustment_rate(
         #[case] zone: Zone,
         #[case] balance_shift: BalanceShift,
         #[case] ideal: Range,
         #[case] expected: SignedDecimal256,
     ) {
         assert_eq!(
-            zone.compute_adjustment_rate(&balance_shift, ideal),
+            zone.compute_effective_adjustment_rate(&balance_shift, ideal),
             Ok(expected)
         );
     }
@@ -200,7 +205,7 @@ mod tests {
                 Bound::Inclusive(ideal_end)
             ).unwrap();
 
-            let adjustment = zone.compute_adjustment_rate(&balance_shift, ideal).unwrap();
+            let adjustment = zone.compute_effective_adjustment_rate(&balance_shift, ideal).unwrap();
 
             // Property 1: Zero adjustment rate always results in zero adjustment
             if adjustment_rate.is_zero() {
@@ -221,7 +226,7 @@ mod tests {
             if balance_shift.get_impact_type(ideal) == BalanceShiftImpactType::Debalance
             || balance_shift.get_impact_type(ideal) == BalanceShiftImpactType::Rebalance {
                 let rebalance_shift = BalanceShift::new(shift_end, shift_start).unwrap();
-                let rebalance_adjustment = zone.compute_adjustment_rate(&rebalance_shift, ideal).unwrap();
+                let rebalance_adjustment = zone.compute_effective_adjustment_rate(&rebalance_shift, ideal).unwrap();
                 prop_assert_eq!(adjustment, rebalance_adjustment.neg());
             }
         }

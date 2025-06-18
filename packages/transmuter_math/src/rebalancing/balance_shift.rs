@@ -2,7 +2,7 @@ use crate::rebalancing::range::{Bound, Range};
 use crate::TransmuterMathError as Error;
 use cosmwasm_std::Decimal;
 
-/// Represents the direction of a balance change
+/// Direction of a [BalanceShift]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BalanceShiftDirection {
     /// Balance is increasing
@@ -13,7 +13,7 @@ pub enum BalanceShiftDirection {
     Neutral,
 }
 
-/// Represents the impact type of a balance shift on the balance
+/// Impact type of a [BalanceShift] towards the ideal [Range]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum BalanceShiftImpactType {
     /// Shift away from ideal
@@ -24,7 +24,7 @@ pub enum BalanceShiftImpactType {
     Neutral,
 }
 
-/// Represents a balance change with its range and direction
+/// A [Range] with a [BalanceShiftDirection] representing percentage shift of a balance for an asset.
 #[derive(Debug, Clone)]
 pub struct BalanceShift {
     range: Range,
