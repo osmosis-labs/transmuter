@@ -3,6 +3,7 @@ mod asset;
 pub mod contract;
 mod corruptable;
 mod error;
+mod incentive_pool;
 mod limiter;
 mod math;
 mod migrations;
