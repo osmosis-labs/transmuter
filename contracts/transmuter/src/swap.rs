@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
     coin, ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env,
-    Response, StdError, Storage, Timestamp, Uint128,
+    Response, StdError, Storage, Uint128,
 };
 use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
 use serde::Serialize;
@@ -126,7 +126,7 @@ impl Transmuter {
             ContractError::ZeroValueOperation {}
         );
 
-        (pool, _) = self.limiters_pass(deps.branch(), env.block.time, pool, |_, mut pool| {
+        (pool, _) = self.limiters_pass(deps.branch(), pool, |_, mut pool| {
             pool.join_pool(&tokens_in)?;
             Ok((pool, ()))
         })?;
@@ -296,32 +296,11 @@ impl Transmuter {
         // then ignore the limiters and remove the corrupted assets from the pool
         if is_force_exit_corrupted_assets {
             pool.unchecked_exit_pool(&tokens_out)?;
-
-            // change limiter needs reset if force redemption since it gets by passed
-            // the current state will not be accurate
-
-            let asset_weights_iter = pool
-                .asset_weights()?
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(denom, weight)| (Scope::denom(&denom).key(), weight));
-            let asset_group_weights_iter = pool
-                .asset_group_weights()?
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(label, weight)| (Scope::asset_group(&label).key(), weight));
-
-            self.limiters.reset_change_limiter_states(
-                deps.storage,
-                env.block.time,
-                asset_weights_iter.chain(asset_group_weights_iter),
-            )?;
         } else {
-            (pool, _) =
-                self.limiters_pass(deps.branch(), env.block.time, pool, |_, mut pool| {
-                    pool.exit_pool(&tokens_out)?;
-                    Ok((pool, ()))
-                })?;
+            (pool, _) = self.limiters_pass(deps.branch(), pool, |_, mut pool| {
+                pool.exit_pool(&tokens_out)?;
+                Ok((pool, ()))
+            })?;
         }
 
         self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
@@ -356,12 +335,11 @@ impl Transmuter {
         token_out_min_amount: Uint128,
         sender: Addr,
         mut deps: DepsMut,
-        env: Env,
     ) -> Result<Response, ContractError> {
         let pool = self.pool.load(deps.storage)?;
 
         let (mut pool, actual_token_out) =
-            self.limiters_pass(deps.branch(), env.block.time, pool, |deps, pool| {
+            self.limiters_pass(deps.branch(), pool, |deps, pool| {
                 let (pool, actual_token_out) =
                     self.out_amt_given_in(deps, pool, token_in, token_out_denom)?;
 
@@ -403,12 +381,11 @@ impl Transmuter {
         token_out: Coin,
         sender: Addr,
         mut deps: DepsMut,
-        env: Env,
     ) -> Result<Response, ContractError> {
         let pool = self.pool.load(deps.storage)?;
 
         let (mut pool, actual_token_in) =
-            self.limiters_pass(deps.branch(), env.block.time, pool, |deps, pool| {
+            self.limiters_pass(deps.branch(), pool, |deps, pool| {
                 let (pool, actual_token_in) = self.in_amt_given_out(
                     deps,
                     pool,
@@ -571,7 +548,6 @@ impl Transmuter {
     pub fn limiters_pass<T, F>(
         &self,
         deps: DepsMut,
-        block_time: Timestamp,
         pool: TransmuterPool,
         run: F,
     ) -> Result<(TransmuterPool, T), ContractError>
@@ -593,11 +569,8 @@ impl Transmuter {
                     updated_asset_group_weights,
                 )?;
 
-                self.limiters.check_limits_and_update(
-                    deps.storage,
-                    scope_value_pairs,
-                    block_time,
-                )?;
+                self.limiters
+                    .check_limits_and_update(deps.storage, scope_value_pairs)?;
             }
         }
 
@@ -1397,7 +1370,6 @@ mod tests {
                 1000000000000u128.into(),
                 deps.api.addr_make("sender"),
                 deps.as_mut(),
-                mock_env(),
             )
             .unwrap();
 
@@ -1482,7 +1454,6 @@ mod tests {
                 coin(1000000000000, "denom1"),
                 deps.api.addr_make("sender"),
                 deps.as_mut(),
-                mock_env(),
             )
             .unwrap();
 
@@ -1604,7 +1575,6 @@ mod tests {
             token_out_min_amount.into(),
             sender,
             deps.as_mut(),
-            mock_env(),
         );
 
         assert_eq!(res, expected_res);
@@ -1702,7 +1672,6 @@ mod tests {
             token_out,
             sender,
             deps.as_mut(),
-            mock_env(),
         );
 
         assert_eq!(res, expected_res);

@@ -37,20 +37,7 @@ Since the `Alloyed Asset` represents tokens that are deposited in the pool, it c
 
 ## Limiters
 
-There are 2 types of limiters:
-
-- [Change Limiter](#change-limiter)
-- [Static Limiter](#static-limiter)
-
-Each of these limiters can be used to restrict the maximum weight of each token in the pool. This is important because tokens with higher weights pose a greater risk exposure to the `Alloyed Asset`. These limiters can be used in combination with each other.
-
-### Change Limiter
-
-The Change Limiter determines the upper bound limit based on the Simple Moving Average (SMA) of the pool asset's weights. The SMA is calculated using data points that are divided into divisions, which are compressed for efficient storage read and reduced gas consumption since calculating average of sliding window can require a lot of gas due to read operations.
-
-This can be used in different timeframes to prevent both fast and slow bleeding of the pool asset's weights.
-
-### Static Limiter
+The pool uses a Static Limiter to restrict the maximum weight of each token in the pool. This is important because tokens with higher weights pose a greater risk exposure to the `Alloyed Asset`.
 
 The Static Limiter determines the upper bound limit based on the pool asset's weights. This serves as limitation for worst case scenarios allowed.
 
