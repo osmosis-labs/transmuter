@@ -22,3 +22,5 @@ tarpaulin-report.html
 
 mutants.out
 mutants.out.old
+
+.DS_Store

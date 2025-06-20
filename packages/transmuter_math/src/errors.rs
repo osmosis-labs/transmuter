@@ -1,4 +1,10 @@
-use cosmwasm_std::{CheckedFromRatioError, DivideByZeroError, OverflowError};
+use cosmwasm_std::{
+    
+    CheckedFromRatioError, DivideByZeroError, DivisionError, OverflowError,
+    SignedDecimal256RangeExceeded, StdError,
+};
+
+use crate::rebalancing::{adjustment_params::AdjustmentParamsError, range::Bound};
 
 #[derive(thiserror::Error, Debug, PartialEq)]
 pub enum TransmuterMathError {
@@ -20,4 +26,19 @@ pub enum TransmuterMathError {
 
     #[error("{0}")]
     CheckedFromRatioError(#[from] CheckedFromRatioError),
+
+    #[error("Invalid range: start={0}, end={1}")]
+    InvalidRange(Bound, Bound),
+
+    #[error("{0}")]
+    AdjustmentParamsError(#[from] AdjustmentParamsError),
+
+    #[error("{0}")]
+    StdError(#[from] StdError),
+
+    #[error("{0}")]
+    SignedDecimal256RangeExceeded(#[from] SignedDecimal256RangeExceeded),
+
+    #[error("{0}")]
+    DivisionError(#[from] DivisionError),
 }
