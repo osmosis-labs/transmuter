@@ -1,5 +1,5 @@
 use cosmwasm_std::{Addr, Coin, Storage, Uint128};
-use cw_storage_plus::Map;
+use cw_storage_plus::{Item, Map};
 
 use crate::ContractError;
 
@@ -9,16 +9,20 @@ pub struct IncentivePool {
     pool_balances: Map<String, Uint128>,
     /// Track outstanding credits to users (normalized amounts)
     outstanding_credits: Map<Addr, Uint128>,
+    /// Accumulator for total outstanding credits across all users
+    total_outstanding_credits: Item<Uint128>,
 }
 
 impl IncentivePool {
     pub const fn new(
         pool_balances_key: &'static str,
         outstanding_credits_key: &'static str,
+        total_outstanding_credits_key: &'static str,
     ) -> Self {
         Self {
             pool_balances: Map::new(pool_balances_key),
             outstanding_credits: Map::new(outstanding_credits_key),
+            total_outstanding_credits: Item::new(total_outstanding_credits_key),
         }
     }
 
@@ -105,7 +109,7 @@ impl IncentivePool {
             .into_iter()
             .try_fold(Uint128::zero(), |acc, amount| acc.checked_add(amount))?;
 
-        // Get current total outstanding credits
+        // Get current total outstanding credits from accumulator
         let current_total_credits = self.get_total_credits(storage)?;
 
         // Calculate maximum additional credits we can give
@@ -136,6 +140,11 @@ impl IncentivePool {
                 .save(storage, user.clone(), &new_user_credit)?;
         }
 
+        // Update the total outstanding credits accumulator
+        let new_total_credits = current_total_credits.checked_add(actual_credit_amount)?;
+        self.total_outstanding_credits
+            .save(storage, &new_total_credits)?;
+
         Ok(actual_credit_amount)
     }
 
@@ -155,6 +164,11 @@ impl IncentivePool {
         let new_credit = current_credit.checked_add(normalized_amount)?;
         self.outstanding_credits
             .save(storage, user.clone(), &new_credit)?;
+
+        // Update the total outstanding credits accumulator
+        let current_total = self.get_total_credits(storage)?;
+        let new_total = current_total.checked_add(normalized_amount)?;
+        self.total_outstanding_credits.save(storage, &new_total)?;
 
         Ok(())
     }
@@ -214,6 +228,11 @@ impl IncentivePool {
                 .save(storage, user.clone(), &new_credit)?;
         }
 
+        // Update the total outstanding credits accumulator
+        let current_total = self.get_total_credits(storage)?;
+        let new_total = current_total.checked_sub(total_normalized_cost)?;
+        self.total_outstanding_credits.save(storage, &new_total)?;
+
         // Then, remove tokens from pool
         for (coin, _) in redemptions {
             let current_balance = self
@@ -247,17 +266,10 @@ impl IncentivePool {
 
     /// Get the total outstanding credits to all users in normalized amount
     pub fn get_total_credits(&self, storage: &dyn Storage) -> Result<Uint128, ContractError> {
-        let all_credits: Result<Vec<_>, _> = self
-            .outstanding_credits
-            .range(storage, None, None, cosmwasm_std::Order::Ascending)
-            .collect();
-
-        let total_credits = all_credits?
-            .into_iter()
-            .map(|(_, amount)| amount)
-            .try_fold(Uint128::zero(), |acc, amount| acc.checked_add(amount))?;
-
-        Ok(total_credits)
+        Ok(self
+            .total_outstanding_credits
+            .may_load(storage)?
+            .unwrap_or_default())
     }
 
     /// Get credits for a specific user in normalized amount
@@ -307,7 +319,11 @@ mod tests {
     use rstest::rstest;
 
     fn setup_incentive_pool() -> IncentivePool {
-        IncentivePool::new("pool_balances", "outstanding_credits")
+        IncentivePool::new(
+            "pool_balances",
+            "outstanding_credits",
+            "total_outstanding_credits",
+        )
     }
 
     #[rstest]
@@ -747,6 +763,110 @@ mod tests {
                 .get_pool_balance(&deps.storage, "uosmo")
                 .unwrap(),
             Uint128::new(500)
+        );
+    }
+
+    #[test]
+    fn test_total_outstanding_credits_accumulator() {
+        let mut deps = mock_dependencies();
+        let incentive_pool = setup_incentive_pool();
+        let user1 = Addr::unchecked("user1");
+        let user2 = Addr::unchecked("user2");
+        let user3 = Addr::unchecked("user3");
+
+        // Initially, total credits should be zero
+        assert_eq!(
+            incentive_pool.get_total_credits(&deps.storage).unwrap(),
+            Uint128::zero()
+        );
+
+        // Credit user1 with 100
+        incentive_pool
+            .credit_incentive_to_user_unchecked(&mut deps.storage, &user1, Uint128::new(100))
+            .unwrap();
+        assert_eq!(
+            incentive_pool.get_total_credits(&deps.storage).unwrap(),
+            Uint128::new(100)
+        );
+
+        // Credit user2 with 200
+        incentive_pool
+            .credit_incentive_to_user_unchecked(&mut deps.storage, &user2, Uint128::new(200))
+            .unwrap();
+        assert_eq!(
+            incentive_pool.get_total_credits(&deps.storage).unwrap(),
+            Uint128::new(300)
+        );
+
+        // Credit user3 with 150
+        incentive_pool
+            .credit_incentive_to_user_unchecked(&mut deps.storage, &user3, Uint128::new(150))
+            .unwrap();
+        assert_eq!(
+            incentive_pool.get_total_credits(&deps.storage).unwrap(),
+            Uint128::new(450)
+        );
+
+        // Add more credits to existing user
+        incentive_pool
+            .credit_incentive_to_user_unchecked(&mut deps.storage, &user1, Uint128::new(50))
+            .unwrap();
+        assert_eq!(
+            incentive_pool.get_total_credits(&deps.storage).unwrap(),
+            Uint128::new(500)
+        );
+
+        // Verify individual user credits
+        assert_eq!(
+            incentive_pool
+                .get_user_credit(&deps.storage, &user1)
+                .unwrap(),
+            Uint128::new(150)
+        );
+        assert_eq!(
+            incentive_pool
+                .get_user_credit(&deps.storage, &user2)
+                .unwrap(),
+            Uint128::new(200)
+        );
+        assert_eq!(
+            incentive_pool
+                .get_user_credit(&deps.storage, &user3)
+                .unwrap(),
+            Uint128::new(150)
+        );
+
+        // Test redemption reduces total credits
+        incentive_pool
+            .add_tokens(&mut deps.storage, &coin(1000, "uosmo"))
+            .unwrap();
+        let redemptions = vec![(coin(100, "uosmo"), Uint128::new(50))];
+        incentive_pool
+            .redeem_incentive(&mut deps.storage, &user1, redemptions)
+            .unwrap();
+
+        assert_eq!(
+            incentive_pool.get_total_credits(&deps.storage).unwrap(),
+            Uint128::new(450) // 500 - 50
+        );
+        assert_eq!(
+            incentive_pool
+                .get_user_credit(&deps.storage, &user1)
+                .unwrap(),
+            Uint128::new(100) // 150 - 50
+        );
+
+        // Test that accumulator matches manual calculation
+        let all_users = incentive_pool.get_all_credit_users(&deps.storage).unwrap();
+        let manual_total: Uint128 = all_users
+            .into_iter()
+            .map(|(_, amount)| amount)
+            .try_fold(Uint128::zero(), |acc, amount| acc.checked_add(amount))
+            .unwrap();
+
+        assert_eq!(
+            incentive_pool.get_total_credits(&deps.storage).unwrap(),
+            manual_total
         );
     }
 
