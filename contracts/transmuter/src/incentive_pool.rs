@@ -83,15 +83,12 @@ impl IncentivePool {
         std_norm_factor: Uint128,
     ) -> Result<Uint128, ContractError> {
         // Calculate total normalized value of all pool tokens
-        let pool_balances: Result<Vec<_>, _> = self
+        let total_pool_normalized_value = self
             .pool_balances
             .range(storage, None, None, cosmwasm_std::Order::Ascending)
-            .collect();
-        let pool_balances = pool_balances?;
+            .map(|result| {
+                let (denom, exact_amount) = result?;
 
-        let total_pool_normalized_value = pool_balances
-            .into_iter()
-            .map(|(denom, exact_amount)| {
                 // Find the normalization factor for this denom
                 let norm_factor = pool_denom_factors.get(&denom).ok_or_else(|| {
                     ContractError::InvalidPoolAssetDenom {
@@ -104,9 +101,12 @@ impl IncentivePool {
                     .checked_multiply_ratio(*norm_factor, std_norm_factor)
                     .map_err(|e| ContractError::CheckedMultiplyRatioError(e))
             })
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .try_fold(Uint128::zero(), |acc, amount| acc.checked_add(amount))?;
+            .try_fold(Uint128::zero(), |acc, amount| {
+                amount.and_then(|amount| {
+                    acc.checked_add(amount)
+                        .map_err(|e| ContractError::OverflowError(e))
+                })
+            })?;
 
         // Get current total outstanding credits from accumulator
         let current_total_credits = self.get_total_credits(storage)?;
