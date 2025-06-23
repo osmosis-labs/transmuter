@@ -1,4 +1,4 @@
-use cosmwasm_std::{Addr, Coin, Storage, Uint128};
+use cosmwasm_std::{Addr, Coin, Storage, Uint128, Uint256};
 use cw_storage_plus::{Item, Map};
 use std::collections::BTreeMap;
 
@@ -11,7 +11,7 @@ pub struct IncentivePool {
     /// Track outstanding credits to users (normalized amounts)
     outstanding_credits: Map<Addr, Uint128>,
     /// Accumulator for total outstanding credits across all users
-    total_outstanding_credits: Item<Uint128>,
+    total_outstanding_credits: Item<Uint256>,
 }
 
 impl IncentivePool {
@@ -101,9 +101,9 @@ impl IncentivePool {
                     .checked_multiply_ratio(*norm_factor, std_norm_factor)
                     .map_err(|e| ContractError::CheckedMultiplyRatioError(e))
             })
-            .try_fold(Uint128::zero(), |acc, amount| {
+            .try_fold(Uint256::zero(), |acc, amount| {
                 amount.and_then(|amount| {
-                    acc.checked_add(amount)
+                    acc.checked_add(Uint256::from(amount))
                         .map_err(|e| ContractError::OverflowError(e))
                 })
             })?;
@@ -112,8 +112,10 @@ impl IncentivePool {
         let current_total_credits = self.get_total_credits(storage)?;
 
         // Calculate maximum additional credits we can give
-        let max_additional_credits =
-            total_pool_normalized_value.saturating_sub(current_total_credits);
+        let max_additional_credits: Uint128 = total_pool_normalized_value
+            .saturating_sub(current_total_credits)
+            .try_into()
+            .unwrap_or(Uint128::MAX);
 
         // Cap the requested amount to what's available
         let actual_credit_amount = requested_amount.min(max_additional_credits);
@@ -140,7 +142,8 @@ impl IncentivePool {
         }
 
         // Update the total outstanding credits accumulator
-        let updated_total_credits = current_total_credits.checked_add(actual_credit_amount)?;
+        let updated_total_credits =
+            current_total_credits.checked_add(Uint256::from(actual_credit_amount))?;
         self.total_outstanding_credits
             .save(storage, &updated_total_credits)?;
 
@@ -204,7 +207,7 @@ impl IncentivePool {
 
         // Update the total outstanding credits accumulator
         let current_total = self.get_total_credits(storage)?;
-        let updated_total = current_total.checked_sub(total_normalized_cost)?;
+        let updated_total = current_total.checked_sub(Uint256::from(total_normalized_cost))?;
         self.total_outstanding_credits
             .save(storage, &updated_total)?;
 
@@ -240,7 +243,7 @@ impl IncentivePool {
     }
 
     /// Get the total outstanding credits to all users in normalized amount
-    pub fn get_total_credits(&self, storage: &dyn Storage) -> Result<Uint128, ContractError> {
+    pub fn get_total_credits(&self, storage: &dyn Storage) -> Result<Uint256, ContractError> {
         Ok(self
             .total_outstanding_credits
             .may_load(storage)?
