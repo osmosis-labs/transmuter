@@ -2,7 +2,11 @@ use cosmwasm_std::{Addr, Coin, Storage, Uint128, Uint256};
 use cw_storage_plus::{Item, Map};
 use std::collections::BTreeMap;
 
-use crate::ContractError;
+use crate::{
+    asset::{convert_amount, Rounding},
+    math::lcm_from_iter,
+    ContractError,
+};
 
 /// Incentive pool state management for rebalancing fees and incentives
 pub struct IncentivePool {
@@ -80,8 +84,9 @@ impl IncentivePool {
         user: &Addr,
         requested_amount: Uint128,
         pool_denom_factors: &BTreeMap<String, Uint128>, // (denom, normalization_factor) pairs
-        std_norm_factor: Uint128,
     ) -> Result<Uint128, ContractError> {
+        let std_norm_factor = lcm_from_iter(pool_denom_factors.values().copied())?;
+
         // Calculate total normalized value of all pool tokens
         let total_pool_normalized_value = self
             .pool_balances
@@ -96,10 +101,8 @@ impl IncentivePool {
                     }
                 })?;
 
-                // Calculate normalized value: exact_amount * norm_factor / std_norm_factor
-                exact_amount
-                    .checked_multiply_ratio(*norm_factor, std_norm_factor)
-                    .map_err(|e| ContractError::CheckedMultiplyRatioError(e))
+                // Convert exact amount to normalized amount, rounding down because we want to cap the amount of credits under what's available
+                convert_amount(exact_amount, *norm_factor, std_norm_factor, &Rounding::Down)
             })
             .try_fold(Uint256::zero(), |acc, amount| {
                 amount.and_then(|amount| {
@@ -291,7 +294,7 @@ impl IncentivePool {
 
 #[cfg(test)]
 mod tests {
-    use cosmwasm_std::{coin, testing::MockStorage};
+    use cosmwasm_std::{coin, testing::MockStorage, Addr, Uint256};
     use rstest::rstest;
 
     use super::*;
@@ -328,6 +331,31 @@ mod tests {
             OUTSTANDING_CREDITS_KEY,
             TOTAL_OUTSTANDING_CREDITS_KEY,
         )
+    }
+
+    // Standard test denoms with different normalization factors
+    const TEST_DENOMS: &[(&str, u128)] = &[
+        ("denom_6d", 1_000_000),                  // 6 decimals, factor 1M
+        ("denom_6d_2", 1_000_000),                // 6 decimals, factor 1M
+        ("denom_9d", 1_000_000_000),              // 9 decimals, factor 1B
+        ("denom_18d", 1_000_000_000_000_000_000), // 18 decimals, factor 1E18
+        ("denom_0d", 1),                          // 0 decimals, factor 1
+        ("denom_3d", 1_000),                      // 3 decimals, factor 1K
+    ];
+
+    // Helper function to create normalization map
+    fn create_norm_factors(denoms: &[&str]) -> BTreeMap<String, Uint128> {
+        denoms
+            .iter()
+            .map(|denom| {
+                let factor = TEST_DENOMS
+                    .iter()
+                    .find(|(d, _)| d == denom)
+                    .map(|(_, f)| *f)
+                    .unwrap_or(1_000_000); // default to 1M if not found
+                (denom.to_string(), Uint128::new(factor))
+            })
+            .collect()
     }
 
     #[rstest]
@@ -476,5 +504,209 @@ mod tests {
 
         let balances = incentive_pool.get_all_pool_balances(&storage).unwrap();
         assert_eq!(balances, expected_balances);
+    }
+
+    #[rstest]
+    #[case::credit_single_denom_basic(
+        vec![coin(1000, "denom_6d")],
+        vec!["denom_6d"],
+        vec![],
+        "user1",
+        Uint128::new(500),
+        Uint128::new(500),
+        Uint128::new(500),
+        Uint256::from(500u128),
+    )]
+    #[case::credit_multiple_denoms_basic(
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")],
+        vec!["denom_6d", "denom_9d"],
+        vec![],
+        "user1",
+        Uint128::new(500),
+        Uint128::new(500),
+        Uint128::new(500),
+        Uint256::from(500u128),
+    )]
+    #[case::credit_multiple_denoms_with_existing_credit(
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")],
+        vec!["denom_6d", "denom_9d"],
+        vec![("user1", Uint128::new(500))],
+        "user1",
+        Uint128::new(500),
+        Uint128::new(500),
+        Uint128::new(1000),
+        Uint256::from(1000u128),
+    )]
+    #[case::credit_multiple_denoms_with_existing_credit_with_different_user(
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")],
+        vec!["denom_6d", "denom_9d"],
+        vec![("user1", Uint128::new(500))],
+        "user2",
+        Uint128::new(500),
+        Uint128::new(500),
+        Uint128::new(500),
+        Uint256::from(1000u128),
+    )]
+    #[case::credit_multiple_denoms_with_existing_credit_with_same_user_at_max_creditable(
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")], // total pool normalized value = 1002000
+        vec!["denom_6d", "denom_9d"],
+        vec![("user1", Uint128::new(1000000))],
+        "user1",
+        Uint128::new(2000),
+        Uint128::new(2000),
+        Uint128::new(1002000u128),
+        Uint256::from(1002000u128),
+    )]
+    #[case::credit_multiple_denoms_with_existing_credit_with_same_user_exceeding_creditable(
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")], // total pool normalized value = 1002000
+        vec!["denom_6d", "denom_9d"],
+        vec![("user1", Uint128::new(1000000))],
+        "user1",
+        Uint128::new(2001),
+        Uint128::new(2000),
+        Uint128::new(1002000u128),
+        Uint256::from(1002000u128),
+    )]
+    #[case::credit_multiple_denoms_with_existing_credit_with_different_user_at_max_creditable(
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")], // total pool normalized value = 1002000
+        vec!["denom_6d", "denom_9d"],
+        vec![("user1", Uint128::new(1000000))],
+        "user2",
+        Uint128::new(2000),
+        Uint128::new(2000),
+        Uint128::new(2000),
+        Uint256::from(1002000u128),
+    )]
+    #[case::credit_multiple_denoms_with_existing_credit_with_different_user_exceeding_creditable(
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")], // total pool normalized value = 1002000
+        vec!["denom_6d", "denom_9d"],
+        vec![("user1", Uint128::new(1000000))],
+        "user2",
+        Uint128::new(2001),
+        Uint128::new(2000),
+        Uint128::new(2000),
+        Uint256::from(1002000u128),
+    )]
+    #[case::credit_multiple_denoms_with_existing_credit_with_same_and_different_user_exceeding_creditable(
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")], // total pool normalized value = 1002000
+        vec!["denom_6d", "denom_9d"],
+        vec![("user1", Uint128::new(600000)), ("user2", Uint128::new(400000))],
+        "user2",
+        Uint128::new(2001),
+        Uint128::new(2000),
+        Uint128::new(402000),
+        Uint256::from(1002000u128),
+    )]
+    #[case::credit_total_credits_exceeding_u128_max(
+        vec![coin(u128::MAX, "denom_18d"), coin(1000, "denom_6d")],
+        vec!["denom_18d", "denom_6d"],
+        vec![("user1", Uint128::new(u128::MAX))],
+        "user2",
+        Uint128::new(1000),
+        Uint128::new(1000),
+        Uint128::new(1000),
+        Uint256::from(u128::MAX) + Uint256::from(1000u128),
+    )]
+
+    fn test_credit_incentive_to_user(
+        #[case] pool_balances: Vec<Coin>,
+        #[case] pool_denoms: Vec<&str>,
+        #[case] existing_credit: Vec<(&str, Uint128)>,
+        #[case] user: &str,
+        #[case] requested_amount: Uint128,
+        #[case] expected_credited: Uint128,
+        #[case] expected_user_credit: Uint128,
+        #[case] expected_total_credits: Uint256,
+    ) {
+        let mut storage = MockStorage::new();
+        let incentive_pool = setup_incentive_pool(&mut storage, pool_balances.clone(), vec![]);
+        let user = Addr::unchecked(user);
+
+        // Set up user's existing credit
+        for (user, credit) in &existing_credit {
+            incentive_pool
+                .outstanding_credits
+                .save(&mut storage, Addr::unchecked(*user), credit)
+                .unwrap();
+        }
+
+        // Initialize total outstanding credits to match existing credits
+        let total_existing_credits: Uint256 = existing_credit
+            .iter()
+            .map(|(_, credit)| Uint256::from(*credit))
+            .fold(Uint256::zero(), |acc, credit| acc + credit);
+        incentive_pool
+            .total_outstanding_credits
+            .save(&mut storage, &total_existing_credits)
+            .unwrap();
+
+        let norm_factors = create_norm_factors(&pool_denoms);
+
+        let result = incentive_pool.credit_incentive_to_user(
+            &mut storage,
+            &user,
+            requested_amount,
+            &norm_factors,
+        );
+
+        assert_eq!(result, Ok(expected_credited));
+
+        // Verify user's credit
+        assert_eq!(
+            incentive_pool.get_user_credit(&storage, &user).unwrap(),
+            expected_user_credit
+        );
+
+        // Verify total outstanding credits
+        let total_credits = incentive_pool.get_total_credits(&storage).unwrap();
+        assert_eq!(total_credits, expected_total_credits);
+
+        // Verify pool balances are unchanged
+        let final_balances = incentive_pool.get_all_pool_balances(&storage).unwrap();
+        assert_eq!(final_balances, pool_balances.clone());
+    }
+
+    #[test]
+    fn test_credit_incentive_to_user_invalid_denom() {
+        let mut storage = MockStorage::new();
+        let incentive_pool =
+            setup_incentive_pool(&mut storage, vec![coin(1000, "invalid_denom")], vec![]);
+
+        let user = Addr::unchecked("user1");
+        let norm_factors = create_norm_factors(&["denom_a"]); // Only denom_a in normalization map
+
+        let result = incentive_pool.credit_incentive_to_user(
+            &mut storage,
+            &user,
+            Uint128::new(500),
+            &norm_factors,
+        );
+
+        assert_eq!(
+            result,
+            Err(ContractError::InvalidPoolAssetDenom {
+                denom: "invalid_denom".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_credit_incentive_to_user_overflow() {
+        let mut storage = MockStorage::new();
+        let incentive_pool =
+            setup_incentive_pool(&mut storage, vec![coin(u128::MAX, "denom_a")], vec![]);
+
+        let user = Addr::unchecked("user1");
+        let norm_factors = create_norm_factors(&["denom_a"]);
+
+        // This should succeed but test the overflow handling
+        let result = incentive_pool.credit_incentive_to_user(
+            &mut storage,
+            &user,
+            Uint128::new(1000),
+            &norm_factors,
+        );
+
+        assert_eq!(result, Ok(Uint128::new(1000)));
     }
 }
