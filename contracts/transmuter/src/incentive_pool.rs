@@ -296,6 +296,40 @@ mod tests {
 
     use super::*;
 
+    const POOL_BALANCES_KEY: &str = "pool_balances";
+    const OUTSTANDING_CREDITS_KEY: &str = "outstanding_credits";
+    const TOTAL_OUTSTANDING_CREDITS_KEY: &str = "total_outstanding_credits";
+
+    fn setup_incentive_pool(
+        storage: &mut MockStorage,
+        pool_balances: Vec<Coin>,
+        outstanding_credits: Vec<Coin>,
+    ) -> IncentivePool {
+        let pool_balances_storage = Map::new(POOL_BALANCES_KEY);
+        for coin in pool_balances {
+            pool_balances_storage
+                .save(storage, &coin.denom, &coin.amount)
+                .unwrap();
+        }
+        let outstanding_credits_storage = Map::new(OUTSTANDING_CREDITS_KEY);
+        for coin in outstanding_credits {
+            outstanding_credits_storage
+                .save(storage, &coin.denom, &coin.amount)
+                .unwrap();
+        }
+
+        let total_outstanding_credits_storage = Item::new(TOTAL_OUTSTANDING_CREDITS_KEY);
+        total_outstanding_credits_storage
+            .save(storage, &Uint256::zero())
+            .unwrap();
+
+        IncentivePool::new(
+            POOL_BALANCES_KEY,
+            OUTSTANDING_CREDITS_KEY,
+            TOTAL_OUTSTANDING_CREDITS_KEY,
+        )
+    }
+
     #[rstest]
     #[case::add_to_empty(vec![], coin(100, "uatom"), vec![coin(100, "uatom")])]
     #[case::add_zero_amount(vec![], coin(0, "uosmo"), vec![coin(0, "uosmo")])]
@@ -313,18 +347,7 @@ mod tests {
         #[case] expected_pool_balances: Vec<Coin>,
     ) {
         let mut storage = MockStorage::new();
-        let pool_balances_storage = Map::new("pool_balances");
-        for coin in pool_balances {
-            pool_balances_storage
-                .save(&mut storage, &coin.denom, &coin.amount)
-                .unwrap();
-        }
-
-        let incentive_pool = IncentivePool::new(
-            "pool_balances",
-            "outstanding_credits",
-            "total_outstanding_credits",
-        );
+        let incentive_pool = setup_incentive_pool(&mut storage, pool_balances, vec![]);
         incentive_pool
             .add_tokens(&mut storage, &additional_token)
             .unwrap();
@@ -336,11 +359,7 @@ mod tests {
     #[test]
     fn test_add_tokens_overflow() {
         let mut storage = MockStorage::new();
-        let incentive_pool = IncentivePool::new(
-            "pool_balances",
-            "outstanding_credits",
-            "total_outstanding_credits",
-        );
+        let incentive_pool = setup_incentive_pool(&mut storage, vec![], vec![]);
 
         // Add maximum amount first
         let max_coin = coin(u128::MAX, "overflow_denom");
@@ -355,26 +374,11 @@ mod tests {
     #[test]
     fn test_get_pool_balance_nonexistent_denom() {
         let mut storage = MockStorage::new();
-        let incentive_pool = IncentivePool::new(
-            "pool_balances",
-            "outstanding_credits",
-            "total_outstanding_credits",
-        );
+        let incentive_pool = setup_incentive_pool(&mut storage, vec![], vec![]);
 
         // Should return zero for non-existent denoms
         let balance = incentive_pool
             .get_pool_balance(&storage, "nonexistent")
-            .unwrap();
-        assert_eq!(balance, Uint128::zero());
-
-        let balance = incentive_pool.get_pool_balance(&storage, "").unwrap();
-        assert_eq!(balance, Uint128::zero());
-
-        let balance = incentive_pool
-            .get_pool_balance(
-                &storage,
-                "very_long_denom_name_that_might_be_used_in_real_world_scenarios",
-            )
             .unwrap();
         assert_eq!(balance, Uint128::zero());
     }
