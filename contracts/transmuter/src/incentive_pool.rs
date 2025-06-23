@@ -160,13 +160,30 @@ impl IncentivePool {
         &self,
         storage: &mut dyn Storage,
         user: &Addr,
-        redemptions: Vec<(Coin, Uint128)>,
+        redemptions: Vec<Coin>,
+        pool_denom_factors: &BTreeMap<String, Uint128>, // (denom, normalization_factor) pairs
     ) -> Result<(), ContractError> {
+        let std_norm_factor = lcm_from_iter(pool_denom_factors.values().copied())?;
+
         // Calculate total normalized cost
         let total_normalized_cost = redemptions
             .iter()
-            .map(|(_, normalized_cost)| *normalized_cost)
-            .try_fold(Uint128::zero(), |acc, cost| acc.checked_add(cost))?;
+            .map(|coin| {
+                let norm_factor = pool_denom_factors.get(&coin.denom).ok_or_else(|| {
+                    ContractError::InvalidPoolAssetDenom {
+                        denom: coin.denom.clone(),
+                    }
+                })?;
+
+                // Convert exact amount to normalized amount, rounding up to prevent deducting less than the actual cost
+                convert_amount(coin.amount, *norm_factor, std_norm_factor, &Rounding::Up)
+            })
+            .try_fold(Uint128::zero(), |acc, cost| {
+                cost.and_then(|cost| {
+                    acc.checked_add(cost)
+                        .map_err(|e| ContractError::OverflowError(e))
+                })
+            })?;
 
         // Check user has enough credits
         let current_credit = self
@@ -183,7 +200,7 @@ impl IncentivePool {
         }
 
         // Check pool has enough of each token
-        for (coin, _) in &redemptions {
+        for coin in &redemptions {
             let available_balance = self
                 .pool_balances
                 .may_load(storage, coin.denom.clone())?
@@ -215,7 +232,7 @@ impl IncentivePool {
             .save(storage, &updated_total)?;
 
         // Then, remove tokens from pool
-        for (coin, _) in redemptions {
+        for coin in redemptions {
             let current_balance = self
                 .pool_balances
                 .may_load(storage, coin.denom.clone())?
@@ -708,5 +725,174 @@ mod tests {
         );
 
         assert_eq!(result, Ok(Uint128::new(1000)));
+    }
+
+    #[rstest]
+    #[case::redeem_single_denom_basic(
+        vec![coin(1000, "denom_6d")],
+        vec!["denom_6d"],
+        vec![("user1", Uint128::new(1000))],
+        "user1",
+        vec![coin(500, "denom_6d")],
+        Ok(()),
+        vec![coin(500, "denom_6d")],
+        vec![("user1", Uint128::new(500))],
+        Uint256::from(500u128),
+    )]
+    #[case::redeem_single_denom_all(
+        vec![coin(1000, "denom_6d")],
+        vec!["denom_6d"],
+        vec![("user1", Uint128::new(1000))],
+        "user1",
+        vec![coin(1000, "denom_6d")],
+        Ok(()),
+        vec![],
+        vec![],
+        Uint256::zero(),
+    )]
+    #[case::redeem_multiple_denoms_basic(
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")],
+        vec!["denom_6d", "denom_9d"],
+        vec![("user1", Uint128::new(1000000))],
+        "user1",
+        vec![coin(500, "denom_6d"), coin(1000, "denom_9d")],
+        Ok(()),
+        vec![coin(500, "denom_6d"), coin(1000, "denom_9d")],
+        vec![("user1", Uint128::new(499000))],
+        Uint256::from(499000u128),
+    )]
+    #[case::redeem_multiple_denoms_at_max_credit(
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")],
+        vec!["denom_6d", "denom_9d"],
+        vec![("user1", Uint128::new(501000))],
+        "user1",
+        vec![coin(500, "denom_6d"), coin(1000, "denom_9d")],
+        Ok(()),
+        vec![coin(500, "denom_6d"), coin(1000, "denom_9d")],
+        vec![],
+        Uint256::zero(),
+    )]
+    #[case::redeem_multiple_denoms_exceeding_credit(
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")],
+        vec!["denom_6d", "denom_9d"],
+        vec![("user1", Uint128::new(500999))],
+        "user1",
+        vec![coin(500, "denom_6d"), coin(1000, "denom_9d")],
+        Err(ContractError::InsufficientIncentiveCredit {
+            user: Addr::unchecked("user1"),
+            available: Uint128::new(500999),
+            requested: Uint128::new(501000),
+        }),
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")],
+        vec![("user1", Uint128::new(500999))],
+        Uint256::from(500999u128),
+    )]
+    #[case::redeem_multiple_users_basic(
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")],
+        vec!["denom_6d", "denom_9d"],
+        vec![("user1", Uint128::new(1000000)), ("user2", Uint128::new(1000000))],
+        "user1",
+        vec![coin(500, "denom_6d"), coin(1000, "denom_9d")],
+        Ok(()),
+        vec![coin(500, "denom_6d"), coin(1000, "denom_9d")],
+        vec![("user1", Uint128::new(499000)), ("user2", Uint128::new(1000000))],
+        Uint256::from(1499000u128),
+    )]
+    #[case::redeem_multiple_users_at_max_credit(
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")],
+        vec!["denom_6d", "denom_9d"],
+        vec![("user1", Uint128::new(501000)), ("user2", Uint128::new(501000))],
+        "user1",
+        vec![coin(500, "denom_6d"), coin(1000, "denom_9d")],
+        Ok(()),
+        vec![coin(500, "denom_6d"), coin(1000, "denom_9d")],
+        vec![("user2", Uint128::new(501000))],
+        Uint256::from(501000u128),
+    )]
+    #[case::redeem_multiple_users_exceeding_credit(
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")],
+        vec!["denom_6d", "denom_9d"],
+        vec![("user1", Uint128::new(500999)), ("user2", Uint128::new(500999))],
+        "user1",
+        vec![coin(500, "denom_6d"), coin(1000, "denom_9d")],
+        Err(ContractError::InsufficientIncentiveCredit {
+            user: Addr::unchecked("user1"),
+            available: Uint128::new(500999),
+            requested: Uint128::new(501000),
+        }),
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")],
+        vec![("user1", Uint128::new(500999)), ("user2", Uint128::new(500999))],
+        Uint256::from(1001998u128),
+    )]
+    #[case::redeem_multiple_users_exceeding_balance(
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")],
+        vec!["denom_6d", "denom_9d"],
+        vec![("user1", Uint128::new(1003000)), ("user2", Uint128::new(501000))],
+        "user1",
+        vec![coin(1001, "denom_6d"), coin(2000, "denom_9d")],
+        Err(ContractError::InsufficientIncentivePool {
+            denom: "denom_6d".to_string(),
+            available: Uint128::new(1000),
+            requested: Uint128::new(1001),
+        }),
+        vec![coin(1000, "denom_6d"), coin(2000, "denom_9d")],
+        vec![("user1", Uint128::new(1003000)), ("user2", Uint128::new(501000))],
+        Uint256::from(1504000u128),
+    )]
+    fn test_redeem_incentive(
+        #[case] incentive_pool_balances: Vec<Coin>,
+        #[case] pool_denoms: Vec<&str>,
+        #[case] existing_credit: Vec<(&str, Uint128)>,
+        #[case] user: &str,
+        #[case] redemptions: Vec<Coin>,
+        #[case] expected_result: Result<(), ContractError>,
+        #[case] expected_balances: Vec<Coin>,
+        #[case] expected_user_credits: Vec<(&str, Uint128)>,
+        #[case] expected_total_credits: Uint256,
+    ) {
+        let mut storage = MockStorage::new();
+        let incentive_pool =
+            setup_incentive_pool(&mut storage, incentive_pool_balances.clone(), vec![]);
+        let user = Addr::unchecked(user);
+
+        let mut total_credits = Uint256::zero();
+        for (user, credit) in &existing_credit {
+            incentive_pool
+                .outstanding_credits
+                .save(&mut storage, Addr::unchecked(*user), credit)
+                .unwrap();
+
+            total_credits += Uint256::from(*credit);
+        }
+
+        incentive_pool
+            .total_outstanding_credits
+            .save(&mut storage, &total_credits)
+            .unwrap();
+
+        let norm_factors = create_norm_factors(&pool_denoms);
+
+        let result =
+            incentive_pool.redeem_incentive(&mut storage, &user, redemptions, &norm_factors);
+
+        assert_eq!(result, expected_result, "result mismatch");
+
+        let final_balances = incentive_pool.get_all_pool_balances(&storage).unwrap();
+        assert_eq!(final_balances, expected_balances, "balances mismatch");
+
+        let user_credits = incentive_pool.get_all_credit_users(&storage).unwrap();
+        assert_eq!(
+            user_credits,
+            expected_user_credits
+                .into_iter()
+                .map(|(user, credit)| (Addr::unchecked(user), credit))
+                .collect::<Vec<_>>()
+        );
+
+        let total_credits = incentive_pool.get_total_credits(&storage).unwrap();
+        assert_eq!(
+            total_credits, expected_total_credits,
+            "total credits mismatch"
+        );
     }
 }
