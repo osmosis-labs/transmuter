@@ -382,4 +382,99 @@ mod tests {
             .unwrap();
         assert_eq!(balance, Uint128::zero());
     }
+
+    #[rstest]
+    #[case::remove_from_empty_pool(
+        vec![],
+        coin(100, "uatom"),
+        Err(ContractError::InsufficientIncentivePool {
+            denom: "uatom".to_string(),
+            available: Uint128::zero(),
+            requested: Uint128::new(100),
+        }),
+        vec![]
+    )]
+    #[case::remove_zero_amount(
+        vec![coin(50, "uatom")],
+        coin(0, "uatom"),
+        Ok(()),
+        vec![coin(50, "uatom")]
+    )]
+    #[case::remove_exact_amount(
+        vec![coin(100, "uatom")],
+        coin(100, "uatom"),
+        Ok(()),
+        vec![]
+    )]
+    #[case::remove_partial_amount(
+        vec![coin(150, "uatom")],
+        coin(100, "uatom"),
+        Ok(()),
+        vec![coin(50, "uatom")]
+    )]
+    #[case::remove_more_than_available(
+        vec![coin(50, "uatom")],
+        coin(100, "uatom"),
+        Err(ContractError::InsufficientIncentivePool {
+            denom: "uatom".to_string(),
+            available: Uint128::new(50),
+            requested: Uint128::new(100),
+        }),
+        vec![coin(50, "uatom")]
+    )]
+    #[case::remove_from_multiple_denoms(
+        vec![coin(100, "uatom"), coin(200, "uosmo")],
+        coin(50, "uatom"),
+        Ok(()),
+        vec![coin(50, "uatom"), coin(200, "uosmo")]
+    )]
+    #[case::remove_different_denom_than_exists(
+        vec![coin(100, "uatom")],
+        coin(50, "uosmo"),
+        Err(ContractError::InsufficientIncentivePool {
+            denom: "uosmo".to_string(),
+            available: Uint128::zero(),
+            requested: Uint128::new(50),
+        }),
+        vec![coin(100, "uatom")]
+    )]
+    #[case::remove_large_amount(
+        vec![coin(999999999, "uion")],
+        coin(999999999, "uion"),
+        Ok(()),
+        vec![]
+    )]
+    #[case::remove_small_amount(
+        vec![coin(1000, "small")],
+        coin(1, "small"),
+        Ok(()),
+        vec![coin(999, "small")]
+    )]
+    #[case::remove_max_u128(
+        vec![coin(u128::MAX, "max_denom")],
+        coin(u128::MAX, "max_denom"),
+        Ok(()),
+        vec![]
+    )]
+    #[case::remove_to_zero_balance(
+        vec![coin(100, "zero_denom")],
+        coin(100, "zero_denom"),
+        Ok(()),
+        vec![]
+    )]
+    fn test_remove_tokens(
+        #[case] pool_balances: Vec<Coin>,
+        #[case] token_to_remove: Coin,
+        #[case] expected: Result<(), ContractError>,
+        #[case] expected_balances: Vec<Coin>,
+    ) {
+        let mut storage = MockStorage::new();
+        let incentive_pool = setup_incentive_pool(&mut storage, pool_balances.clone(), vec![]);
+
+        let result = incentive_pool.remove_tokens(&mut storage, &token_to_remove);
+        assert_eq!(result, expected);
+
+        let balances = incentive_pool.get_all_pool_balances(&storage).unwrap();
+        assert_eq!(balances, expected_balances);
+    }
 }
