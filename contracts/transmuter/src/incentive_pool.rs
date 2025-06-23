@@ -288,3 +288,94 @@ impl IncentivePool {
         Ok(all_credits?)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use cosmwasm_std::{coin, testing::MockStorage};
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::add_to_empty(vec![], coin(100, "uatom"), vec![coin(100, "uatom")])]
+    #[case::add_zero_amount(vec![], coin(0, "uosmo"), vec![coin(0, "uosmo")])]
+    #[case::add_to_existing(vec![coin(50, "uatom")], coin(100, "uatom"), vec![coin(150, "uatom")])]
+    #[case::add_different_denom(vec![coin(50, "uatom")], coin(100, "uosmo"), vec![coin(50, "uatom"), coin(100, "uosmo")])]
+    #[case::add_large_amount(vec![], coin(999999999, "uion"), vec![coin(999999999, "uion")])]
+    #[case::add_multiple_denoms_existing(vec![coin(10, "uatom"), coin(20, "uosmo")], coin(30, "uion"), vec![coin(10, "uatom"), coin(30, "uion"), coin(20, "uosmo")])]
+    #[case::add_same_denom_multiple_times(vec![coin(100, "uatom")], coin(100, "uatom"), vec![coin(200, "uatom")])]
+    #[case::add_to_empty_with_special_chars(vec![], coin(42, "denom-with-dashes"), vec![coin(42, "denom-with-dashes")])]
+    #[case::add_max_u128(vec![], coin(u128::MAX, "max_denom"), vec![coin(u128::MAX, "max_denom")])]
+    #[case::add_small_amount(vec![], coin(1, "small"), vec![coin(1, "small")])]
+    fn test_add_tokens(
+        #[case] pool_balances: Vec<Coin>,
+        #[case] additional_token: Coin,
+        #[case] expected_pool_balances: Vec<Coin>,
+    ) {
+        let mut storage = MockStorage::new();
+        let pool_balances_storage = Map::new("pool_balances");
+        for coin in pool_balances {
+            pool_balances_storage
+                .save(&mut storage, &coin.denom, &coin.amount)
+                .unwrap();
+        }
+
+        let incentive_pool = IncentivePool::new(
+            "pool_balances",
+            "outstanding_credits",
+            "total_outstanding_credits",
+        );
+        incentive_pool
+            .add_tokens(&mut storage, &additional_token)
+            .unwrap();
+
+        let pool_balances = incentive_pool.get_all_pool_balances(&storage).unwrap();
+        assert_eq!(pool_balances, expected_pool_balances);
+    }
+
+    #[test]
+    fn test_add_tokens_overflow() {
+        let mut storage = MockStorage::new();
+        let incentive_pool = IncentivePool::new(
+            "pool_balances",
+            "outstanding_credits",
+            "total_outstanding_credits",
+        );
+
+        // Add maximum amount first
+        let max_coin = coin(u128::MAX, "overflow_denom");
+        incentive_pool.add_tokens(&mut storage, &max_coin).unwrap();
+
+        // Try to add 1 more (should overflow)
+        let overflow_coin = coin(1, "overflow_denom");
+        let result = incentive_pool.add_tokens(&mut storage, &overflow_coin);
+        assert!(result.is_err(), "Adding to max amount should overflow");
+    }
+
+    #[test]
+    fn test_get_pool_balance_nonexistent_denom() {
+        let mut storage = MockStorage::new();
+        let incentive_pool = IncentivePool::new(
+            "pool_balances",
+            "outstanding_credits",
+            "total_outstanding_credits",
+        );
+
+        // Should return zero for non-existent denoms
+        let balance = incentive_pool
+            .get_pool_balance(&storage, "nonexistent")
+            .unwrap();
+        assert_eq!(balance, Uint128::zero());
+
+        let balance = incentive_pool.get_pool_balance(&storage, "").unwrap();
+        assert_eq!(balance, Uint128::zero());
+
+        let balance = incentive_pool
+            .get_pool_balance(
+                &storage,
+                "very_long_denom_name_that_might_be_used_in_real_world_scenarios",
+            )
+            .unwrap();
+        assert_eq!(balance, Uint128::zero());
+    }
+}
