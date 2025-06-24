@@ -603,10 +603,8 @@ impl Transmuter {
         for corrupted in pool.clone().corrupted_assets() {
             if corrupted.amount().is_zero() {
                 pool.remove_asset(corrupted.denom())?;
-                self.rebalancer.uncheck_remove_all_configs_for_scope(
-                    storage,
-                    Scope::denom(corrupted.denom()),
-                )?;
+                self.rebalancer
+                    .unchecked_remove_config(storage, Scope::denom(corrupted.denom()))?;
             }
         }
 
@@ -624,10 +622,8 @@ impl Transmuter {
 
                 // remove rebalancing configs for asset group as well
                 if pool.asset_groups.get(&label).is_none() {
-                    self.rebalancer.uncheck_remove_all_configs_for_scope(
-                        storage,
-                        Scope::asset_group(&label),
-                    )?;
+                    self.rebalancer
+                        .unchecked_remove_config(storage, Scope::asset_group(&label))?;
                 }
             }
         }
@@ -1256,7 +1252,6 @@ mod tests {
                 .add_config(
                     &mut deps.storage,
                     Scope::denom(denom.as_str()),
-                    "static",
                     RebalancingConfig::limit_only(Decimal::percent(100)).unwrap(),
                 )
                 .unwrap();
@@ -1288,9 +1283,9 @@ mod tests {
                 assert!(
                     transmuter
                         .rebalancer
-                        .list_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
+                        .get_config_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
                         .unwrap()
-                        .is_empty(),
+                        .is_none(),
                     "must not contain limiter for {} since it's corrupted and drained",
                     denom
                 );
@@ -1301,13 +1296,13 @@ mod tests {
                     denom
                 );
 
-                // limiters should be removed
+                // limiters should not be removed
                 assert!(
-                    !transmuter
+                    transmuter
                         .rebalancer
-                        .list_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
+                        .get_config_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
                         .unwrap()
-                        .is_empty(),
+                        .is_some(),
                     "must contain limiter for {} since it's not corrupted or not drained",
                     denom
                 );
@@ -1355,7 +1350,6 @@ mod tests {
                 .add_config(
                     &mut deps.storage,
                     Scope::denom(denom.as_str()),
-                    "static",
                     RebalancingConfig::limit_only(Decimal::percent(100)).unwrap(),
                 )
                 .unwrap();
@@ -1387,7 +1381,7 @@ mod tests {
             .list_configs(&deps.storage)
             .unwrap()
             .into_iter()
-            .map(|((denom, _), _)| denom)
+            .map(|(denom, _)| denom)
             .unique()
             .collect_vec();
 
@@ -1437,7 +1431,6 @@ mod tests {
                 .add_config(
                     &mut deps.storage,
                     Scope::denom(denom.as_str()),
-                    "static",
                     RebalancingConfig::limit_only(Decimal::percent(100)).unwrap(),
                 )
                 .unwrap();
@@ -1469,7 +1462,7 @@ mod tests {
             .list_configs(&deps.storage)
             .unwrap()
             .into_iter()
-            .map(|((denom, _), _)| denom)
+            .map(|(denom, _)| denom)
             .unique()
             .collect_vec();
 
@@ -1801,7 +1794,6 @@ mod tests {
             .add_config(
                 &mut deps.storage,
                 Scope::asset_group("group1"),
-                "1w",
                 RebalancingConfig::limit_only(Decimal::percent(60)).unwrap(),
             )
             .unwrap();
@@ -1837,9 +1829,9 @@ mod tests {
         // Check that the rebalancing config for group1 is still exists
         let rebalancing_configs = transmuter
             .rebalancer
-            .list_by_scope(&deps.storage, &Scope::asset_group("group1"))
+            .get_config_by_scope(&deps.storage, &Scope::asset_group("group1"))
             .unwrap();
-        assert_eq!(rebalancing_configs.len(), 1);
+        assert!(rebalancing_configs.is_some());
 
         // Save the updated pool
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
@@ -1861,9 +1853,9 @@ mod tests {
         // Check that the rebalancing config for group1 is removed
         let rebalancing_configs = transmuter
             .rebalancer
-            .list_by_scope(&deps.storage, &Scope::asset_group("group1"))
+            .get_config_by_scope(&deps.storage, &Scope::asset_group("group1"))
             .unwrap();
-        assert_eq!(rebalancing_configs.len(), 0);
+        assert_eq!(rebalancing_configs, None);
     }
 
     #[test]
@@ -1892,7 +1884,6 @@ mod tests {
             .add_config(
                 &mut deps.storage,
                 Scope::asset_group("group1"),
-                "limiter1",
                 RebalancingConfig::limit_only(Decimal::one()).unwrap(),
             )
             .unwrap();
@@ -1925,9 +1916,9 @@ mod tests {
         // Check that the rebalancing config for group1 is still registered
         let rebalancing_configs = transmuter
             .rebalancer
-            .list_by_scope(&deps.storage, &Scope::asset_group("group1"))
+            .get_config_by_scope(&deps.storage, &Scope::asset_group("group1"))
             .unwrap();
-        assert_eq!(rebalancing_configs.len(), 1);
+        assert!(rebalancing_configs.is_some());
 
         // Save the updated pool
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
@@ -1956,8 +1947,8 @@ mod tests {
         // Check that the rebalancing config for group1 is still registered
         let rebalancing_configs = transmuter
             .rebalancer
-            .list_by_scope(&deps.storage, &Scope::asset_group("group1"))
+            .get_config_by_scope(&deps.storage, &Scope::asset_group("group1"))
             .unwrap();
-        assert_eq!(rebalancing_configs.len(), 1);
+        assert!(rebalancing_configs.is_some());
     }
 }

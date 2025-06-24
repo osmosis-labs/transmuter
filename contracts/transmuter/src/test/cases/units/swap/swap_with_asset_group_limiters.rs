@@ -82,7 +82,6 @@ fn test_swap_with_asset_group_limiters() {
         .execute(
             &&ExecMsg::AddRebalancingConfig {
                 scope: Scope::asset_group("group1"),
-                label: "static".to_string(),
                 rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(67)).unwrap(),
             },
             &[],

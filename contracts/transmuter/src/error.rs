@@ -135,11 +135,11 @@ pub enum ContractError {
     #[error("Upper limit must not exceed 100%")]
     ExceedHundredPercentUpperLimit {},
 
-    #[error("Rebalancing config does not exist for scope: {scope}, label: {label}")]
-    ConfigDoesNotExist { scope: Scope, label: String },
+    #[error("Rebalancing config does not exist for scope: {scope}")]
+    ConfigDoesNotExist { scope: Scope },
 
-    #[error("Rebalancing config already exists for scope: {scope}, label: {label}")]
-    ConfigAlreadyExists { scope: Scope, label: String },
+    #[error("Rebalancing config already exists for scope: {scope}")]
+    ConfigAlreadyExists { scope: Scope },
 
     #[error(
         "Upper limit exceeded for `{scope}`, upper limit is {upper_limit}, but the resulted weight is {value}"

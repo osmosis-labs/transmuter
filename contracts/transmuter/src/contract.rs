@@ -269,18 +269,9 @@ impl Transmuter {
                 Ok(pool)
             })?;
 
-        // remove all rebalancing configs for asset group
-        let configs = self
-            .rebalancer
-            .list_by_scope(deps.storage, &Scope::AssetGroup(label.clone()))?;
-
-        for (config_label, _) in configs {
-            self.rebalancer.unchecked_remove_config(
-                deps.storage,
-                Scope::AssetGroup(label.clone()),
-                &config_label,
-            )?;
-        }
+        // remove rebalancing config for asset group
+        self.rebalancer
+            .remove_config(deps.storage, Scope::AssetGroup(label.clone()))?;
 
         Ok(Response::new()
             .add_attribute("method", "remove_asset_group")
@@ -358,7 +349,6 @@ impl Transmuter {
         &self,
         ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         scope: Scope,
-        label: String,
         rebalancing_config: RebalancingConfig,
     ) -> Result<Response, ContractError> {
         nonpayable(&info.funds)?;
@@ -386,11 +376,7 @@ impl Transmuter {
         };
 
         let scope_key = scope.key();
-        let base_attrs = vec![
-            ("method", "add_rebalancing_config"),
-            ("label", &label),
-            ("scope", &scope_key),
-        ];
+        let base_attrs = vec![("method", "add_rebalancing_config"), ("scope", &scope_key)];
 
         let RebalancingConfig {
             ideal_upper,
@@ -419,7 +405,7 @@ impl Transmuter {
         ];
 
         self.rebalancer
-            .add_config(deps.storage, scope, &label, rebalancing_config)?;
+            .add_config(deps.storage, scope, rebalancing_config)?;
 
         Ok(Response::new()
             .add_attributes(base_attrs)
@@ -431,7 +417,6 @@ impl Transmuter {
         &self,
         ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         scope: Scope,
-        label: String,
     ) -> Result<Response, ContractError> {
         nonpayable(&info.funds)?;
 
@@ -442,11 +427,10 @@ impl Transmuter {
         let attrs = vec![
             ("method", "remove_rebalancing_config"),
             ("scope", &scope_key),
-            ("label", &label),
         ];
 
         // remove rebalancing config
-        self.rebalancer.remove_config(deps.storage, scope, &label)?;
+        self.rebalancer.remove_config(deps.storage, scope)?;
 
         Ok(Response::new().add_attributes(attrs))
     }
@@ -456,7 +440,6 @@ impl Transmuter {
         &self,
         ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         scope: Scope,
-        label: String,
         rebalancing_config: RebalancingConfig,
     ) -> Result<Response, ContractError> {
         nonpayable(&info.funds)?;
@@ -477,7 +460,7 @@ impl Transmuter {
 
         // update rebalancing config
         self.rebalancer
-            .update_config(deps.storage, scope, &label, &rebalancing_config)?;
+            .update_config(deps.storage, scope, &rebalancing_config)?;
 
         let attrs = vec![
             (
@@ -485,7 +468,6 @@ impl Transmuter {
                 String::from("update_rebalancing_config"),
             ),
             (String::from("scope"), scope_key),
-            (String::from("label"), label),
             (String::from("ideal_upper"), ideal_upper.to_string()),
             (String::from("ideal_lower"), ideal_lower.to_string()),
             (String::from("critical_upper"), critical_upper.to_string()),
@@ -935,7 +917,7 @@ pub struct ListAssetConfigsResponse {
 
 #[cw_serde]
 pub struct ListRebalancingConfigResponse {
-    pub rebalancing_configs: Vec<((String, String), RebalancingConfig)>,
+    pub rebalancing_configs: Vec<(String, RebalancingConfig)>,
 }
 
 #[cw_serde]
@@ -1153,7 +1135,6 @@ mod tests {
             let add_rebalancing_config_msg =
                 ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
                     scope: Scope::Denom(denom.to_string()),
-                    label: "static_config".to_string(),
                     rebalancing_config: config.clone(),
                 });
 
@@ -1376,7 +1357,6 @@ mod tests {
             let add_rebalancing_config_msg =
                 ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
                     scope: Scope::Denom(denom.to_string()),
-                    label: "static_config".to_string(),
                     rebalancing_config: config.clone(),
                 });
             execute(
@@ -1683,9 +1663,9 @@ mod tests {
         assert_eq!(
             Transmuter::new()
                 .rebalancer
-                .list_by_scope(&deps.storage, &Scope::denom("wbtc"))
+                .get_config_by_scope(&deps.storage, &Scope::denom("wbtc"))
                 .unwrap(),
-            vec![]
+            None
         );
 
         // try unmark nbtc should fail
@@ -1777,14 +1757,11 @@ mod tests {
         );
 
         // still has all the rebalancing configs
-        assert_eq!(
-            Transmuter::new()
-                .rebalancer
-                .list_by_scope(&deps.storage, &Scope::denom("tbtc"))
-                .unwrap()
-                .len(),
-            1
-        );
+        assert!(Transmuter::new()
+            .rebalancer
+            .get_config_by_scope(&deps.storage, &Scope::denom("tbtc"))
+            .unwrap()
+            .is_some());
     }
 
     #[test]
@@ -1852,7 +1829,6 @@ mod tests {
         let info = message_info(&admin, &[]);
         let set_config_msg = ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
             scope: Scope::asset_group("group1"),
-            label: "big_static_config".to_string(),
             rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(70)).unwrap(),
         });
         execute(deps.as_mut(), env.clone(), info.clone(), set_config_msg).unwrap();
@@ -1860,7 +1836,6 @@ mod tests {
         // set static limiter for stbtc
         let set_config_msg = ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
             scope: Scope::denom("stbtc"),
-            label: "big_static_config".to_string(),
             rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(70)).unwrap(),
         });
         execute(deps.as_mut(), env.clone(), info.clone(), set_config_msg).unwrap();
@@ -1942,10 +1917,7 @@ mod tests {
             .into_iter()
             .map(|(k, _)| k)
             .collect::<Vec<_>>();
-        assert_eq!(
-            limiters,
-            vec![("denom::stbtc".to_string(), "big_static_config".to_string())]
-        );
+        assert_eq!(limiters, vec!["denom::stbtc".to_string()]);
     }
 
     fn total_liquidity_of(denom: &str, storage: &dyn Storage) -> Coin {
@@ -2431,7 +2403,7 @@ mod tests {
     }
 
     #[test]
-    fn test_limiter_registration_and_config() {
+    fn test_add_and_update_rebalancing_config() {
         // register limiter
         let mut deps = mock_dependencies();
 
@@ -2469,7 +2441,6 @@ mod tests {
             message_info(&user, &[]),
             ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
                 scope: Scope::Denom("uosmo".to_string()),
-                label: "static".to_string(),
                 rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(60)).unwrap(),
             }),
         )
@@ -2484,7 +2455,6 @@ mod tests {
             message_info(&admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
                 scope: Scope::Denom("uosmo".to_string()),
-                label: "static".to_string(),
                 rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(60)).unwrap(),
             }),
         )
@@ -2492,7 +2462,6 @@ mod tests {
 
         let attrs = vec![
             attr("method", "add_rebalancing_config"),
-            attr("label", "static"),
             attr("scope", "denom::uosmo"),
             attr("ideal_upper", "0.6"),
             attr("ideal_lower", "0"),
@@ -2512,7 +2481,6 @@ mod tests {
             message_info(&admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
                 scope: Scope::Denom("invalid_denom".to_string()),
-                label: "static".to_string(),
                 rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(60)).unwrap(),
             }),
         )
@@ -2533,162 +2501,37 @@ mod tests {
         assert_eq!(
             limiters.rebalancing_configs,
             vec![(
-                (Scope::denom("uosmo").key(), String::from("static")),
+                Scope::denom("uosmo").key(),
                 RebalancingConfig::limit_only(Decimal::percent(60)).unwrap()
             )]
         );
 
-        // register another static limiter with different label
-        let res = execute(
+        // Try to add another config for the same scope should fail
+        let err = execute(
             deps.as_mut(),
             mock_env(),
             message_info(&admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
                 scope: Scope::Denom("uosmo".to_string()),
-                label: "static2".to_string(),
                 rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(70)).unwrap(),
-            }),
-        )
-        .unwrap();
-
-        let attrs_static2 = vec![
-            attr("method", "add_rebalancing_config"),
-            attr("label", "static2"),
-            attr("scope", "denom::uosmo"),
-            attr("ideal_upper", "0.7"),
-            attr("ideal_lower", "0"),
-            attr("critical_upper", "0.7"),
-            attr("critical_lower", "0"),
-            attr("limit", "0.7"),
-            attr("adjustment_rate_strained", "0"),
-            attr("adjustment_rate_critical", "0"),
-        ];
-
-        assert_eq!(res.attributes, attrs_static2);
-
-        // Query the list of limiters
-        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListRebalancingConfigs {});
-        let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListRebalancingConfigResponse = from_json(res).unwrap();
-
-        assert_eq!(
-            limiters.rebalancing_configs,
-            vec![
-                (
-                    (Scope::denom("uosmo").key(), String::from("static")),
-                    RebalancingConfig::limit_only(Decimal::percent(60)).unwrap()
-                ),
-                (
-                    (Scope::denom("uosmo").key(), String::from("static2")),
-                    RebalancingConfig::limit_only(Decimal::percent(70)).unwrap()
-                )
-            ]
-        );
-
-        // deregister limiter by user is unauthorized
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            message_info(&user, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::RemoveRebalancingConfig {
-                scope: Scope::Denom("uosmo".to_string()),
-                label: "static".to_string(),
-            }),
-        )
-        .unwrap_err();
-
-        assert_eq!(err, ContractError::Unauthorized {});
-
-        // deregister limiter by admin should work
-        let res = execute(
-            deps.as_mut(),
-            mock_env(),
-            message_info(&admin, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::RemoveRebalancingConfig {
-                scope: Scope::Denom("uosmo".to_string()),
-                label: "static".to_string(),
-            }),
-        )
-        .unwrap();
-
-        let attrs = vec![
-            attr("method", "remove_rebalancing_config"),
-            attr("scope", "denom::uosmo"),
-            attr("label", "static"),
-        ];
-
-        assert_eq!(res.attributes, attrs);
-
-        // Query the list of limiters
-        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListRebalancingConfigs {});
-        let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListRebalancingConfigResponse = from_json(res).unwrap();
-
-        assert_eq!(
-            limiters.rebalancing_configs,
-            vec![(
-                (Scope::denom("uosmo").key(), String::from("static2")),
-                RebalancingConfig::limit_only(Decimal::percent(70)).unwrap()
-            )]
-        );
-
-        // set upper limit by user is unauthorized
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            message_info(&user, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::UpdateRebalancingConfig {
-                scope: Scope::Denom("uosmo".to_string()),
-                label: "static2".to_string(),
-                rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(50)).unwrap(),
-            }),
-        )
-        .unwrap_err();
-
-        assert_eq!(err, ContractError::Unauthorized {});
-
-        // Query the list of limiters
-        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListRebalancingConfigs {});
-        let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListRebalancingConfigResponse = from_json(res).unwrap();
-
-        assert_eq!(
-            limiters.rebalancing_configs,
-            vec![(
-                (Scope::denom("uosmo").key(), String::from("static2")),
-                RebalancingConfig::limit_only(Decimal::percent(70)).unwrap()
-            )]
-        );
-
-        // set upper limit by admin for non-existent limiter should fail
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            message_info(&admin, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::UpdateRebalancingConfig {
-                scope: Scope::Denom("uosmo".to_string()),
-                label: "non_existent".to_string(),
-                rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(50)).unwrap(),
             }),
         )
         .unwrap_err();
 
         assert_eq!(
             err,
-            ContractError::ConfigDoesNotExist {
+            ContractError::ConfigAlreadyExists {
                 scope: Scope::denom("uosmo"),
-                label: "non_existent".to_string()
             }
         );
 
-        // set upper limit by admin for static limiter should work
+        // Update the config
         let res = execute(
             deps.as_mut(),
             mock_env(),
             message_info(&admin, &[]),
             ContractExecMsg::Transmuter(ExecMsg::UpdateRebalancingConfig {
                 scope: Scope::Denom("uosmo".to_string()),
-                label: "static2".to_string(),
                 rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(50)).unwrap(),
             }),
         )
@@ -2697,7 +2540,6 @@ mod tests {
         let attrs = vec![
             attr("method", "update_rebalancing_config"),
             attr("scope", "denom::uosmo"),
-            attr("label", "static2"),
             attr("ideal_upper", "0.5"),
             attr("ideal_lower", "0"),
             attr("critical_upper", "0.5"),
@@ -2717,75 +2559,8 @@ mod tests {
         assert_eq!(
             limiters.rebalancing_configs,
             vec![(
-                (Scope::denom("uosmo").key(), String::from("static2")),
+                Scope::denom("uosmo").key(),
                 RebalancingConfig::limit_only(Decimal::percent(50)).unwrap()
-            )]
-        );
-
-        // set upper limit by admin for non-existent limiter should fail
-        let update_config_msg = ContractExecMsg::Transmuter(ExecMsg::UpdateRebalancingConfig {
-            scope: Scope::denom("uosmo"),
-            label: "nonexistent".to_string(),
-            rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(25)).unwrap(),
-        });
-
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            message_info(&admin, &[]),
-            update_config_msg,
-        )
-        .unwrap_err();
-
-        assert_eq!(
-            err,
-            ContractError::ConfigDoesNotExist {
-                scope: Scope::denom("uosmo"),
-                label: "nonexistent".to_string()
-            }
-        );
-
-        // set upper limit by admin for static limiter should work
-        let update_config_msg = ContractExecMsg::Transmuter(ExecMsg::UpdateRebalancingConfig {
-            scope: Scope::denom("uosmo"),
-            label: "static2".to_string(),
-            rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(25)).unwrap(),
-        });
-
-        let res = execute(
-            deps.as_mut(),
-            mock_env(),
-            message_info(&admin, &[]),
-            update_config_msg,
-        )
-        .unwrap();
-
-        assert_eq!(
-            res.attributes,
-            vec![
-                attr("method", "update_rebalancing_config"),
-                attr("scope", "denom::uosmo"),
-                attr("label", "static2"),
-                attr("ideal_upper", "0.25"),
-                attr("ideal_lower", "0"),
-                attr("critical_upper", "0.25"),
-                attr("critical_lower", "0"),
-                attr("limit", "0.25"),
-                attr("adjustment_rate_strained", "0"),
-                attr("adjustment_rate_critical", "0"),
-            ]
-        );
-
-        // Query the list of limiters
-        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListRebalancingConfigs {});
-        let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListRebalancingConfigResponse = from_json(res).unwrap();
-
-        assert_eq!(
-            limiters.rebalancing_configs,
-            vec![(
-                (Scope::denom("uosmo").key(), String::from("static2")),
-                RebalancingConfig::limit_only(Decimal::percent(25)).unwrap()
             )]
         );
     }
@@ -4097,7 +3872,6 @@ mod tests {
         // Try setting limiter with non-existent group
         let add_rebalancing_config_msg =
             ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
-                label: "config1".to_string(),
                 scope: Scope::asset_group("group2"),
                 rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(60)).unwrap(),
             });
@@ -4171,7 +3945,6 @@ mod tests {
             res3.attributes,
             vec![
                 attr("method", "add_rebalancing_config"),
-                attr("label", "config1"),
                 attr("scope", "asset_group::group2"),
                 attr("ideal_upper", "0.6"),
                 attr("ideal_lower", "0"),
@@ -4191,10 +3964,7 @@ mod tests {
         assert_eq!(
             list_limiters_res.rebalancing_configs,
             vec![(
-                (
-                    Scope::asset_group("group2").to_string(),
-                    "config1".to_string()
-                ),
+                Scope::asset_group("group2").to_string(),
                 RebalancingConfig::limit_only(Decimal::percent(60)).unwrap()
             )]
         );

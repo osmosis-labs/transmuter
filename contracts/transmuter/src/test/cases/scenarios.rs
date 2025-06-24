@@ -893,7 +893,6 @@ fn test_limiters() {
         .execute(
             &ExecMsg::AddRebalancingConfig {
                 scope: Scope::Denom(AXL_USDC.to_string()),
-                label: "static".to_string(),
                 rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(60)).unwrap(),
             },
             &[],
@@ -979,7 +978,6 @@ fn test_register_limiter_after_having_liquidity() {
         .execute(
             &ExecMsg::AddRebalancingConfig {
                 scope: Scope::Denom(COSMOS_USDC.to_string()),
-                label: "static".to_string(),
                 rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(60)).unwrap(),
             },
             &[],
@@ -1064,7 +1062,6 @@ fn test_limiter_already_exceeded() {
         .execute(
             &ExecMsg::AddRebalancingConfig {
                 scope: Scope::Denom(AXL_USDC.to_string()),
-                label: "static".to_string(),
                 rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(40)).unwrap(),
             },
             &[],

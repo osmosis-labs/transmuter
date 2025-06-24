@@ -1,18 +1,13 @@
-use cosmwasm_std::{ensure, Decimal, Storage, Uint64};
+use cosmwasm_std::{ensure, Decimal, Storage};
 use cw_storage_plus::Map;
 
 use transmuter_math::rebalancing::config::RebalancingConfig;
 
 use crate::{scope::Scope, ContractError};
 
-/// Maximum number of rebalancing configs allowed per denom.
-/// This limited so that the contract can't be abused by setting a large number of configs,
-/// causing high gas usage when checking the limit, cleaning up divisions, etc.
-const MAX_CONFIG_COUNT_PER_DENOM: Uint64 = Uint64::new(10u64);
-
 pub struct Rebalancer {
-    /// Map of (scope, label) -> RebalancingConfig
-    configs: Map<(&'static str, &'static str), RebalancingConfig>,
+    /// Map of scope -> RebalancingConfig
+    configs: Map<&'static str, RebalancingConfig>,
 }
 
 impl Rebalancer {
@@ -26,54 +21,18 @@ impl Rebalancer {
         &self,
         storage: &mut dyn Storage,
         scope: Scope,
-        label: &str,
-        rebalancing_params: RebalancingConfig,
+        rebalancing_config: RebalancingConfig,
     ) -> Result<(), ContractError> {
-        let is_config_exists = self
-            .configs
-            .may_load(storage, (&scope.key(), label))?
-            .is_some();
-
-        ensure!(!label.is_empty(), ContractError::EmptyConfigLabel {});
+        let is_config_exists = self.configs.may_load(storage, &scope.key())?.is_some();
 
         ensure!(
             !is_config_exists,
-            ContractError::ConfigAlreadyExists {
-                scope,
-                label: label.to_string()
-            }
-        );
-
-        // ensure configs for the denom has not yet reached the maximum
-        // TODO: remove this when there is only one per denom / asset group
-        let config_count_for_denom = self.list_by_scope(storage, &scope)?.len() as u64;
-        ensure!(
-            config_count_for_denom < MAX_CONFIG_COUNT_PER_DENOM.u64(),
-            ContractError::MaxLimiterCountPerDenomExceeded {
-                scope,
-                max: MAX_CONFIG_COUNT_PER_DENOM
-            }
+            ContractError::ConfigAlreadyExists { scope }
         );
 
         self.configs
-            .save(storage, (&scope.key(), label), &rebalancing_params)
+            .save(storage, &scope.key(), &rebalancing_config)
             .map_err(Into::into)
-    }
-
-    /// Remove all rebalancing configs for the denom without checking if it will be empty.
-    /// This is useful when the asset is being removed, so that configs for the asset are no longer needed.
-    pub fn uncheck_remove_all_configs_for_scope(
-        &self,
-        storage: &mut dyn Storage,
-        scope: Scope,
-    ) -> Result<(), ContractError> {
-        let configs = self.list_by_scope(storage, &scope)?;
-
-        for (label, _) in configs {
-            self.configs.remove(storage, (&scope.key(), &label));
-        }
-
-        Ok(())
     }
 
     /// Remove a rebalancing config without checking if it will be empty.
@@ -82,18 +41,14 @@ impl Rebalancer {
         &self,
         storage: &mut dyn Storage,
         scope: Scope,
-        label: &str,
     ) -> Result<RebalancingConfig, ContractError> {
         let scope_key = scope.key();
-        match self.configs.may_load(storage, (&scope_key, label))? {
+        match self.configs.may_load(storage, &scope_key)? {
             Some(rebalancing_params) => {
-                self.configs.remove(storage, (&scope_key, label));
+                self.configs.remove(storage, &scope_key);
                 Ok(rebalancing_params)
             }
-            None => Err(ContractError::ConfigDoesNotExist {
-                scope,
-                label: label.to_string(),
-            }),
+            None => Err(ContractError::ConfigDoesNotExist { scope }),
         }
     }
 
@@ -101,26 +56,14 @@ impl Rebalancer {
         &self,
         storage: &mut dyn Storage,
         scope: Scope,
-        label: &str,
     ) -> Result<RebalancingConfig, ContractError> {
         let scope_key = scope.key();
-        match self.configs.may_load(storage, (&scope_key, label))? {
+        match self.configs.may_load(storage, &scope_key)? {
             Some(rebalancing_params) => {
-                let config_for_scope_will_not_be_empty =
-                    self.list_by_scope(storage, &scope)?.len() >= 2;
-
-                ensure!(
-                    config_for_scope_will_not_be_empty,
-                    ContractError::EmptyLimiterNotAllowed { scope }
-                );
-
-                self.configs.remove(storage, (&scope_key, label));
+                self.configs.remove(storage, &scope_key);
                 Ok(rebalancing_params)
             }
-            None => Err(ContractError::ConfigDoesNotExist {
-                scope,
-                label: label.to_string(),
-            }),
+            None => Err(ContractError::ConfigDoesNotExist { scope }),
         }
     }
 
@@ -128,46 +71,35 @@ impl Rebalancer {
         &self,
         storage: &mut dyn Storage,
         scope: Scope,
-        label: &str,
         rebalancing_config: &RebalancingConfig,
     ) -> Result<(), ContractError> {
         // check if it exists, if not, return an error
-        let is_config_exists = self
-            .configs
-            .may_load(storage, (&scope.key(), label))?
-            .is_some();
+        let is_config_exists = self.configs.may_load(storage, &scope.key())?.is_some();
 
         ensure!(
             is_config_exists,
-            ContractError::ConfigDoesNotExist {
-                scope,
-                label: label.to_string()
-            }
+            ContractError::ConfigDoesNotExist { scope }
         );
 
         self.configs
-            .save(storage, (&scope.key(), label), rebalancing_config)
+            .save(storage, &scope.key(), rebalancing_config)
             .map_err(Into::into)
     }
 
-    pub fn list_by_scope(
+    pub fn get_config_by_scope(
         &self,
         storage: &dyn Storage,
         scope: &Scope,
-    ) -> Result<Vec<(String, RebalancingConfig)>, ContractError> {
-        // there is no need to limit, since the number of configs is expected to be small
+    ) -> Result<Option<RebalancingConfig>, ContractError> {
         self.configs
-            .prefix(&scope.key())
-            .range(storage, None, None, cosmwasm_std::Order::Ascending)
-            .collect::<Result<Vec<_>, _>>()
+            .may_load(storage, &scope.key())
             .map_err(Into::into)
     }
 
-    #[allow(clippy::type_complexity)]
     pub fn list_configs(
         &self,
         storage: &dyn Storage,
-    ) -> Result<Vec<((String, String), RebalancingConfig)>, ContractError> {
+    ) -> Result<Vec<(String, RebalancingConfig)>, ContractError> {
         // there is no need to limit, since the number of configs is expected to be small
         self.configs
             .range(storage, None, None, cosmwasm_std::Order::Ascending)
@@ -181,19 +113,20 @@ impl Rebalancer {
         scope_value_pairs: Vec<(Scope, (Decimal, Decimal))>,
     ) -> Result<(), ContractError> {
         for (scope, (prev_value, value)) in scope_value_pairs {
-            let rebalancing_params = self.list_by_scope(storage, &scope)?;
+            let Some(rebalancing_params) = self.get_config_by_scope(storage, &scope)? else {
+                continue;
+            };
+
             let is_not_decreasing = value >= prev_value;
 
-            for (_, rebalancing_params) in rebalancing_params {
-                // Enforce limit only if value is increasing, because if the value is decreasing from the previous value,
-                // for the specific scope, it is a balancing act to move away from the limit.
-                if is_not_decreasing && value > rebalancing_params.limit {
-                    return Err(ContractError::UpperLimitExceeded {
-                        scope: scope.clone(),
-                        upper_limit: rebalancing_params.limit,
-                        value,
-                    });
-                }
+            // Enforce limit only if value is increasing, because if the value is decreasing from the previous value,
+            // for the specific scope, it is a balancing act to move away from the limit.
+            if is_not_decreasing && value > rebalancing_params.limit {
+                return Err(ContractError::UpperLimitExceeded {
+                    scope: scope.clone(),
+                    upper_limit: rebalancing_params.limit,
+                    value,
+                });
             }
         }
 
@@ -220,7 +153,6 @@ mod tests {
                 .add_config(
                     &mut deps.storage,
                     Scope::denom("denoma"),
-                    "static",
                     RebalancingConfig::limit_only(Decimal::percent(10)).unwrap(),
                 )
                 .unwrap();
@@ -228,38 +160,18 @@ mod tests {
             assert_eq!(
                 rebalancer.list_configs(&deps.storage).unwrap(),
                 vec![(
-                    (Scope::denom("denoma").key(), "static".to_string()),
+                    Scope::denom("denoma").key(),
                     RebalancingConfig::limit_only(Decimal::percent(10)).unwrap()
-                ),]
+                )]
             );
 
             // list rebalancing configs by denom
             assert_eq!(
                 rebalancer
-                    .list_by_scope(&deps.storage, &Scope::denom("denoma"))
+                    .get_config_by_scope(&deps.storage, &Scope::denom("denoma"))
                     .unwrap(),
-                vec![(
-                    "static".to_string(),
-                    RebalancingConfig::limit_only(Decimal::percent(10)).unwrap()
-                )]
+                Some(RebalancingConfig::limit_only(Decimal::percent(10)).unwrap())
             );
-        }
-
-        #[test]
-        fn test_add_with_empty_label_fails() {
-            let mut deps = mock_dependencies();
-            let rebalancer = Rebalancer::new("rebalancing_configs");
-
-            let err = rebalancer
-                .add_config(
-                    &mut deps.storage,
-                    Scope::denom("denoma"),
-                    "",
-                    RebalancingConfig::limit_only(Decimal::percent(10)).unwrap(),
-                )
-                .unwrap_err();
-
-            assert_eq!(err, ContractError::EmptyConfigLabel {});
         }
 
         #[test]
@@ -271,7 +183,6 @@ mod tests {
                 .add_config(
                     &mut deps.storage,
                     Scope::denom("denoma"),
-                    "1m",
                     RebalancingConfig::limit_only(Decimal::percent(10)).unwrap(),
                 )
                 .unwrap();
@@ -280,7 +191,6 @@ mod tests {
                 .add_config(
                     &mut deps.storage,
                     Scope::denom("denoma"),
-                    "1m",
                     RebalancingConfig::limit_only(Decimal::percent(10)).unwrap(),
                 )
                 .unwrap_err();
@@ -289,68 +199,6 @@ mod tests {
                 err,
                 ContractError::ConfigAlreadyExists {
                     scope: Scope::denom("denoma"),
-                    label: "1m".to_string()
-                }
-            );
-        }
-
-        #[test]
-        fn test_add_config_exceed_max_config_per_denom() {
-            let mut deps = mock_dependencies();
-            let rebalancer = Rebalancer::new("rebalancer");
-
-            for h in 1..=10u64 {
-                let label = format!("{}h", h);
-                let result = rebalancer.add_config(
-                    &mut deps.storage,
-                    Scope::denom("denoma"),
-                    &label,
-                    RebalancingConfig::limit_only(Decimal::percent(10)).unwrap(),
-                );
-
-                if h <= 10 {
-                    assert!(result.is_ok());
-                } else {
-                    assert_eq!(
-                        result.unwrap_err(),
-                        ContractError::MaxLimiterCountPerDenomExceeded {
-                            scope: Scope::denom("denoma"),
-                            max: MAX_CONFIG_COUNT_PER_DENOM
-                        }
-                    );
-                }
-            }
-
-            // deregister to register should work
-            rebalancer
-                .remove_config(&mut deps.storage, Scope::denom("denoma"), "1h")
-                .unwrap();
-
-            // register static rebalancing config
-            rebalancer
-                .add_config(
-                    &mut deps.storage,
-                    Scope::denom("denoma"),
-                    "static",
-                    RebalancingConfig::limit_only(Decimal::percent(10)).unwrap(),
-                )
-                .unwrap();
-
-            // register another one should fail
-            let err = rebalancer
-                .add_config(
-                    &mut deps.storage,
-                    Scope::denom("denoma"),
-                    "static2",
-                    RebalancingConfig::limit_only(Decimal::percent(9)).unwrap(),
-                )
-                .unwrap_err();
-
-            assert_eq!(
-                err,
-                ContractError::MaxLimiterCountPerDenomExceeded {
-                    scope: Scope::denom("denoma"),
-                    max: MAX_CONFIG_COUNT_PER_DENOM
                 }
             );
         }
@@ -364,7 +212,6 @@ mod tests {
                 .add_config(
                     &mut deps.storage,
                     Scope::denom("denoma"),
-                    "a10",
                     RebalancingConfig::limit_only(Decimal::percent(10)).unwrap(),
                 )
                 .unwrap();
@@ -372,136 +219,28 @@ mod tests {
             assert_eq!(
                 rebalancer.list_configs(&deps.storage).unwrap(),
                 vec![(
-                    (Scope::denom("denoma").key(), "a10".to_string()),
+                    Scope::denom("denoma").key(),
                     RebalancingConfig::limit_only(Decimal::percent(10)).unwrap()
                 )]
             );
 
+            // Remove the config
             rebalancer
-                .add_config(
-                    &mut deps.storage,
-                    Scope::denom("denomb"),
-                    "b10",
-                    RebalancingConfig::limit_only(Decimal::percent(10)).unwrap(),
-                )
+                .remove_config(&mut deps.storage, Scope::denom("denoma"))
                 .unwrap();
 
-            assert_eq!(
-                rebalancer.list_configs(&deps.storage).unwrap(),
-                vec![
-                    (
-                        (Scope::denom("denoma").key(), "a10".to_string()),
-                        RebalancingConfig::limit_only(Decimal::percent(10)).unwrap()
-                    ),
-                    (
-                        (Scope::denom("denomb").key(), "b10".to_string()),
-                        RebalancingConfig::limit_only(Decimal::percent(10)).unwrap()
-                    )
-                ]
-            );
+            // Now it should be gone
+            assert_eq!(rebalancer.list_configs(&deps.storage).unwrap(), vec![]);
 
+            // Removing again should return ConfigDoesNotExist
             let err = rebalancer
-                .remove_config(&mut deps.storage, Scope::denom("denoma"), "nonexistent")
+                .remove_config(&mut deps.storage, Scope::denom("denoma"))
                 .unwrap_err();
-
             assert_eq!(
                 err,
                 ContractError::ConfigDoesNotExist {
                     scope: Scope::denom("denoma"),
-                    label: "nonexistent".to_string(),
                 }
-            );
-
-            // Should fail: cannot remove the last rebalancing config for denoma
-            let err = rebalancer
-                .remove_config(&mut deps.storage, Scope::denom("denoma"), "a10")
-                .unwrap_err();
-            assert_eq!(
-                err,
-                ContractError::EmptyLimiterNotAllowed {
-                    scope: Scope::denom("denoma")
-                }
-            );
-
-            assert_eq!(
-                rebalancer.list_configs(&deps.storage).unwrap(),
-                vec![
-                    (
-                        (Scope::denom("denoma").key(), "a10".to_string()),
-                        RebalancingConfig::limit_only(Decimal::percent(10)).unwrap()
-                    ),
-                    (
-                        (Scope::denom("denomb").key(), "b10".to_string()),
-                        RebalancingConfig::limit_only(Decimal::percent(10)).unwrap()
-                    )
-                ]
-            );
-
-            // Add a second rebalancing config to denoma, now removal is allowed
-            rebalancer
-                .add_config(
-                    &mut deps.storage,
-                    Scope::denom("denoma"),
-                    "a10s",
-                    RebalancingConfig::limit_only(Decimal::percent(10)).unwrap(),
-                )
-                .unwrap();
-
-            rebalancer
-                .remove_config(&mut deps.storage, Scope::denom("denoma"), "a10")
-                .unwrap();
-
-            assert_eq!(
-                rebalancer.list_configs(&deps.storage).unwrap(),
-                vec![
-                    (
-                        (Scope::denom("denoma").key(), "a10s".to_string()),
-                        RebalancingConfig::limit_only(Decimal::percent(10)).unwrap()
-                    ),
-                    (
-                        (Scope::denom("denomb").key(), "b10".to_string()),
-                        RebalancingConfig::limit_only(Decimal::percent(10)).unwrap()
-                    )
-                ]
-            );
-
-            // Should fail: cannot remove the last rebalancing config for denomb
-            let err = rebalancer
-                .remove_config(&mut deps.storage, Scope::denom("denomb"), "b10")
-                .unwrap_err();
-            assert_eq!(
-                err,
-                ContractError::EmptyLimiterNotAllowed {
-                    scope: Scope::denom("denomb")
-                }
-            );
-
-            // Add a second rebalancing config to denomb, now removal is allowed
-            rebalancer
-                .add_config(
-                    &mut deps.storage,
-                    Scope::denom("denomb"),
-                    "b10s",
-                    RebalancingConfig::limit_only(Decimal::percent(10)).unwrap(),
-                )
-                .unwrap();
-
-            rebalancer
-                .remove_config(&mut deps.storage, Scope::denom("denomb"), "b10")
-                .unwrap();
-
-            assert_eq!(
-                rebalancer.list_configs(&deps.storage).unwrap(),
-                vec![
-                    (
-                        (Scope::denom("denoma").key(), "a10s".to_string()),
-                        RebalancingConfig::limit_only(Decimal::percent(10)).unwrap()
-                    ),
-                    (
-                        (Scope::denom("denomb").key(), "b10s".to_string()),
-                        RebalancingConfig::limit_only(Decimal::percent(10)).unwrap()
-                    )
-                ]
             );
         }
 
@@ -515,14 +254,13 @@ mod tests {
                 .add_config(
                     &mut deps.storage,
                     Scope::denom("denoma"),
-                    "1h",
                     RebalancingConfig::limit_only(Decimal::percent(10)).unwrap(),
                 )
                 .unwrap();
 
             // Unchecked deregister one rebalancing config from denoma
             let removed_config = rebalancer
-                .unchecked_remove_config(&mut deps.storage, Scope::denom("denoma"), "1h")
+                .unchecked_remove_config(&mut deps.storage, Scope::denom("denoma"))
                 .unwrap();
 
             // Check that the removed rebalancing config is correct
