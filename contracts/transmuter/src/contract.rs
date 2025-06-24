@@ -1303,9 +1303,6 @@ mod tests {
         assert_eq!(alloyed_token_denom_kv.key, "alloyed_denom");
         let alloyed_denom = alloyed_token_denom_kv.value;
 
-        // set rebalancing configs
-        let config = RebalancingConfig::limit_only(Decimal::percent(30)).unwrap();
-
         // Mark corrupted assets by non-moderator
         let info = message_info(&someone, &[]);
         let mark_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedScopes {
