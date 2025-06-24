@@ -3,7 +3,7 @@ use cosmwasm_std::{
     SignedDecimal256RangeExceeded, StdError,
 };
 
-use crate::rebalancing::{params::RebalancingParamsError, range::Bound};
+use crate::rebalancing::{config::RebalancingConfigError, range::Bound};
 
 #[derive(thiserror::Error, Debug, PartialEq)]
 pub enum TransmuterMathError {
@@ -30,7 +30,7 @@ pub enum TransmuterMathError {
     InvalidRange(Bound, Bound),
 
     #[error("{0}")]
-    AdjustmentParamsError(#[from] RebalancingParamsError),
+    RebalancingConfigError(#[from] RebalancingConfigError),
 
     #[error("{0}")]
     StdError(#[from] StdError),

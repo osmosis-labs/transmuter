@@ -8,7 +8,7 @@ use cosmwasm_std::Decimal;
 use thiserror::Error;
 
 #[cw_serde]
-pub struct RebalancingParams {
+pub struct RebalancingConfig {
     pub ideal_upper: Decimal,
     pub ideal_lower: Decimal,
     pub critical_upper: Decimal,
@@ -19,7 +19,7 @@ pub struct RebalancingParams {
 }
 
 #[derive(Debug, Error, PartialEq)]
-pub enum RebalancingParamsError {
+pub enum RebalancingConfigError {
     #[error("critical range must be within [0, {limit}]")]
     CriticalRangeOutOfBounds { limit: Decimal },
     #[error("ideal range must be within critical range [{critical_start}, {critical_end}]")]
@@ -35,7 +35,7 @@ pub enum RebalancingParamsError {
     InvalidLimit { limit: Decimal },
 }
 
-impl RebalancingParams {
+impl RebalancingConfig {
     pub fn new(
         ideal_upper: Decimal,
         ideal_lower: Decimal,
@@ -44,27 +44,27 @@ impl RebalancingParams {
         limit: Decimal,
         adjustment_rate_strained: Decimal,
         adjustment_rate_critical: Decimal,
-    ) -> Result<Self, RebalancingParamsError> {
+    ) -> Result<Self, RebalancingConfigError> {
         // Validate ranges are properly ordered
         if limit > Decimal::percent(100) {
-            return Err(RebalancingParamsError::InvalidLimit { limit });
+            return Err(RebalancingConfigError::InvalidLimit { limit });
         }
 
         if ideal_upper < ideal_lower {
-            return Err(RebalancingParamsError::InvalidIdealRange);
+            return Err(RebalancingConfigError::InvalidIdealRange);
         }
         if critical_upper < critical_lower {
-            return Err(RebalancingParamsError::InvalidCriticalRange);
+            return Err(RebalancingConfigError::InvalidCriticalRange);
         }
 
         // Validate critical range is within [0, limit]
         if critical_lower < Decimal::zero() || critical_upper > limit {
-            return Err(RebalancingParamsError::CriticalRangeOutOfBounds { limit });
+            return Err(RebalancingConfigError::CriticalRangeOutOfBounds { limit });
         }
 
         // Validate ideal range is within critical range
         if ideal_upper > critical_upper || ideal_lower < critical_lower {
-            return Err(RebalancingParamsError::IdealRangeOutOfBounds {
+            return Err(RebalancingConfigError::IdealRangeOutOfBounds {
                 critical_start: critical_upper,
                 critical_end: critical_lower,
             });
@@ -82,7 +82,7 @@ impl RebalancingParams {
     }
 
     /// Create a rebalancing params with no adjustment rates and ideal range span across the entire limited range.
-    pub fn limit_only(limit: Decimal) -> Result<Self, RebalancingParamsError> {
+    pub fn limit_only(limit: Decimal) -> Result<Self, RebalancingConfigError> {
         Self::new(
             limit,
             Decimal::zero(),
@@ -264,7 +264,7 @@ mod tests {
         #[case] adjustment_rate_critical: Decimal,
         #[case] should_succeed: bool,
     ) {
-        let result = RebalancingParams::new(
+        let result = RebalancingConfig::new(
             ideal_upper,
             ideal_lower,
             critical_upper,
@@ -438,7 +438,7 @@ mod tests {
         #[case] adjustment_rate_critical: Decimal,
         #[case] expected_zones: [Zone; 5],
     ) {
-        let params = RebalancingParams::new(
+        let params = RebalancingConfig::new(
             ideal_upper,
             ideal_lower,
             critical_upper,

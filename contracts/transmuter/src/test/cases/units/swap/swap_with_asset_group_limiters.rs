@@ -1,10 +1,10 @@
 use cosmwasm_std::{coin, Decimal, Uint128};
 use osmosis_test_tube::{Account, Module};
+use transmuter_math::rebalancing::config::RebalancingConfig;
 
 use crate::test::modules::cosmwasm_pool::CosmwasmPool;
 use crate::{
-    asset::AssetConfig, contract::sv::ExecMsg, limiter::LimiterParams, scope::Scope,
-    test::test_env::TestEnvBuilder,
+    asset::AssetConfig, contract::sv::ExecMsg, scope::Scope, test::test_env::TestEnvBuilder,
 };
 use osmosis_std::types::osmosis::poolmanager::v1beta1::{
     MsgSwapExactAmountOut, SwapAmountOutRoute,
@@ -80,12 +80,10 @@ fn test_swap_with_asset_group_limiters() {
 
     t.contract
         .execute(
-            &ExecMsg::RegisterLimiter {
+            &&ExecMsg::AddRebalancingConfig {
                 scope: Scope::asset_group("group1"),
                 label: "static".to_string(),
-                limiter_params: LimiterParams::StaticLimiter {
-                    upper_limit: Decimal::percent(67),
-                },
+                rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(67)).unwrap(),
             },
             &[],
             &t.accounts["admin"],

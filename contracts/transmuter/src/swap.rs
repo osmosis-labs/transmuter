@@ -569,7 +569,7 @@ impl Transmuter {
                     updated_asset_group_weights,
                 )?;
 
-                self.limiters
+                self.rebalancer
                     .check_limits(deps.storage, scope_value_pairs)?;
             }
         }
@@ -602,8 +602,10 @@ impl Transmuter {
         for corrupted in pool.clone().corrupted_assets() {
             if corrupted.amount().is_zero() {
                 pool.remove_asset(corrupted.denom())?;
-                self.limiters
-                    .uncheck_deregister_all_for_scope(storage, Scope::denom(corrupted.denom()))?;
+                self.rebalancer.uncheck_remove_all_configs_for_scope(
+                    storage,
+                    Scope::denom(corrupted.denom()),
+                )?;
             }
         }
 
@@ -622,8 +624,10 @@ impl Transmuter {
                 // remove asset group is removed
                 // remove limiters for asset group as well
                 if pool.asset_groups.get(&label).is_none() {
-                    self.limiters
-                        .uncheck_deregister_all_for_scope(storage, Scope::asset_group(&label))?;
+                    self.rebalancer.uncheck_remove_all_configs_for_scope(
+                        storage,
+                        Scope::asset_group(&label),
+                    )?;
                 }
             }
         }
@@ -764,17 +768,15 @@ pub enum BurnTarget {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        asset::Asset, corruptable::Corruptable, limiter::LimiterParams, transmuter_pool::AssetGroup,
-    };
-
     use super::*;
+    use crate::{asset::Asset, corruptable::Corruptable, transmuter_pool::AssetGroup};
     use cosmwasm_std::{
         coin,
         testing::{mock_dependencies, mock_env, MOCK_CONTRACT_ADDR},
     };
     use itertools::Itertools;
     use rstest::rstest;
+    use transmuter_math::rebalancing::config::RebalancingConfig;
 
     #[rstest]
     #[case("denom1", "denom2", Ok(SwapVariant::TokenToToken))]
@@ -1250,14 +1252,12 @@ mod tests {
 
         for denom in all_denoms.clone() {
             transmuter
-                .limiters
-                .register(
+                .rebalancer
+                .add_config(
                     &mut deps.storage,
                     Scope::denom(denom.as_str()),
                     "static",
-                    LimiterParams::StaticLimiter {
-                        upper_limit: Decimal::percent(100),
-                    },
+                    RebalancingConfig::limit_only(Decimal::percent(100)).unwrap(),
                 )
                 .unwrap();
         }
@@ -1287,7 +1287,7 @@ mod tests {
                 // limiters should be removed
                 assert!(
                     transmuter
-                        .limiters
+                        .rebalancer
                         .list_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
                         .unwrap()
                         .is_empty(),
@@ -1304,7 +1304,7 @@ mod tests {
                 // limiters should be removed
                 assert!(
                     !transmuter
-                        .limiters
+                        .rebalancer
                         .list_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
                         .unwrap()
                         .is_empty(),
@@ -1351,14 +1351,12 @@ mod tests {
 
         for denom in all_denoms.clone() {
             transmuter
-                .limiters
-                .register(
+                .rebalancer
+                .add_config(
                     &mut deps.storage,
                     Scope::denom(denom.as_str()),
                     "static",
-                    LimiterParams::StaticLimiter {
-                        upper_limit: Decimal::percent(100),
-                    },
+                    RebalancingConfig::limit_only(Decimal::percent(100)).unwrap(),
                 )
                 .unwrap();
         }
@@ -1385,8 +1383,8 @@ mod tests {
         assert_eq!(denoms, vec!["denom2", "denom3"]);
 
         let limiter_denoms = transmuter
-            .limiters
-            .list_limiters(&deps.storage)
+            .rebalancer
+            .list_configs(&deps.storage)
             .unwrap()
             .into_iter()
             .map(|((denom, _), _)| denom)
@@ -1435,14 +1433,12 @@ mod tests {
 
         for denom in all_denoms.clone() {
             transmuter
-                .limiters
-                .register(
+                .rebalancer
+                .add_config(
                     &mut deps.storage,
                     Scope::denom(denom.as_str()),
                     "static",
-                    LimiterParams::StaticLimiter {
-                        upper_limit: Decimal::percent(100),
-                    },
+                    RebalancingConfig::limit_only(Decimal::percent(100)).unwrap(),
                 )
                 .unwrap();
         }
@@ -1469,8 +1465,8 @@ mod tests {
         assert_eq!(denoms, vec!["denom2", "denom3"]);
 
         let limiter_denoms = transmuter
-            .limiters
-            .list_limiters(&deps.storage)
+            .rebalancer
+            .list_configs(&deps.storage)
             .unwrap()
             .into_iter()
             .map(|((denom, _), _)| denom)
@@ -1801,14 +1797,12 @@ mod tests {
 
         // Register limiters for group1
         transmuter
-            .limiters
-            .register(
+            .rebalancer
+            .add_config(
                 &mut deps.storage,
                 Scope::asset_group("group1"),
                 "1w",
-                LimiterParams::StaticLimiter {
-                    upper_limit: Decimal::percent(60),
-                },
+                RebalancingConfig::limit_only(Decimal::percent(60)).unwrap(),
             )
             .unwrap();
 
@@ -1841,7 +1835,7 @@ mod tests {
         assert_eq!(pool, expected_pool);
 
         // Check that the limiter for group1 is still registered
-        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
+        let limiters = transmuter.rebalancer.list_configs(&deps.storage).unwrap();
         assert_eq!(limiters.len(), 1);
 
         // Save the updated pool
@@ -1862,7 +1856,7 @@ mod tests {
         assert_eq!(pool, expected_pool);
 
         // Check that the limiter for group1 is removed
-        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
+        let limiters = transmuter.rebalancer.list_configs(&deps.storage).unwrap();
         assert_eq!(limiters.len(), 0);
     }
 
@@ -1888,14 +1882,12 @@ mod tests {
 
         // Register a limiter for the group
         transmuter
-            .limiters
-            .register(
+            .rebalancer
+            .add_config(
                 &mut deps.storage,
                 Scope::asset_group("group1"),
                 "limiter1",
-                LimiterParams::StaticLimiter {
-                    upper_limit: Decimal::one(),
-                },
+                RebalancingConfig::limit_only(Decimal::one()).unwrap(),
             )
             .unwrap();
 
@@ -1924,9 +1916,9 @@ mod tests {
         };
         assert_eq!(pool, expected_pool);
 
-        // Check that the limiter for group1 is still registered
-        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
-        assert_eq!(limiters.len(), 1);
+        // Check that the rebalancing config for group1 is still registered
+        let configs = transmuter.rebalancer.list_configs(&deps.storage).unwrap();
+        assert_eq!(configs.len(), 1);
 
         // Save the updated pool
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
@@ -1952,8 +1944,8 @@ mod tests {
         };
         assert_eq!(pool, expected_pool);
 
-        // Check that the limiter for group1 is still registered
-        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
-        assert_eq!(limiters.len(), 1);
+        // Check that the rebalancing config for group1 is still registered
+        let configs = transmuter.rebalancer.list_configs(&deps.storage).unwrap();
+        assert_eq!(configs.len(), 1);
     }
 }
