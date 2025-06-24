@@ -153,6 +153,9 @@ pub enum ContractError {
     #[error("Modifying wrong limiter type: expected: {expected}, actual: {actual}")]
     WrongLimiterType { expected: String, actual: String },
 
+    #[error("Rebalancing params error: {0}")]
+    RebalancingParamsError(#[from] transmuter_math::rebalancing::params::RebalancingParamsError),
+
     #[error("Normalization factor must be positive")]
     NormalizationFactorMustBePositive {},
 

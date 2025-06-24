@@ -2,6 +2,8 @@ use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{ensure, Decimal, Storage, Uint64};
 use cw_storage_plus::Map;
 
+use transmuter_math::rebalancing::params::RebalancingParams;
+
 use crate::{scope::Scope, ContractError};
 
 /// Maximum number of limiters allowed per denom.
@@ -9,69 +11,20 @@ use crate::{scope::Scope, ContractError};
 /// causing high gas usage when checking the limit, cleaning up divisions, etc.
 const MAX_LIMITER_COUNT_PER_DENOM: Uint64 = Uint64::new(10u64);
 
-/// Limiter that determines limit by upper bound of the value.
-#[cw_serde]
-pub struct StaticLimiter {
-    /// Upper limit of the value
-    upper_limit: Decimal,
-}
-
-impl StaticLimiter {
-    pub fn new(upper_limit: Decimal) -> Result<Self, ContractError> {
-        Self { upper_limit }.ensure_upper_limit_constraint()
-    }
-
-    fn ensure_upper_limit_constraint(self) -> Result<Self, ContractError> {
-        ensure!(
-            self.upper_limit > Decimal::zero(),
-            ContractError::ZeroUpperLimit {}
-        );
-
-        ensure!(
-            self.upper_limit <= Decimal::percent(100),
-            ContractError::ExceedHundredPercentUpperLimit {}
-        );
-
-        Ok(self)
-    }
-
-    fn ensure_upper_limit(self, scope: &Scope, value: Decimal) -> Result<Self, ContractError> {
-        ensure!(
-            value <= self.upper_limit,
-            ContractError::UpperLimitExceeded {
-                scope: scope.clone(),
-                upper_limit: self.upper_limit,
-                value,
-            }
-        );
-
-        Ok(self)
-    }
-
-    fn set_upper_limit(self, upper_limit: Decimal) -> Result<Self, ContractError> {
-        Self { upper_limit }.ensure_upper_limit_constraint()
-    }
-}
-
-#[cw_serde]
-pub enum Limiter {
-    StaticLimiter(StaticLimiter),
-}
-
 #[cw_serde]
 pub enum LimiterParams {
     StaticLimiter { upper_limit: Decimal },
 }
 
-pub struct Limiters {
+pub struct RebalancingConfig {
     /// Map of (scope, label) -> Limiter
-    limiters: Map<(&'static str, &'static str), Limiter>,
+    config: Map<(&'static str, &'static str), RebalancingParams>,
 }
 
-impl Limiters {
-    pub const fn new(limiters_namespace: &'static str) -> Self {
+impl RebalancingConfig {
+    pub const fn new(rebalancing_config_namespace: &'static str) -> Self {
         Self {
-            limiters: Map::new(limiters_namespace),
+            config: Map::new(rebalancing_config_namespace),
         }
     }
 
@@ -82,15 +35,15 @@ impl Limiters {
         label: &str,
         limiter_params: LimiterParams,
     ) -> Result<(), ContractError> {
-        let is_registering_limiter_exists = self
-            .limiters
+        let is_registering_entry_exists = self
+            .config
             .may_load(storage, (&scope.key(), label))?
             .is_some();
 
         ensure!(!label.is_empty(), ContractError::EmptyLimiterLabel {});
 
         ensure!(
-            !is_registering_limiter_exists,
+            !is_registering_entry_exists,
             ContractError::LimiterAlreadyExists {
                 scope,
                 label: label.to_string()
@@ -99,12 +52,12 @@ impl Limiters {
 
         let limiter = match limiter_params {
             LimiterParams::StaticLimiter { upper_limit } => {
-                Limiter::StaticLimiter(StaticLimiter::new(upper_limit)?)
+                RebalancingParams::limit_only(upper_limit)?
             }
         };
 
         // ensure limiters for the denom has not yet reached the maximum
-        let limiter_count_for_denom = self.list_limiters_by_scope(storage, &scope)?.len() as u64;
+        let limiter_count_for_denom = self.list_by_scope(storage, &scope)?.len() as u64;
         ensure!(
             limiter_count_for_denom < MAX_LIMITER_COUNT_PER_DENOM.u64(),
             ContractError::MaxLimiterCountPerDenomExceeded {
@@ -113,7 +66,7 @@ impl Limiters {
             }
         );
 
-        self.limiters
+        self.config
             .save(storage, (&scope.key(), label), &limiter)
             .map_err(Into::into)
     }
@@ -125,10 +78,10 @@ impl Limiters {
         storage: &mut dyn Storage,
         scope: Scope,
     ) -> Result<(), ContractError> {
-        let limiters = self.list_limiters_by_scope(storage, &scope)?;
+        let limiters = self.list_by_scope(storage, &scope)?;
 
         for (label, _) in limiters {
-            self.limiters.remove(storage, (&scope.key(), &label));
+            self.config.remove(storage, (&scope.key(), &label));
         }
 
         Ok(())
@@ -141,12 +94,12 @@ impl Limiters {
         storage: &mut dyn Storage,
         scope: Scope,
         label: &str,
-    ) -> Result<Limiter, ContractError> {
+    ) -> Result<RebalancingParams, ContractError> {
         let scope_key = scope.key();
-        match self.limiters.may_load(storage, (&scope_key, label))? {
-            Some(limiter) => {
-                self.limiters.remove(storage, (&scope_key, label));
-                Ok(limiter)
+        match self.config.may_load(storage, (&scope_key, label))? {
+            Some(rebalancing_params) => {
+                self.config.remove(storage, (&scope_key, label));
+                Ok(rebalancing_params)
             }
             None => Err(ContractError::LimiterDoesNotExist {
                 scope,
@@ -160,20 +113,20 @@ impl Limiters {
         storage: &mut dyn Storage,
         scope: Scope,
         label: &str,
-    ) -> Result<Limiter, ContractError> {
+    ) -> Result<RebalancingParams, ContractError> {
         let scope_key = scope.key();
-        match self.limiters.may_load(storage, (&scope_key, label))? {
-            Some(limiter) => {
+        match self.config.may_load(storage, (&scope_key, label))? {
+            Some(rebalancing_params) => {
                 let limiter_for_scope_will_not_be_empty =
-                    self.list_limiters_by_scope(storage, &scope)?.len() >= 2;
+                    self.list_by_scope(storage, &scope)?.len() >= 2;
 
                 ensure!(
                     limiter_for_scope_will_not_be_empty,
                     ContractError::EmptyLimiterNotAllowed { scope }
                 );
 
-                self.limiters.remove(storage, (&scope_key, label));
-                Ok(limiter)
+                self.config.remove(storage, (&scope_key, label));
+                Ok(rebalancing_params)
             }
             None => Err(ContractError::LimiterDoesNotExist {
                 scope,
@@ -182,41 +135,43 @@ impl Limiters {
         }
     }
 
-    /// Set upper limit for a [`StaticLimiter`] only, otherwise it will fail.
-    pub fn set_static_limiter_upper_limit(
+    // TODO: make this an update of the whole thing instead of just the limit
+    pub fn set_limit(
         &self,
         storage: &mut dyn Storage,
         scope: Scope,
         label: &str,
-        upper_limit: Decimal,
+        limit: Decimal,
     ) -> Result<(), ContractError> {
-        self.limiters.update(
+        dbg!(self.config.update(
             storage,
             (&scope.key(), label),
-            |limiter: Option<Limiter>| -> Result<Limiter, ContractError> {
-                let limiter = limiter.ok_or(ContractError::LimiterDoesNotExist {
+            |rebalancing_params: Option<RebalancingParams>| -> Result<RebalancingParams, ContractError> {
+                let rebalancing_params = rebalancing_params.ok_or(ContractError::LimiterDoesNotExist {
                     scope,
                     label: label.to_string(),
                 })?;
 
-                // check if the limiter is a StaticLimiter
-                match limiter {
-                    Limiter::StaticLimiter(limiter) => Ok(Limiter::StaticLimiter(
-                        limiter.set_upper_limit(upper_limit)?,
-                    )),
-                }
+                Ok(RebalancingParams {
+                    ideal_upper: rebalancing_params.ideal_upper.min(limit),
+                    ideal_lower: rebalancing_params.ideal_lower.min(limit),
+                    critical_upper: rebalancing_params.critical_upper.min(limit),
+                    critical_lower: rebalancing_params.critical_lower.min(limit),
+                    limit,
+                    ..rebalancing_params
+                })
             },
-        )?;
+        )?);
         Ok(())
     }
 
-    pub fn list_limiters_by_scope(
+    pub fn list_by_scope(
         &self,
         storage: &dyn Storage,
         scope: &Scope,
-    ) -> Result<Vec<(String, Limiter)>, ContractError> {
+    ) -> Result<Vec<(String, RebalancingParams)>, ContractError> {
         // there is no need to limit, since the number of limiters is expected to be small
-        self.limiters
+        self.config
             .prefix(&scope.key())
             .range(storage, None, None, cosmwasm_std::Order::Ascending)
             .collect::<Result<Vec<_>, _>>()
@@ -227,39 +182,33 @@ impl Limiters {
     pub fn list_limiters(
         &self,
         storage: &dyn Storage,
-    ) -> Result<Vec<((String, String), Limiter)>, ContractError> {
+    ) -> Result<Vec<((String, String), RebalancingParams)>, ContractError> {
         // there is no need to limit, since the number of limiters is expected to be small
-        self.limiters
+        self.config
             .range(storage, None, None, cosmwasm_std::Order::Ascending)
             .collect::<Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
 
-    pub fn check_limits_and_update(
+    pub fn check_limits(
         &self,
         storage: &mut dyn Storage,
         scope_value_pairs: Vec<(Scope, (Decimal, Decimal))>,
     ) -> Result<(), ContractError> {
         for (scope, (prev_value, value)) in scope_value_pairs {
-            let limiters = self.list_limiters_by_scope(storage, &scope)?;
+            let rebalancing_params = self.list_by_scope(storage, &scope)?;
             let is_not_decreasing = value >= prev_value;
 
-            for (label, limiter) in limiters {
+            for (_, rebalancing_params) in rebalancing_params {
                 // Enforce limiter only if value is increasing, because if the value is decreasing from the previous value,
                 // for the specific scope, it is a balancing act to move away from the limit.
-                let limiter = match limiter {
-                    Limiter::StaticLimiter(limiter) => Limiter::StaticLimiter({
-                        if is_not_decreasing {
-                            limiter.ensure_upper_limit(&scope, value)?
-                        } else {
-                            limiter
-                        }
-                    }),
-                };
-
-                // save updated limiter
-                self.limiters
-                    .save(storage, (&scope.key(), &label), &limiter)?;
+                if is_not_decreasing && value > rebalancing_params.limit {
+                    return Err(ContractError::UpperLimitExceeded {
+                        scope: scope.clone(),
+                        upper_limit: rebalancing_params.limit,
+                        value,
+                    });
+                }
             }
         }
 
@@ -279,7 +228,7 @@ mod tests {
         #[test]
         fn test_register_limiter_works() {
             let mut deps = mock_dependencies();
-            let limiter = Limiters::new("limiters");
+            let limiter = RebalancingConfig::new("limiters");
 
             // register static limiter
             limiter
@@ -297,22 +246,18 @@ mod tests {
                 limiter.list_limiters(&deps.storage).unwrap(),
                 vec![(
                     (Scope::denom("denoma").key(), "static".to_string()),
-                    Limiter::StaticLimiter(StaticLimiter {
-                        upper_limit: Decimal::percent(10)
-                    })
+                    RebalancingParams::limit_only(Decimal::percent(10)).unwrap()
                 ),]
             );
 
             // list limiters by denom
             assert_eq!(
                 limiter
-                    .list_limiters_by_scope(&deps.storage, &Scope::denom("denoma"))
+                    .list_by_scope(&deps.storage, &Scope::denom("denoma"))
                     .unwrap(),
                 vec![(
                     "static".to_string(),
-                    Limiter::StaticLimiter(StaticLimiter {
-                        upper_limit: Decimal::percent(10)
-                    })
+                    RebalancingParams::limit_only(Decimal::percent(10)).unwrap()
                 )]
             );
         }
@@ -320,7 +265,7 @@ mod tests {
         #[test]
         fn test_register_with_empty_label_fails() {
             let mut deps = mock_dependencies();
-            let limiter = Limiters::new("limiters");
+            let limiter = RebalancingConfig::new("limiters");
 
             let err = limiter
                 .register(
@@ -339,7 +284,7 @@ mod tests {
         #[test]
         fn test_register_same_key_fail() {
             let mut deps = mock_dependencies();
-            let limiter = Limiters::new("limiters");
+            let limiter = RebalancingConfig::new("limiters");
 
             limiter
                 .register(
@@ -375,7 +320,7 @@ mod tests {
         #[test]
         fn test_register_limiter_exceed_max_limiter_per_denom() {
             let mut deps = mock_dependencies();
-            let limiter = Limiters::new("limiters");
+            let limiter = RebalancingConfig::new("limiters");
 
             for h in 1..=10u64 {
                 let label = format!("{}h", h);
@@ -442,7 +387,7 @@ mod tests {
         #[test]
         fn test_deregister() {
             let mut deps = mock_dependencies();
-            let limiter = Limiters::new("limiters");
+            let limiter = RebalancingConfig::new("limiters");
 
             limiter
                 .register(
@@ -459,9 +404,7 @@ mod tests {
                 limiter.list_limiters(&deps.storage).unwrap(),
                 vec![(
                     (Scope::denom("denoma").key(), "a10".to_string()),
-                    Limiter::StaticLimiter(StaticLimiter {
-                        upper_limit: Decimal::percent(10),
-                    })
+                    RebalancingParams::limit_only(Decimal::percent(10)).unwrap()
                 )]
             );
 
@@ -481,15 +424,11 @@ mod tests {
                 vec![
                     (
                         (Scope::denom("denoma").key(), "a10".to_string()),
-                        Limiter::StaticLimiter(StaticLimiter {
-                            upper_limit: Decimal::percent(10),
-                        })
+                        RebalancingParams::limit_only(Decimal::percent(10)).unwrap()
                     ),
                     (
                         (Scope::denom("denomb").key(), "b10".to_string()),
-                        Limiter::StaticLimiter(StaticLimiter {
-                            upper_limit: Decimal::percent(10),
-                        })
+                        RebalancingParams::limit_only(Decimal::percent(10)).unwrap()
                     )
                 ]
             );
@@ -522,15 +461,11 @@ mod tests {
                 vec![
                     (
                         (Scope::denom("denoma").key(), "a10".to_string()),
-                        Limiter::StaticLimiter(StaticLimiter {
-                            upper_limit: Decimal::percent(10),
-                        })
+                        RebalancingParams::limit_only(Decimal::percent(10)).unwrap()
                     ),
                     (
                         (Scope::denom("denomb").key(), "b10".to_string()),
-                        Limiter::StaticLimiter(StaticLimiter {
-                            upper_limit: Decimal::percent(10),
-                        })
+                        RebalancingParams::limit_only(Decimal::percent(10)).unwrap()
                     )
                 ]
             );
@@ -556,15 +491,11 @@ mod tests {
                 vec![
                     (
                         (Scope::denom("denoma").key(), "a10s".to_string()),
-                        Limiter::StaticLimiter(StaticLimiter {
-                            upper_limit: Decimal::percent(10),
-                        })
+                        RebalancingParams::limit_only(Decimal::percent(10)).unwrap()
                     ),
                     (
                         (Scope::denom("denomb").key(), "b10".to_string()),
-                        Limiter::StaticLimiter(StaticLimiter {
-                            upper_limit: Decimal::percent(10),
-                        })
+                        RebalancingParams::limit_only(Decimal::percent(10)).unwrap()
                     )
                 ]
             );
@@ -601,15 +532,11 @@ mod tests {
                 vec![
                     (
                         (Scope::denom("denoma").key(), "a10s".to_string()),
-                        Limiter::StaticLimiter(StaticLimiter {
-                            upper_limit: Decimal::percent(10),
-                        })
+                        RebalancingParams::limit_only(Decimal::percent(10)).unwrap()
                     ),
                     (
                         (Scope::denom("denomb").key(), "b10s".to_string()),
-                        Limiter::StaticLimiter(StaticLimiter {
-                            upper_limit: Decimal::percent(10),
-                        })
+                        RebalancingParams::limit_only(Decimal::percent(10)).unwrap()
                     )
                 ]
             );
@@ -618,7 +545,7 @@ mod tests {
         #[test]
         fn test_unchecked_deregister() {
             let mut deps = mock_dependencies();
-            let limiter = Limiters::new("limiters");
+            let limiter = RebalancingConfig::new("limiters");
 
             // Register two limiters for denoma and one for denomb
             limiter
@@ -640,50 +567,11 @@ mod tests {
             // Check that the removed limiter is correct
             assert_eq!(
                 removed_limiter,
-                Limiter::StaticLimiter(StaticLimiter {
-                    upper_limit: Decimal::percent(10),
-                })
+                RebalancingParams::limit_only(Decimal::percent(10)).unwrap()
             );
 
             // Check that the remaining limiters are correct
             assert_eq!(limiter.list_limiters(&deps.storage).unwrap(), vec![]);
-        }
-    }
-
-    mod pararm_validation {
-        use super::*;
-
-        #[test]
-        fn static_limiter_validation() {
-            // upper limit is zero
-            assert_eq!(
-                StaticLimiter::new(Decimal::zero()).unwrap_err(),
-                ContractError::ZeroUpperLimit {}
-            );
-
-            // set upper limit to zero
-            assert_eq!(
-                StaticLimiter::new(Decimal::percent(10))
-                    .unwrap()
-                    .set_upper_limit(Decimal::zero())
-                    .unwrap_err(),
-                ContractError::ZeroUpperLimit {}
-            );
-
-            // upper limit is 100% + Decimal::raw(1)
-            assert_eq!(
-                StaticLimiter::new(Decimal::percent(100) + Decimal::raw(1u128)).unwrap_err(),
-                ContractError::ExceedHundredPercentUpperLimit {}
-            );
-
-            // set upper limit to 100% + Decimal::raw(1)
-            assert_eq!(
-                StaticLimiter::new(Decimal::percent(10))
-                    .unwrap()
-                    .set_upper_limit(Decimal::percent(100) + Decimal::raw(1u128))
-                    .unwrap_err(),
-                ContractError::ExceedHundredPercentUpperLimit {}
-            );
         }
     }
 }

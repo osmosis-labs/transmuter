@@ -6,7 +6,7 @@ use crate::{
     asset::{Asset, AssetConfig},
     ensure_admin_authority, ensure_moderator_authority,
     error::{non_empty_input_required, nonpayable, ContractError},
-    limiter::{Limiter, LimiterParams, Limiters},
+    limiter::{LimiterParams, RebalancingConfig},
     math::{self, rescale},
     role::Role,
     swap::{BurnTarget, Entrypoint, SwapFromAlloyedConstraint, SwapToAlloyedConstraint, SWAP_FEE},
@@ -25,6 +25,7 @@ use osmosis_std::types::{
 };
 
 use sylvia::{contract, ctx};
+use transmuter_math::rebalancing::params::RebalancingParams;
 
 /// version info for migration
 pub const CONTRACT_NAME: &str = "crates.io:transmuter";
@@ -40,7 +41,7 @@ pub struct Transmuter {
     pub(crate) pool: Item<TransmuterPool>,
     pub(crate) alloyed_asset: AlloyedAsset,
     pub(crate) role: Role,
-    pub(crate) limiters: Limiters,
+    pub(crate) limiters: RebalancingConfig,
 }
 
 pub mod key {
@@ -66,7 +67,7 @@ impl Transmuter {
                 key::ALLOYED_ASSET_NORMALIZATION_FACTOR,
             ),
             role: Role::new(key::ADMIN, key::MODERATOR),
-            limiters: Limiters::new(key::LIMITERS),
+            limiters: RebalancingConfig::new(key::LIMITERS),
         }
     }
 
@@ -272,7 +273,7 @@ impl Transmuter {
         // remove all limiters for asset group
         let limiters = self
             .limiters
-            .list_limiters_by_scope(deps.storage, &Scope::AssetGroup(label.clone()))?;
+            .list_by_scope(deps.storage, &Scope::AssetGroup(label.clone()))?;
 
         for (limiter_label, _) in limiters {
             self.limiters.unchecked_deregister(
@@ -458,7 +459,11 @@ impl Transmuter {
 
         // set upper limit
         self.limiters
-            .set_static_limiter_upper_limit(deps.storage, scope, &label, upper_limit)?;
+            .set_limit(deps.storage, scope, &label, upper_limit)?;
+
+        // list limiters for debugging
+        let limiters = self.limiters.list_limiters(deps.storage)?;
+        dbg!(&limiters);
 
         Ok(Response::new().add_attributes(attrs))
     }
@@ -599,10 +604,10 @@ impl Transmuter {
     fn list_limiters(
         &self,
         ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
-    ) -> Result<ListLimitersResponse, ContractError> {
+    ) -> Result<ListRebalancingParamsResponse, ContractError> {
         let limiters = self.limiters.list_limiters(deps.storage)?;
 
-        Ok(ListLimitersResponse { limiters })
+        Ok(ListRebalancingParamsResponse { limiters })
     }
 
     #[sv::msg(query)]
@@ -891,8 +896,8 @@ pub struct ListAssetConfigsResponse {
 }
 
 #[cw_serde]
-pub struct ListLimitersResponse {
-    pub limiters: Vec<((String, String), Limiter)>,
+pub struct ListRebalancingParamsResponse {
+    pub limiters: Vec<((String, String), RebalancingParams)>,
 }
 
 #[cw_serde]
@@ -970,7 +975,6 @@ mod tests {
 
     use super::sv::*;
     use super::*;
-    use crate::limiter::StaticLimiter;
     use crate::sudo::SudoMsg;
     use crate::*;
 
@@ -1645,7 +1649,7 @@ mod tests {
         assert_eq!(
             Transmuter::new()
                 .limiters
-                .list_limiters_by_scope(&deps.storage, &Scope::denom("wbtc"))
+                .list_by_scope(&deps.storage, &Scope::denom("wbtc"))
                 .unwrap(),
             vec![]
         );
@@ -1742,7 +1746,7 @@ mod tests {
         assert_eq!(
             Transmuter::new()
                 .limiters
-                .list_limiters_by_scope(&deps.storage, &Scope::denom("tbtc"))
+                .list_by_scope(&deps.storage, &Scope::denom("tbtc"))
                 .unwrap()
                 .len(),
             1
@@ -2495,13 +2499,13 @@ mod tests {
         // Query the list of limiters
         let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
         let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListLimitersResponse = from_json(res).unwrap();
+        let limiters: ListRebalancingParamsResponse = from_json(res).unwrap();
 
         assert_eq!(
             limiters.limiters,
             vec![(
                 (Scope::denom("uosmo").key(), String::from("static")),
-                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
+                RebalancingParams::limit_only(Decimal::percent(60)).unwrap()
             )]
         );
 
@@ -2533,18 +2537,18 @@ mod tests {
         // Query the list of limiters
         let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
         let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListLimitersResponse = from_json(res).unwrap();
+        let limiters: ListRebalancingParamsResponse = from_json(res).unwrap();
 
         assert_eq!(
             limiters.limiters,
             vec![
                 (
                     (Scope::denom("uosmo").key(), String::from("static")),
-                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
+                    RebalancingParams::limit_only(Decimal::percent(60)).unwrap()
                 ),
                 (
                     (Scope::denom("uosmo").key(), String::from("static2")),
-                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(70)).unwrap())
+                    RebalancingParams::limit_only(Decimal::percent(70)).unwrap()
                 )
             ]
         );
@@ -2586,13 +2590,13 @@ mod tests {
         // Query the list of limiters
         let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
         let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListLimitersResponse = from_json(res).unwrap();
+        let limiters: ListRebalancingParamsResponse = from_json(res).unwrap();
 
         assert_eq!(
             limiters.limiters,
             vec![(
                 (Scope::denom("uosmo").key(), String::from("static2")),
-                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(70)).unwrap())
+                RebalancingParams::limit_only(Decimal::percent(70)).unwrap()
             )]
         );
 
@@ -2614,13 +2618,13 @@ mod tests {
         // Query the list of limiters
         let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
         let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListLimitersResponse = from_json(res).unwrap();
+        let limiters: ListRebalancingParamsResponse = from_json(res).unwrap();
 
         assert_eq!(
             limiters.limiters,
             vec![(
                 (Scope::denom("uosmo").key(), String::from("static2")),
-                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(70)).unwrap())
+                RebalancingParams::limit_only(Decimal::percent(70)).unwrap()
             )]
         );
 
@@ -2670,13 +2674,13 @@ mod tests {
         // Query the list of limiters
         let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
         let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListLimitersResponse = from_json(res).unwrap();
+        let limiters: ListRebalancingParamsResponse = from_json(res).unwrap();
 
         assert_eq!(
             limiters.limiters,
             vec![(
                 (Scope::denom("uosmo").key(), String::from("static2")),
-                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(50)).unwrap())
+                RebalancingParams::limit_only(Decimal::percent(50)).unwrap()
             )]
         );
     }
@@ -4072,7 +4076,7 @@ mod tests {
 
         // Verify limiter was registered
         let list_limiters_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
-        let list_limiters_res: ListLimitersResponse =
+        let list_limiters_res: ListRebalancingParamsResponse =
             from_json(query(deps.as_ref(), env.clone(), list_limiters_msg).unwrap()).unwrap();
 
         assert_eq!(
@@ -4082,7 +4086,7 @@ mod tests {
                     Scope::asset_group("group2").to_string(),
                     "limiter1".to_string()
                 ),
-                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
+                RebalancingParams::limit_only(Decimal::percent(60)).unwrap()
             )]
         );
 
@@ -4171,7 +4175,7 @@ mod tests {
 
         // Test that limiter1 is removed along with the asset group
         let list_limiters_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
-        let list_limiters_res: ListLimitersResponse =
+        let list_limiters_res: ListRebalancingParamsResponse =
             from_json(query(deps.as_ref(), env.clone(), list_limiters_msg).unwrap()).unwrap();
 
         // Check that limiter1 is not in the list of limiters

@@ -570,7 +570,7 @@ impl Transmuter {
                 )?;
 
                 self.limiters
-                    .check_limits_and_update(deps.storage, scope_value_pairs)?;
+                    .check_limits(deps.storage, scope_value_pairs)?;
             }
         }
 
@@ -1288,7 +1288,7 @@ mod tests {
                 assert!(
                     transmuter
                         .limiters
-                        .list_limiters_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
+                        .list_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
                         .unwrap()
                         .is_empty(),
                     "must not contain limiter for {} since it's corrupted and drained",
@@ -1305,7 +1305,7 @@ mod tests {
                 assert!(
                     !transmuter
                         .limiters
-                        .list_limiters_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
+                        .list_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
                         .unwrap()
                         .is_empty(),
                     "must contain limiter for {} since it's not corrupted or not drained",
