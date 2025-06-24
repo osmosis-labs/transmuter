@@ -117,10 +117,10 @@ pub enum ContractError {
     #[error("Admin transferring state is inoperable for the requested operation")]
     InoperableAdminTransferringState {},
 
-    #[error("Limiter count for {scope} exceed maximum per denom: {max}")]
+    #[error("Rebalancing config count for {scope} exceed maximum per denom: {max}")]
     MaxLimiterCountPerDenomExceeded { scope: Scope, max: Uint64 },
 
-    #[error("Denom: {scope} cannot have an empty limiter after it has been registered")]
+    #[error("Denom: {scope} cannot have an empty rebalancing config after it has been registered")]
     EmptyLimiterNotAllowed { scope: Scope },
 
     #[error("Rebalancing config label must not be empty")]
