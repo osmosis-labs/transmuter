@@ -1,15 +1,10 @@
-use std::collections::BTreeMap;
-
 use cosmwasm_schema::cw_serde;
-
 use cosmwasm_std::{ensure_eq, DepsMut, Response, Storage};
 use cw2::{ContractVersion, VersionError, CONTRACT};
-use cw_storage_plus::Item;
 
 use crate::{
-    asset::Asset,
-    contract::{key, CONTRACT_NAME, CONTRACT_VERSION},
-    transmuter_pool::TransmuterPool,
+    contract::{CONTRACT_NAME, CONTRACT_VERSION},
+    migrations::transmuter_pool::add_asset_groups_to_transmuter_pool,
     ContractError,
 };
 
@@ -18,12 +13,6 @@ const TO_VERSION: &str = "4.0.0";
 
 #[cw_serde]
 pub struct MigrateMsg {}
-
-#[cw_serde]
-pub struct TransmuterPoolV3 {
-    pub pool_assets: Vec<Asset>,
-    // [to-be-added] pub asset_groups: BTreeMap<String, AssetGroup>,
-}
 
 pub fn execute_migration(deps: DepsMut) -> Result<Response, ContractError> {
     // Assert that the stored contract version matches the expected version before migration
@@ -39,15 +28,7 @@ pub fn execute_migration(deps: DepsMut) -> Result<Response, ContractError> {
         }
     );
 
-    // add asset groups to the pool
-    let pool_v3: TransmuterPoolV3 = Item::<TransmuterPoolV3>::new(key::POOL).load(deps.storage)?;
-
-    let pool_v4 = TransmuterPool {
-        pool_assets: pool_v3.pool_assets,
-        asset_groups: BTreeMap::new(),
-    };
-
-    Item::<TransmuterPool>::new(key::POOL).save(deps.storage, &pool_v4)?;
+    add_asset_groups_to_transmuter_pool(deps.storage)?;
 
     // Set the contract version to the target version after successful migration
     cw2::set_contract_version(deps.storage, CONTRACT_NAME, TO_VERSION)?;
@@ -88,7 +69,15 @@ fn assert_contract_versions(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use cosmwasm_std::{testing::mock_dependencies, Uint128};
+    use cw_storage_plus::Item;
+
+    use crate::{
+        asset::Asset, contract::key, migrations::transmuter_pool::TransmuterPoolV3,
+        transmuter_pool::TransmuterPool,
+    };
 
     use super::*;
 
