@@ -38,7 +38,7 @@ pub fn migrate_limiters_to_rebalancer(storage: &mut dyn Storage) -> Result<(), C
         let scope = Scope::Denom(denom.to_string());
         let limit = match limiter {
             Limiter::StaticLimiter(limiter) => limiter.upper_limit,
-            _ => Decimal::one(), // Default to 100%
+            _ => continue, // skip change limiters
         };
         let rebalancing_config = RebalancingConfig::limit_only(limit)?;
 

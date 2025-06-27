@@ -35,6 +35,22 @@ pub enum RebalancingConfigError {
     InvalidLimit { limit: Decimal },
 }
 
+impl Default for RebalancingConfig {
+    /// Default to 100% limit, 0-100% ideal range, 0-0% / 100-100% critical range (essentially no critical range), 0% adjustment rates.
+    /// This means no limit or penalty / incentive.
+    fn default() -> Self {
+        Self {
+            ideal_upper: Decimal::one(),
+            ideal_lower: Decimal::zero(),
+            critical_upper: Decimal::one(),
+            critical_lower: Decimal::zero(),
+            limit: Decimal::one(),
+            adjustment_rate_strained: Decimal::zero(),
+            adjustment_rate_critical: Decimal::zero(),
+        }
+    }
+}
+
 impl RebalancingConfig {
     pub fn new(
         ideal_upper: Decimal,
