@@ -4,7 +4,10 @@ use cw2::{ContractVersion, VersionError, CONTRACT};
 
 use crate::{
     contract::{CONTRACT_NAME, CONTRACT_VERSION},
-    migrations::transmuter_pool::add_asset_groups_to_transmuter_pool,
+    migrations::{
+        rebalancer::migrate_limiters_to_rebalancer,
+        transmuter_pool::add_asset_groups_to_transmuter_pool,
+    },
     ContractError,
 };
 
@@ -29,6 +32,7 @@ pub fn execute_migration(deps: DepsMut) -> Result<Response, ContractError> {
     );
 
     add_asset_groups_to_transmuter_pool(deps.storage)?;
+    migrate_limiters_to_rebalancer(deps.storage)?;
 
     // Set the contract version to the target version after successful migration
     cw2::set_contract_version(deps.storage, CONTRACT_NAME, TO_VERSION)?;
@@ -69,13 +73,17 @@ fn assert_contract_versions(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, ops::Deref};
 
-    use cosmwasm_std::{testing::mock_dependencies, Uint128};
-    use cw_storage_plus::Item;
+    use cosmwasm_std::{testing::mock_dependencies, Decimal, Order, Uint128};
+    use cw_storage_plus::{Item, Map, Path};
+    use transmuter_math::rebalancing::config::RebalancingConfig;
 
     use crate::{
-        asset::Asset, contract::key, migrations::transmuter_pool::TransmuterPoolV3,
+        asset::Asset,
+        contract::key,
+        migrations::{rebalancer::Limiter, transmuter_pool::TransmuterPoolV3},
+        rebalancer::Rebalancer,
         transmuter_pool::TransmuterPool,
     };
 
@@ -99,6 +107,36 @@ mod tests {
             .save(&mut deps.storage, &pool_v3)
             .unwrap();
 
+        let kvs = vec![
+            (
+                [b"denom1".as_slice(), b"static1".as_slice()],
+                "{\"static_limiter\":{\"upper_limit\":\"0.5\"}}",
+            ),
+            (
+                [b"denom2".as_slice(), b"static1".as_slice()],
+                "{\"static_limiter\":{\"upper_limit\":\"0.4\"}}",
+            ),
+            (
+                [b"denom2".as_slice(), b"static2".as_slice()],
+                "{\"static_limiter\":{\"upper_limit\":\"0.2\"}}",
+            ),
+            (
+                [b"denom2".as_slice(), b"static3".as_slice()],
+                "{\"static_limiter\":{\"upper_limit\":\"0.3\"}}",
+            ),
+            (
+                [b"denom1".as_slice(), b"dynamic1".as_slice()],
+                "{\"change_limiter\":{\"whatever\":\"doesnt matter\"}}",
+            ),
+        ];
+
+        for (k, v) in kvs {
+            deps.storage.set(
+                Path::<Limiter>::new("limiters".as_bytes(), &k).deref(),
+                v.as_bytes(),
+            );
+        }
+
         let res = execute_migration(deps.as_mut()).unwrap();
 
         let pool = Item::<TransmuterPool>::new(key::POOL)
@@ -111,6 +149,31 @@ mod tests {
                 pool_assets,
                 asset_groups: BTreeMap::new() // migrgate with empty asset groups
             }
+        );
+
+        let rebalancer = Rebalancer::new(key::REBALANCER);
+
+        assert_eq!(
+            rebalancer.list_configs(&deps.storage).unwrap(),
+            vec![
+                (
+                    "denom::denom1".to_string(),
+                    RebalancingConfig::limit_only(Decimal::percent(50)).unwrap()
+                ),
+                (
+                    "denom::denom2".to_string(),
+                    RebalancingConfig::limit_only(Decimal::percent(20)).unwrap()
+                ),
+            ]
+        );
+
+        // assert that the limiters map is empty
+        let limiters = Map::<(&str, &str), Limiter>::new("limiters");
+        assert_eq!(
+            limiters
+                .range(&deps.storage, None, None, Order::Ascending)
+                .next(),
+            None
         );
 
         assert_eq!(
