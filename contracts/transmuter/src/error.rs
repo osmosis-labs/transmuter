@@ -1,5 +1,5 @@
 use cosmwasm_std::{
-    CheckedFromRatioError, CheckedMultiplyRatioError, Coin, ConversionOverflowError, Decimal,
+    Addr, CheckedFromRatioError, CheckedMultiplyRatioError, Coin, ConversionOverflowError, Decimal,
     DecimalRangeExceeded, DivideByZeroError, OverflowError, StdError, Uint128, Uint64,
 };
 use thiserror::Error;
@@ -167,6 +167,20 @@ pub enum ContractError {
 
     #[error("Asset group label must not be empty")]
     EmptyAssetGroupLabel {},
+
+    #[error("Insufficient incentive pool balance for {denom}: available {available}, requested {requested}")]
+    InsufficientIncentivePool {
+        denom: String,
+        available: Uint128,
+        requested: Uint128,
+    },
+
+    #[error("Insufficient incentive credit for user {user}: available {available}, requested {requested}")]
+    InsufficientIncentiveCredit {
+        user: Addr,
+        available: Uint128,
+        requested: Uint128,
+    },
 
     #[error("{0}")]
     OverflowError(#[from] OverflowError),

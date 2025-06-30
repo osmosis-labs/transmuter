@@ -297,4 +297,6 @@ $$
 
 If it's a corrupted asset group, all underlying assets in the the asset group gets overwritten the same way as above.
 
+Corrupted in the incentive pool also require claiming until it reaches 0 
+
 This will automatically incentivize all action that decrease corrupted assets.
