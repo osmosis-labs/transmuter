@@ -1,4 +1,4 @@
-use crate::{corruptable::Corruptable, scope::Scope};
+use crate::{corruptable::Corruptable, rebalancer::Rebalancer, scope::Scope};
 use std::{collections::BTreeMap, iter};
 
 use crate::{
@@ -6,7 +6,6 @@ use crate::{
     asset::{Asset, AssetConfig},
     ensure_admin_authority, ensure_moderator_authority,
     error::{non_empty_input_required, nonpayable, ContractError},
-    limiter::{Limiter, LimiterParams, Limiters},
     math::{self, rescale},
     role::Role,
     swap::{BurnTarget, Entrypoint, SwapFromAlloyedConstraint, SwapToAlloyedConstraint, SWAP_FEE},
@@ -25,6 +24,7 @@ use osmosis_std::types::{
 };
 
 use sylvia::{contract, ctx};
+use transmuter_math::rebalancing::config::RebalancingConfig;
 
 /// version info for migration
 pub const CONTRACT_NAME: &str = "crates.io:transmuter";
@@ -40,7 +40,7 @@ pub struct Transmuter {
     pub(crate) pool: Item<TransmuterPool>,
     pub(crate) alloyed_asset: AlloyedAsset,
     pub(crate) role: Role,
-    pub(crate) limiters: Limiters,
+    pub(crate) rebalancer: Rebalancer,
 }
 
 pub mod key {
@@ -50,7 +50,7 @@ pub mod key {
     pub const ALLOYED_ASSET_NORMALIZATION_FACTOR: &str = "alloyed_asset_normalization_factor";
     pub const ADMIN: &str = "admin";
     pub const MODERATOR: &str = "moderator";
-    pub const LIMITERS: &str = "limiters";
+    pub const REBALANCER: &str = "rebalancer"; // TODO: migrate data from limiters
 }
 
 #[contract]
@@ -66,7 +66,7 @@ impl Transmuter {
                 key::ALLOYED_ASSET_NORMALIZATION_FACTOR,
             ),
             role: Role::new(key::ADMIN, key::MODERATOR),
-            limiters: Limiters::new(key::LIMITERS),
+            rebalancer: Rebalancer::new(key::REBALANCER),
         }
     }
 
@@ -269,18 +269,9 @@ impl Transmuter {
                 Ok(pool)
             })?;
 
-        // remove all limiters for asset group
-        let limiters = self
-            .limiters
-            .list_limiters_by_scope(deps.storage, &Scope::AssetGroup(label.clone()))?;
-
-        for (limiter_label, _) in limiters {
-            self.limiters.unchecked_deregister(
-                deps.storage,
-                Scope::AssetGroup(label.clone()),
-                &limiter_label,
-            )?;
-        }
+        // remove rebalancing config for asset group
+        self.rebalancer
+            .remove_config(deps.storage, Scope::AssetGroup(label.clone()))?;
 
         Ok(Response::new()
             .add_attribute("method", "remove_asset_group")
@@ -354,16 +345,15 @@ impl Transmuter {
     }
 
     #[sv::msg(exec)]
-    fn register_limiter(
+    fn add_rebalancing_config(
         &self,
         ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         scope: Scope,
-        label: String,
-        limiter_params: LimiterParams,
+        rebalancing_config: RebalancingConfig,
     ) -> Result<Response, ContractError> {
         nonpayable(&info.funds)?;
 
-        // only admin can register limiter
+        // only admin can add rebalancing config
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
         let pool = self.pool.load(deps.storage)?;
@@ -386,79 +376,112 @@ impl Transmuter {
         };
 
         let scope_key = scope.key();
-        let base_attrs = vec![
-            ("method", "register_limiter"),
-            ("label", &label),
-            ("scope", &scope_key),
+        let base_attrs = vec![("method", "add_rebalancing_config"), ("scope", &scope_key)];
+
+        let RebalancingConfig {
+            ideal_upper,
+            ideal_lower,
+            critical_upper,
+            critical_lower,
+            limit,
+            adjustment_rate_strained,
+            adjustment_rate_critical,
+        } = rebalancing_config;
+
+        let rebalancing_config_attrs = vec![
+            (String::from("ideal_upper"), ideal_upper.to_string()),
+            (String::from("ideal_lower"), ideal_lower.to_string()),
+            (String::from("critical_upper"), critical_upper.to_string()),
+            (String::from("critical_lower"), critical_lower.to_string()),
+            (String::from("limit"), limit.to_string()),
+            (
+                String::from("adjustment_rate_strained"),
+                adjustment_rate_strained.to_string(),
+            ),
+            (
+                String::from("adjustment_rate_critical"),
+                adjustment_rate_critical.to_string(),
+            ),
         ];
 
-        let limiter_attrs = match &limiter_params {
-            LimiterParams::StaticLimiter { upper_limit } => vec![
-                (String::from("limiter_type"), String::from("static_limiter")),
-                (String::from("upper_limit"), upper_limit.to_string()),
-            ],
-        };
-
-        // register limiter
-        self.limiters
-            .register(deps.storage, scope, &label, limiter_params)?;
+        self.rebalancer
+            .add_config(deps.storage, scope, rebalancing_config)?;
 
         Ok(Response::new()
             .add_attributes(base_attrs)
-            .add_attributes(limiter_attrs))
+            .add_attributes(rebalancing_config_attrs))
     }
 
     #[sv::msg(exec)]
-    fn deregister_limiter(
+    fn remove_rebalancing_config(
         &self,
         ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         scope: Scope,
-        label: String,
     ) -> Result<Response, ContractError> {
         nonpayable(&info.funds)?;
 
-        // only admin can deregister limiter
+        // only admin can remove rebalancing config
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
         let scope_key = scope.key();
         let attrs = vec![
-            ("method", "deregister_limiter"),
+            ("method", "remove_rebalancing_config"),
             ("scope", &scope_key),
-            ("label", &label),
         ];
 
-        // deregister limiter
-        self.limiters.deregister(deps.storage, scope, &label)?;
+        // remove rebalancing config
+        self.rebalancer.remove_config(deps.storage, scope)?;
 
         Ok(Response::new().add_attributes(attrs))
     }
 
     #[sv::msg(exec)]
-    fn set_static_limiter_upper_limit(
+    fn update_rebalancing_config(
         &self,
         ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
         scope: Scope,
-        label: String,
-        upper_limit: Decimal,
+        rebalancing_config: RebalancingConfig,
     ) -> Result<Response, ContractError> {
         nonpayable(&info.funds)?;
 
-        // only admin can set upper limit
+        // only admin can update rebalancing config
         ensure_admin_authority!(info.sender, self.role.admin, deps.as_ref());
 
-        let upper_limit_string = upper_limit.to_string();
+        let RebalancingConfig {
+            ideal_upper,
+            ideal_lower,
+            critical_upper,
+            critical_lower,
+            limit,
+            adjustment_rate_strained,
+            adjustment_rate_critical,
+        } = rebalancing_config;
         let scope_key = scope.key();
 
-        let attrs = vec![
-            ("method", "set_static_limiter_upper_limit"),
-            ("scope", &scope_key),
-            ("label", &label),
-            ("upper_limit", upper_limit_string.as_str()),
-        ];
+        // update rebalancing config
+        self.rebalancer
+            .update_config(deps.storage, scope, &rebalancing_config)?;
 
-        // set upper limit
-        self.limiters
-            .set_static_limiter_upper_limit(deps.storage, scope, &label, upper_limit)?;
+        let attrs = vec![
+            (
+                String::from("method"),
+                String::from("update_rebalancing_config"),
+            ),
+            (String::from("scope"), scope_key),
+            (String::from("ideal_upper"), ideal_upper.to_string()),
+            (String::from("ideal_lower"), ideal_lower.to_string()),
+            (String::from("critical_upper"), critical_upper.to_string()),
+            (String::from("critical_lower"), critical_lower.to_string()),
+            (String::from("limit"), limit.to_string()),
+            (
+                String::from("adjustment_rate_strained"),
+                adjustment_rate_strained.to_string(),
+            ),
+            (
+                String::from("adjustment_rate_critical"),
+                adjustment_rate_critical.to_string(),
+            ),
+        ];
 
         Ok(Response::new().add_attributes(attrs))
     }
@@ -596,13 +619,15 @@ impl Transmuter {
     }
 
     #[sv::msg(query)]
-    fn list_limiters(
+    fn list_rebalancing_configs(
         &self,
         ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
-    ) -> Result<ListLimitersResponse, ContractError> {
-        let limiters = self.limiters.list_limiters(deps.storage)?;
+    ) -> Result<ListRebalancingConfigResponse, ContractError> {
+        let rebalancing_configs = self.rebalancer.list_configs(deps.storage)?;
 
-        Ok(ListLimitersResponse { limiters })
+        Ok(ListRebalancingConfigResponse {
+            rebalancing_configs,
+        })
     }
 
     #[sv::msg(query)]
@@ -891,8 +916,8 @@ pub struct ListAssetConfigsResponse {
 }
 
 #[cw_serde]
-pub struct ListLimitersResponse {
-    pub limiters: Vec<((String, String), Limiter)>,
+pub struct ListRebalancingConfigResponse {
+    pub rebalancing_configs: Vec<(String, RebalancingConfig)>,
 }
 
 #[cw_serde]
@@ -970,7 +995,6 @@ mod tests {
 
     use super::sv::*;
     use super::*;
-    use crate::limiter::StaticLimiter;
     use crate::sudo::SudoMsg;
     use crate::*;
 
@@ -1103,29 +1127,27 @@ mod tests {
         )
         .unwrap();
 
-        // Register limiter for individual denoms only (not the asset group to avoid conflicts)
-        let static_limiter_params = LimiterParams::StaticLimiter {
-            upper_limit: Decimal::percent(60),
-        };
+        // Add rebalancing config for individual denoms only (not the asset group to avoid conflicts)
+        let config = RebalancingConfig::limit_only(Decimal::percent(60)).unwrap();
 
         let info = message_info(&admin, &[]);
         for denom in ["uosmo", "uion"] {
-            let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                scope: Scope::Denom(denom.to_string()),
-                label: "static_limiter".to_string(),
-                limiter_params: static_limiter_params.clone(),
-            });
+            let add_rebalancing_config_msg =
+                ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
+                    scope: Scope::Denom(denom.to_string()),
+                    rebalancing_config: config.clone(),
+                });
 
             execute(
                 deps.as_mut(),
                 env.clone(),
                 info.clone(),
-                register_limiter_msg,
+                add_rebalancing_config_msg,
             )
             .unwrap();
         }
 
-        // join pool a bit more to test the limiters (small amounts to stay within limits)
+        // join pool a bit more to test the limit (small amounts to stay within limits)
         let someone = deps.api.addr_make("someone");
         let info = message_info(&someone, &[coin(100, "uosmo"), coin(100, "uion")]);
         let join_pool_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
@@ -1262,11 +1284,6 @@ mod tests {
         assert_eq!(alloyed_token_denom_kv.key, "alloyed_denom");
         let alloyed_denom = alloyed_token_denom_kv.value;
 
-        // set limiters
-        let static_limiter_params = LimiterParams::StaticLimiter {
-            upper_limit: Decimal::percent(30),
-        };
-
         // Mark corrupted assets by non-moderator
         let info = message_info(&someone, &[]);
         let mark_corrupted_assets_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedScopes {
@@ -1331,19 +1348,22 @@ mod tests {
 
         execute(deps.as_mut(), env.clone(), info.clone(), join_pool_msg).unwrap();
 
+        // set rebalancing configs
+        let config = RebalancingConfig::limit_only(Decimal::percent(30)).unwrap();
+
         let info = message_info(&admin, &[]);
-        // set limiters
+        // set rebalancing configs
         for denom in ["wbtc", "tbtc", "nbtc", "stbtc"] {
-            let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                scope: Scope::Denom(denom.to_string()),
-                label: "static_limiter".to_string(),
-                limiter_params: static_limiter_params.clone(),
-            });
+            let add_rebalancing_config_msg =
+                ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
+                    scope: Scope::Denom(denom.to_string()),
+                    rebalancing_config: config.clone(),
+                });
             execute(
                 deps.as_mut(),
                 env.clone(),
                 info.clone(),
-                register_limiter_msg,
+                add_rebalancing_config_msg,
             )
             .unwrap();
         }
@@ -1362,7 +1382,6 @@ mod tests {
         )
         .unwrap();
 
-        // exit pool a bit to make sure the limiters are dirty
         deps.querier
             .bank
             .update_balance(&someone, vec![coin(1_000, alloyed_denom.clone())]);
@@ -1426,7 +1445,6 @@ mod tests {
             ]
         );
 
-        // warm up the limiters
         deps.querier
             .bank
             .update_balance(&someone, vec![coin(4, alloyed_denom.clone())]);
@@ -1644,10 +1662,10 @@ mod tests {
 
         assert_eq!(
             Transmuter::new()
-                .limiters
-                .list_limiters_by_scope(&deps.storage, &Scope::denom("wbtc"))
+                .rebalancer
+                .get_config_by_scope(&deps.storage, &Scope::denom("wbtc"))
                 .unwrap(),
-            vec![]
+            None
         );
 
         // try unmark nbtc should fail
@@ -1738,15 +1756,12 @@ mod tests {
             ]
         );
 
-        // still has all the limiters
-        assert_eq!(
-            Transmuter::new()
-                .limiters
-                .list_limiters_by_scope(&deps.storage, &Scope::denom("tbtc"))
-                .unwrap()
-                .len(),
-            1
-        );
+        // still has all the rebalancing configs
+        assert!(Transmuter::new()
+            .rebalancer
+            .get_config_by_scope(&deps.storage, &Scope::denom("tbtc"))
+            .unwrap()
+            .is_some());
     }
 
     #[test]
@@ -1771,6 +1786,8 @@ mod tests {
 
         // Initialize contract with asset group
         let init_msg = InstantiateMsg {
+            admin: Some(admin.to_string()),
+            moderator: moderator.to_string(),
             pool_asset_configs: vec![
                 AssetConfig::from_denom_str("tbtc"),
                 AssetConfig::from_denom_str("nbtc"),
@@ -1778,8 +1795,6 @@ mod tests {
             ],
             alloyed_asset_subdenom: "btc".to_string(),
             alloyed_asset_normalization_factor: Uint128::one(),
-            admin: Some(admin.to_string()),
-            moderator: moderator.to_string(),
         };
 
         instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap();
@@ -1812,24 +1827,18 @@ mod tests {
 
         // Set static limiter for btc group
         let info = message_info(&admin, &[]);
-        let set_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+        let set_config_msg = ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
             scope: Scope::asset_group("group1"),
-            label: "big_static_limiter".to_string(),
-            limiter_params: LimiterParams::StaticLimiter {
-                upper_limit: Decimal::percent(70),
-            },
+            rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(70)).unwrap(),
         });
-        execute(deps.as_mut(), env.clone(), info.clone(), set_limiter_msg).unwrap();
+        execute(deps.as_mut(), env.clone(), info.clone(), set_config_msg).unwrap();
 
         // set static limiter for stbtc
-        let set_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+        let set_config_msg = ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
             scope: Scope::denom("stbtc"),
-            label: "big_static_limiter".to_string(),
-            limiter_params: LimiterParams::StaticLimiter {
-                upper_limit: Decimal::percent(70),
-            },
+            rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(70)).unwrap(),
         });
-        execute(deps.as_mut(), env.clone(), info.clone(), set_limiter_msg).unwrap();
+        execute(deps.as_mut(), env.clone(), info.clone(), set_config_msg).unwrap();
 
         // Add some liquidity
         let add_liquidity_msg = ContractExecMsg::Transmuter(ExecMsg::JoinPool {});
@@ -1902,16 +1911,13 @@ mod tests {
 
         // Assert that only one limiter remains for stbtc
         let limiters = Transmuter::new()
-            .limiters
-            .list_limiters(&deps.storage)
+            .rebalancer
+            .list_configs(&deps.storage)
             .unwrap()
             .into_iter()
             .map(|(k, _)| k)
             .collect::<Vec<_>>();
-        assert_eq!(
-            limiters,
-            vec![("denom::stbtc".to_string(), "big_static_limiter".to_string())]
-        );
+        assert_eq!(limiters, vec!["denom::stbtc".to_string()]);
     }
 
     fn total_liquidity_of(denom: &str, storage: &dyn Storage) -> Coin {
@@ -2397,7 +2403,7 @@ mod tests {
     }
 
     #[test]
-    fn test_limiter_registration_and_config() {
+    fn test_add_and_update_rebalancing_config() {
         // register limiter
         let mut deps = mock_dependencies();
 
@@ -2433,12 +2439,9 @@ mod tests {
             deps.as_mut(),
             mock_env(),
             message_info(&user, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+            ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
                 scope: Scope::Denom("uosmo".to_string()),
-                label: "static".to_string(),
-                limiter_params: LimiterParams::StaticLimiter {
-                    upper_limit: Decimal::percent(60),
-                },
+                rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(60)).unwrap(),
             }),
         )
         .unwrap_err();
@@ -2450,22 +2453,23 @@ mod tests {
             deps.as_mut(),
             mock_env(),
             message_info(&admin, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+            ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
                 scope: Scope::Denom("uosmo".to_string()),
-                label: "static".to_string(),
-                limiter_params: LimiterParams::StaticLimiter {
-                    upper_limit: Decimal::percent(60),
-                },
+                rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(60)).unwrap(),
             }),
         )
         .unwrap();
 
         let attrs = vec![
-            attr("method", "register_limiter"),
-            attr("label", "static"),
+            attr("method", "add_rebalancing_config"),
             attr("scope", "denom::uosmo"),
-            attr("limiter_type", "static_limiter"),
-            attr("upper_limit", "0.6"),
+            attr("ideal_upper", "0.6"),
+            attr("ideal_lower", "0"),
+            attr("critical_upper", "0.6"),
+            attr("critical_lower", "0"),
+            attr("limit", "0.6"),
+            attr("adjustment_rate_strained", "0"),
+            attr("adjustment_rate_critical", "0"),
         ];
 
         assert_eq!(res.attributes, attrs);
@@ -2475,12 +2479,9 @@ mod tests {
             deps.as_mut(),
             mock_env(),
             message_info(&admin, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
+            ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
                 scope: Scope::Denom("invalid_denom".to_string()),
-                label: "static".to_string(),
-                limiter_params: LimiterParams::StaticLimiter {
-                    upper_limit: Decimal::percent(60),
-                },
+                rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(60)).unwrap(),
             }),
         )
         .unwrap_err();
@@ -2493,190 +2494,73 @@ mod tests {
         );
 
         // Query the list of limiters
-        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListRebalancingConfigs {});
         let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListLimitersResponse = from_json(res).unwrap();
+        let limiters: ListRebalancingConfigResponse = from_json(res).unwrap();
 
         assert_eq!(
-            limiters.limiters,
+            limiters.rebalancing_configs,
             vec![(
-                (Scope::denom("uosmo").key(), String::from("static")),
-                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
+                Scope::denom("uosmo").key(),
+                RebalancingConfig::limit_only(Decimal::percent(60)).unwrap()
             )]
         );
 
-        // register another static limiter with different label
-        let res = execute(
-            deps.as_mut(),
-            mock_env(),
-            message_info(&admin, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-                scope: Scope::Denom("uosmo".to_string()),
-                label: "static2".to_string(),
-                limiter_params: LimiterParams::StaticLimiter {
-                    upper_limit: Decimal::percent(70),
-                },
-            }),
-        )
-        .unwrap();
-
-        let attrs_static2 = vec![
-            attr("method", "register_limiter"),
-            attr("label", "static2"),
-            attr("scope", "denom::uosmo"),
-            attr("limiter_type", "static_limiter"),
-            attr("upper_limit", "0.7"),
-        ];
-
-        assert_eq!(res.attributes, attrs_static2);
-
-        // Query the list of limiters
-        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
-        let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListLimitersResponse = from_json(res).unwrap();
-
-        assert_eq!(
-            limiters.limiters,
-            vec![
-                (
-                    (Scope::denom("uosmo").key(), String::from("static")),
-                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
-                ),
-                (
-                    (Scope::denom("uosmo").key(), String::from("static2")),
-                    Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(70)).unwrap())
-                )
-            ]
-        );
-
-        // deregister limiter by user is unauthorized
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            message_info(&user, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::DeregisterLimiter {
-                scope: Scope::Denom("uosmo".to_string()),
-                label: "static".to_string(),
-            }),
-        )
-        .unwrap_err();
-
-        assert_eq!(err, ContractError::Unauthorized {});
-
-        // deregister limiter by admin should work
-        let res = execute(
-            deps.as_mut(),
-            mock_env(),
-            message_info(&admin, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::DeregisterLimiter {
-                scope: Scope::Denom("uosmo".to_string()),
-                label: "static".to_string(),
-            }),
-        )
-        .unwrap();
-
-        let attrs = vec![
-            attr("method", "deregister_limiter"),
-            attr("scope", "denom::uosmo"),
-            attr("label", "static"),
-        ];
-
-        assert_eq!(res.attributes, attrs);
-
-        // Query the list of limiters
-        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
-        let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListLimitersResponse = from_json(res).unwrap();
-
-        assert_eq!(
-            limiters.limiters,
-            vec![(
-                (Scope::denom("uosmo").key(), String::from("static2")),
-                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(70)).unwrap())
-            )]
-        );
-
-        // set upper limit by user is unauthorized
-        let err = execute(
-            deps.as_mut(),
-            mock_env(),
-            message_info(&user, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::SetStaticLimiterUpperLimit {
-                scope: Scope::Denom("uosmo".to_string()),
-                label: "static2".to_string(),
-                upper_limit: Decimal::percent(50),
-            }),
-        )
-        .unwrap_err();
-
-        assert_eq!(err, ContractError::Unauthorized {});
-
-        // Query the list of limiters
-        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
-        let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListLimitersResponse = from_json(res).unwrap();
-
-        assert_eq!(
-            limiters.limiters,
-            vec![(
-                (Scope::denom("uosmo").key(), String::from("static2")),
-                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(70)).unwrap())
-            )]
-        );
-
-        // set upper limit by admin for non-existent limiter should fail
+        // Try to add another config for the same scope should fail
         let err = execute(
             deps.as_mut(),
             mock_env(),
             message_info(&admin, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::SetStaticLimiterUpperLimit {
+            ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
                 scope: Scope::Denom("uosmo".to_string()),
-                label: "non_existent".to_string(),
-                upper_limit: Decimal::percent(50),
+                rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(70)).unwrap(),
             }),
         )
         .unwrap_err();
 
         assert_eq!(
             err,
-            ContractError::LimiterDoesNotExist {
+            ContractError::ConfigAlreadyExists {
                 scope: Scope::denom("uosmo"),
-                label: "non_existent".to_string()
             }
         );
 
-        // set upper limit by admin for static limiter should work
+        // Update the config
         let res = execute(
             deps.as_mut(),
             mock_env(),
             message_info(&admin, &[]),
-            ContractExecMsg::Transmuter(ExecMsg::SetStaticLimiterUpperLimit {
+            ContractExecMsg::Transmuter(ExecMsg::UpdateRebalancingConfig {
                 scope: Scope::Denom("uosmo".to_string()),
-                label: "static2".to_string(),
-                upper_limit: Decimal::percent(50),
+                rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(50)).unwrap(),
             }),
         )
         .unwrap();
 
         let attrs = vec![
-            attr("method", "set_static_limiter_upper_limit"),
+            attr("method", "update_rebalancing_config"),
             attr("scope", "denom::uosmo"),
-            attr("label", "static2"),
-            attr("upper_limit", "0.5"),
+            attr("ideal_upper", "0.5"),
+            attr("ideal_lower", "0"),
+            attr("critical_upper", "0.5"),
+            attr("critical_lower", "0"),
+            attr("limit", "0.5"),
+            attr("adjustment_rate_strained", "0"),
+            attr("adjustment_rate_critical", "0"),
         ];
 
         assert_eq!(res.attributes, attrs);
 
         // Query the list of limiters
-        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::ListRebalancingConfigs {});
         let res = query(deps.as_ref(), mock_env(), query_msg).unwrap();
-        let limiters: ListLimitersResponse = from_json(res).unwrap();
+        let limiters: ListRebalancingConfigResponse = from_json(res).unwrap();
 
         assert_eq!(
-            limiters.limiters,
+            limiters.rebalancing_configs,
             vec![(
-                (Scope::denom("uosmo").key(), String::from("static2")),
-                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(50)).unwrap())
+                Scope::denom("uosmo").key(),
+                RebalancingConfig::limit_only(Decimal::percent(50)).unwrap()
             )]
         );
     }
@@ -3986,20 +3870,18 @@ mod tests {
         );
 
         // Try setting limiter with non-existent group
-        let register_limiter_msg = ContractExecMsg::Transmuter(ExecMsg::RegisterLimiter {
-            label: "limiter1".to_string(),
-            scope: Scope::asset_group("group2"),
-            limiter_params: LimiterParams::StaticLimiter {
-                upper_limit: Decimal::percent(60),
-            },
-        });
+        let add_rebalancing_config_msg =
+            ContractExecMsg::Transmuter(ExecMsg::AddRebalancingConfig {
+                scope: Scope::asset_group("group2"),
+                rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(60)).unwrap(),
+            });
 
-        let register_limiter_info = message_info(&admin, &[]);
+        let add_rebalancing_config_info = message_info(&admin, &[]);
         let err = execute(
             deps.as_mut(),
             env.clone(),
-            register_limiter_info.clone(),
-            register_limiter_msg.clone(),
+            add_rebalancing_config_info.clone(),
+            add_rebalancing_config_msg.clone(),
         )
         .unwrap_err();
 
@@ -4050,39 +3932,40 @@ mod tests {
             })
         );
 
-        // Try to register limiter for group2
+        // Try to add rebalancing config for group2
         let res3 = execute(
             deps.as_mut(),
             env.clone(),
-            register_limiter_info,
-            register_limiter_msg,
+            add_rebalancing_config_info,
+            add_rebalancing_config_msg,
         )
         .unwrap();
 
         assert_eq!(
             res3.attributes,
             vec![
-                attr("method", "register_limiter"),
-                attr("label", "limiter1"),
+                attr("method", "add_rebalancing_config"),
                 attr("scope", "asset_group::group2"),
-                attr("limiter_type", "static_limiter"),
-                attr("upper_limit", "0.6"),
+                attr("ideal_upper", "0.6"),
+                attr("ideal_lower", "0"),
+                attr("critical_upper", "0.6"),
+                attr("critical_lower", "0"),
+                attr("limit", "0.6"),
+                attr("adjustment_rate_strained", "0"),
+                attr("adjustment_rate_critical", "0"),
             ]
         );
 
         // Verify limiter was registered
-        let list_limiters_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
-        let list_limiters_res: ListLimitersResponse =
+        let list_limiters_msg = ContractQueryMsg::Transmuter(QueryMsg::ListRebalancingConfigs {});
+        let list_limiters_res: ListRebalancingConfigResponse =
             from_json(query(deps.as_ref(), env.clone(), list_limiters_msg).unwrap()).unwrap();
 
         assert_eq!(
-            list_limiters_res.limiters,
+            list_limiters_res.rebalancing_configs,
             vec![(
-                (
-                    Scope::asset_group("group2").to_string(),
-                    "limiter1".to_string()
-                ),
-                Limiter::StaticLimiter(StaticLimiter::new(Decimal::percent(60)).unwrap())
+                Scope::asset_group("group2").to_string(),
+                RebalancingConfig::limit_only(Decimal::percent(60)).unwrap()
             )]
         );
 
@@ -4170,12 +4053,12 @@ mod tests {
         );
 
         // Test that limiter1 is removed along with the asset group
-        let list_limiters_msg = ContractQueryMsg::Transmuter(QueryMsg::ListLimiters {});
-        let list_limiters_res: ListLimitersResponse =
+        let list_limiters_msg = ContractQueryMsg::Transmuter(QueryMsg::ListRebalancingConfigs {});
+        let list_limiters_res: ListRebalancingConfigResponse =
             from_json(query(deps.as_ref(), env.clone(), list_limiters_msg).unwrap()).unwrap();
 
         // Check that limiter1 is not in the list of limiters
-        assert_eq!(list_limiters_res.limiters, vec![]);
+        assert_eq!(list_limiters_res.rebalancing_configs, vec![]);
 
         // Test removing a non-existing asset group
         let remove_nonexistent_group_msg = ContractExecMsg::Transmuter(ExecMsg::RemoveAssetGroup {
