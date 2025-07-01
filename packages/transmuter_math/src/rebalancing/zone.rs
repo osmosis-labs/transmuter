@@ -19,8 +19,9 @@ pub struct Zone {
 
 impl Zone {
     pub fn new(start: Bound, end: Bound, adjustment_rate: Decimal) -> Self {
+        let (start_bound, end_bound) = force_inclusive_if_has_same_value(start, end);
         Self {
-            range: Range::new(inclusive_if_zero(start), inclusive_if_zero(end)).unwrap(),
+            range: Range::new(start_bound, end_bound).unwrap(),
             adjustment_rate,
         }
     }
@@ -56,11 +57,15 @@ impl Zone {
     }
 }
 
-fn inclusive_if_zero(bound: Bound) -> Bound {
-    if bound.value() == Decimal::zero() {
-        Bound::Inclusive(Decimal::zero())
+fn force_inclusive_if_has_same_value(start: Bound, end: Bound) -> (Bound, Bound) {
+    // If both bounds have the same value, make them both inclusive to create a valid single-point range
+    if start.value() == end.value() {
+        (
+            Bound::Inclusive(start.value()),
+            Bound::Inclusive(end.value()),
+        )
     } else {
-        bound
+        (start, end)
     }
 }
 
