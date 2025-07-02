@@ -3,13 +3,15 @@ use std::collections::{BTreeMap, HashSet};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
     coin, ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env,
-    Response, StdError, Storage, Uint128,
+    Int256, Response, StdError, Storage, Uint128,
 };
 use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
 use serde::Serialize;
+use transmuter_math::rebalancing::compute_adjustment_value;
 
 use crate::{
     alloyed_asset::{swap_from_alloyed, swap_to_alloyed},
+    asset::convert_amount,
     contract::Transmuter,
     corruptable::Corruptable,
     scope::Scope,
@@ -128,7 +130,12 @@ impl Transmuter {
 
         (pool, _) = self.rebalancer_pass(deps.branch(), pool, |_, mut pool| {
             pool.join_pool(&tokens_in)?;
-            Ok((pool, ()))
+            // TODO: add fee deduction here
+            Ok((pool, (), |output, total_adjustment_value| {
+                let fee = coin(0, "");
+                let incentive = Uint128::zero();
+                Ok((output, fee, incentive))
+            }))
         })?;
 
         // no need for cleaning up drained corrupted assets here
@@ -300,7 +307,12 @@ impl Transmuter {
         } else {
             (pool, _) = self.rebalancer_pass(deps.branch(), pool, |_, mut pool| {
                 pool.exit_pool(&tokens_out)?;
-                Ok((pool, ()))
+                // TODO: add fee deduction here
+                Ok((pool, (), |output, total_adjustment_value| {
+                    let fee = coin(0, "");
+                    let incentive = Uint128::zero();
+                    Ok((output, fee, incentive))
+                }))
             })?;
         }
 
@@ -341,19 +353,61 @@ impl Transmuter {
 
         let (mut pool, actual_token_out) =
             self.rebalancer_pass(deps.branch(), pool, |deps, pool| {
-                let (pool, actual_token_out) =
+                let (pool, token_out) =
                     self.out_amt_given_in(deps, pool, token_in, token_out_denom)?;
 
-                // ensure token_out amount is greater than or equal to token_out_min_amount
-                ensure!(
-                    actual_token_out.amount >= token_out_min_amount,
-                    ContractError::InsufficientTokenOut {
-                        min_required: token_out_min_amount,
-                        amount_out: actual_token_out.amount
-                    }
-                );
+                let std_norm_factor = pool.std_norm_factor()?;
+                let token_out_norm_factor = pool
+                    .get_pool_asset_by_denom(token_out_denom)?
+                    .normalization_factor();
 
-                Ok((pool, actual_token_out))
+                let rebalancing_adjustment =
+                    move |token_out: Coin, total_adjustment_value: Int256| {
+                        if total_adjustment_value.is_negative() {
+                            // deduct fee from token_out
+                            let fee_amount = convert_amount(
+                                total_adjustment_value.abs().try_into()?,
+                                std_norm_factor,
+                                token_out_norm_factor,
+                                // rounding up means slightly more fee than required, keeps the incentive pool healthy
+                                &crate::asset::Rounding::Up,
+                            )?;
+                            let token_out_amount: Uint128 =
+                                token_out.amount.checked_sub(fee_amount)?;
+                            let token_out = coin(token_out_amount.u128(), token_out.denom.clone());
+
+                            // ensure token_out amount is greater than or equal to token_out_min_amount
+                            ensure!(
+                                token_out_amount >= token_out_min_amount,
+                                ContractError::InsufficientTokenOut {
+                                    min_required: token_out_min_amount,
+                                    amount_out: token_out_amount,
+                                }
+                            );
+
+                            let fee = coin(fee_amount.u128(), token_out.denom.clone());
+                            let incentive = Uint128::zero();
+
+                            Ok((token_out, fee, incentive))
+                        } else {
+                            // ensure token_out amount is greater than or equal to token_out_min_amount
+                            // this has no deduction of fee, as it's only incentivized or just neutral here
+                            ensure!(
+                                token_out.amount >= token_out_min_amount,
+                                ContractError::InsufficientTokenOut {
+                                    min_required: token_out_min_amount,
+                                    amount_out: token_out.amount,
+                                }
+                            );
+
+                            // TODO: add incentive here
+                            let fee = coin(0, token_out.denom.clone());
+                            let incentive = Uint128::zero();
+                            Ok((token_out, fee, incentive))
+                        }
+                    };
+
+                Ok((pool, token_out, rebalancing_adjustment))
             })?;
 
         self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
@@ -387,22 +441,69 @@ impl Transmuter {
 
         let (mut pool, actual_token_in) =
             self.rebalancer_pass(deps.branch(), pool, |deps, pool| {
-                let (pool, actual_token_in) = self.in_amt_given_out(
+                let (pool, token_in) = self.in_amt_given_out(
                     deps,
                     pool,
                     token_out.clone(),
                     token_in_denom.to_string(),
                 )?;
 
-                ensure!(
-                    actual_token_in.amount <= token_in_max_amount,
-                    ContractError::ExcessiveRequiredTokenIn {
-                        limit: token_in_max_amount,
-                        required: actual_token_in.amount,
-                    }
-                );
+                let std_norm_factor = pool.std_norm_factor()?;
+                let token_in_norm_factor = pool
+                    .get_pool_asset_by_denom(&token_in_denom)?
+                    .normalization_factor();
 
-                Ok((pool, actual_token_in))
+                let rebalancing_adjustment =
+                    move |token_in: Coin, total_adjustment_value: Int256| {
+                        // If adjustment value is negative, fee take from the token_in, so we require addtional token_in
+                        // to pay for the fee.
+                        // Otherwise, return the token_in as is
+                        if total_adjustment_value.is_negative() {
+                            let fee = convert_amount(
+                                total_adjustment_value.abs().try_into()?,
+                                std_norm_factor,
+                                token_in_norm_factor,
+                                // rounding up means slightly more fee than required, keeps the incentive pool healthy
+                                &crate::asset::Rounding::Up,
+                            )?;
+
+                            let token_in_amount = token_in.amount.checked_add(fee)?;
+
+                            ensure!(
+                                token_in_amount <= token_in_max_amount,
+                                ContractError::ExcessiveRequiredTokenIn {
+                                    limit: token_in_max_amount,
+                                    required: token_in_amount,
+                                }
+                            );
+
+                            let fee_coin = coin(fee.u128(), token_in.denom.clone());
+                            let incentive = Uint128::zero();
+
+                            Ok((
+                                coin(token_in_amount.u128(), token_in.denom.clone()),
+                                fee_coin,
+                                incentive,
+                            ))
+                        } else {
+                            // this has no addtional fee required, so we need to ensure that the token_in amount is less than or equal to token_in_max_amount
+                            // without adding any fee to the token_in
+                            ensure!(
+                                token_in.amount <= token_in_max_amount,
+                                ContractError::ExcessiveRequiredTokenIn {
+                                    limit: token_in_max_amount,
+                                    required: token_in.amount,
+                                }
+                            );
+
+                            // TODO: add incentive here
+                            let fee = coin(0, token_in.denom.clone());
+                            let incentive = Uint128::zero();
+                            Ok((token_in, fee, incentive))
+                        }
+                    };
+
+                Ok((pool, token_in, rebalancing_adjustment))
             })?;
 
         self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
@@ -546,21 +647,32 @@ impl Transmuter {
         })
     }
 
-    pub fn rebalancer_pass<T, F>(
+    pub fn rebalancer_pass<RunPoolOutput, RunPool, RebalancingAdjustment>(
         &self,
         deps: DepsMut,
         pool: TransmuterPool,
-        run: F,
-    ) -> Result<(TransmuterPool, T), ContractError>
+        run_pool: RunPool,
+    ) -> Result<(TransmuterPool, RunPoolOutput), ContractError>
     where
-        F: FnOnce(Deps, TransmuterPool) -> Result<(TransmuterPool, T), ContractError>,
+        RunPool:
+            FnOnce(
+                Deps,
+                TransmuterPool,
+            )
+                -> Result<(TransmuterPool, RunPoolOutput, RebalancingAdjustment), ContractError>,
+        RebalancingAdjustment:
+            FnOnce(RunPoolOutput, Int256) -> Result<(RunPoolOutput, Coin, Uint128), ContractError>,
     {
         let prev_asset_weights = pool.asset_weights()?.unwrap_or_default();
         let prev_asset_group_weights = pool.asset_group_weights()?.unwrap_or_default();
 
-        let (pool, payload) = run(deps.as_ref(), pool)?;
+        // TODO: return also a fee deduction function that takes output as input
+        // with that we can delegate responsibility to the caller to select to which token to deduct fee from, embeded that in the closure
+        // output is token_out for exact_in, token_in for exact_out
+        let (pool, output, rebalancing_adjustment) = run_pool(deps.as_ref(), pool)?;
 
-        // check limits only if pool assets are not zero
+        // check limits only if pool assets are not zero, calculate adjustment value
+        let mut total_adjustment_value = Int256::zero();
         if let Some(updated_asset_weights) = pool.asset_weights()? {
             if let Some(updated_asset_group_weights) = pool.asset_group_weights()? {
                 let scope_value_pairs = construct_scope_value_pairs(
@@ -570,12 +682,38 @@ impl Transmuter {
                     updated_asset_group_weights,
                 )?;
 
+                // balance_total is the total normalized amount of the asset in the pool
+                let balance_total = pool
+                    .normalized_asset_values(pool.std_norm_factor()?)?
+                    .into_iter()
+                    .try_fold(Uint128::zero(), |acc, (_, value)| acc.checked_add(value))?;
+
+                for (scope, (prev_weight, updated_weight)) in scope_value_pairs.clone() {
+                    let rebalancing_configs =
+                        self.rebalancer.get_config_by_scope(deps.storage, &scope)?;
+                    if let Some(rebalancing_config) = rebalancing_configs {
+                        total_adjustment_value =
+                            total_adjustment_value.checked_add(compute_adjustment_value(
+                                prev_weight,
+                                updated_weight,
+                                balance_total,
+                                rebalancing_config,
+                            )?)?;
+                    }
+                }
+
                 self.rebalancer
                     .check_limits(deps.storage, scope_value_pairs)?;
             }
         }
 
-        Ok((pool, payload))
+        let (output, fee, incentive) = rebalancing_adjustment(output, total_adjustment_value)?;
+
+        if !fee.amount.is_zero() {
+            self.incentive_pool.add_tokens(deps.storage, &fee)?;
+        }
+
+        Ok((pool, output))
     }
 
     pub fn ensure_valid_swap_fee(&self, swap_fee: Decimal) -> Result<(), ContractError> {
@@ -767,8 +905,11 @@ mod tests {
     use super::*;
     use crate::{asset::Asset, corruptable::Corruptable, transmuter_pool::AssetGroup};
     use cosmwasm_std::{
-        coin,
-        testing::{mock_dependencies, mock_env, MOCK_CONTRACT_ADDR},
+        coin, from_json,
+        testing::{
+            mock_dependencies, mock_env, MockApi, MockQuerier, MockStorage, MOCK_CONTRACT_ADDR,
+        },
+        OwnedDeps,
     };
     use itertools::Itertools;
     use rstest::rstest;
@@ -1950,5 +2091,218 @@ mod tests {
             .get_config_by_scope(&deps.storage, &Scope::asset_group("group1"))
             .unwrap();
         assert!(rebalancing_configs.is_some());
+    }
+
+    fn setup_fee_deduction_test() -> (Addr, OwnedDeps<MockStorage, MockApi, MockQuerier>) {
+        let sender = Addr::unchecked("sender");
+        let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
+            sender.to_string().as_str(),
+            &[coin(2000000000000u128, "alloyed")],
+        )]);
+
+        let transmuter = Transmuter::new();
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_normalization_factor(&mut deps.storage, 100u128.into())
+            .unwrap();
+
+        transmuter
+            .pool
+            .save(
+                &mut deps.storage,
+                &TransmuterPool {
+                    pool_assets: vec![
+                        Asset::new(Uint128::from(100_000_000_000u128), "denom1", 1u128).unwrap(), // normalized = 10_000_000_000_000
+                        Asset::new(Uint128::from(500_000_000_000u128), "denom2", 10u128).unwrap(), // normalized = 5_000_000_000_000
+                        Asset::new(Uint128::from(5_000_000_000_000u128), "denom3", 100u128) // normalized = 5_000_000_000_000
+                            .unwrap(),
+                    ],
+                    asset_groups: BTreeMap::new(),
+                },
+            )
+            .unwrap();
+
+        let mut pool = transmuter.pool.load(&deps.storage).unwrap();
+        pool.create_asset_group(
+            "group1".to_string(),
+            vec!["denom2".to_string(), "denom3".to_string()],
+        )
+        .unwrap();
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        transmuter
+            .rebalancer
+            .add_config(
+                &mut deps.storage,
+                Scope::denom("denom1"),
+                RebalancingConfig::new(
+                    Decimal::percent(50),
+                    Decimal::percent(45),
+                    Decimal::percent(55),
+                    Decimal::percent(30),
+                    Decimal::percent(65),
+                    Decimal::percent(10),
+                    Decimal::percent(20),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        transmuter
+            .rebalancer
+            .add_config(
+                &mut deps.storage,
+                Scope::asset_group("group1"),
+                RebalancingConfig::new(
+                    Decimal::percent(55),
+                    Decimal::percent(45),
+                    Decimal::percent(60),
+                    Decimal::percent(30),
+                    Decimal::percent(65),
+                    Decimal::percent(10),
+                    Decimal::percent(20),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        return (sender, deps);
+    }
+
+    #[test]
+    fn test_swap_non_alloyed_exact_amount_out_with_fee_deduction() {
+        let (sender, mut deps) = setup_fee_deduction_test();
+        let transmuter = Transmuter::new();
+
+        // the swap makes denom1 60%, denom2 40%
+        let token_in_denom = "denom1";
+
+        // fee(group1) = 20_000_000_000_000u128 * 5% * 10% = 100_000_000_000u128 / 100
+        // fee(denom1) = 20_000_000_000_000u128 * (5% * 10% + 5% * 20%) = 300_000_000_000u128 / 100
+        let amount_in_before_fee = Uint128::from(20_000_000_000u128);
+        let fee = Uint128::from(1_000_000_000u128) + Uint128::from(3_000_000_000u128);
+        let token_out = coin(200_000_000_000u128, "denom2");
+        let token_in_amount = amount_in_before_fee + fee;
+
+        let res = transmuter.swap_non_alloyed_exact_amount_out(
+            token_in_denom,
+            token_in_amount - Uint128::from(1u128),
+            token_out.clone(),
+            sender.clone(),
+            deps.as_mut(),
+        );
+
+        assert_eq!(
+            res,
+            Err(ContractError::ExcessiveRequiredTokenIn {
+                limit: token_in_amount - Uint128::from(1u128),
+                required: token_in_amount,
+            })
+        );
+
+        let res = transmuter.swap_non_alloyed_exact_amount_out(
+            token_in_denom,
+            token_in_amount,
+            token_out,
+            sender,
+            deps.as_mut(),
+        );
+
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom1").unwrap().amount(),
+            Uint128::from(100_000_000_000u128) + amount_in_before_fee
+        );
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom2").unwrap().amount(),
+            Uint128::from(500_000_000_000u128) - amount_in_before_fee * Uint128::from(10u128)
+        );
+
+        let incentive_pool_balances = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap();
+
+        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "denom1")]);
+
+        let response = res.unwrap();
+        let data: SwapExactAmountOutResponseData = from_json(&response.data.unwrap()).unwrap();
+        assert_eq!(
+            data,
+            SwapExactAmountOutResponseData {
+                token_in_amount: amount_in_before_fee + fee,
+            }
+        );
+    }
+
+    #[test]
+    fn test_swap_non_alloyed_exact_amount_in_with_fee_deduction() {
+        let (sender, mut deps) = setup_fee_deduction_test();
+        let transmuter = Transmuter::new();
+
+        // the swap makes denom1 60%, denom2 40%
+        // fee(group1) = 20_000_000_000_000u128 * 5% * 10% = 100_000_000_000u128 / 10
+        // fee(denom1) = 20_000_000_000_000u128 * (5% * 10% + 5% * 20%) = 300_000_000_000u128 / 10
+        let amount_out_before_fee = Uint128::from(200_000_000_000u128);
+        let fee = Uint128::from(10_000_000_000u128) + Uint128::from(30_000_000_000u128);
+        let token_in = coin(20_000_000_000u128, "denom1");
+        let token_out_amount = amount_out_before_fee - fee;
+
+        let res = transmuter.swap_non_alloyed_exact_amount_in(
+            token_in.clone(),
+            "denom2",
+            token_out_amount + Uint128::from(1u128),
+            sender.clone(),
+            deps.as_mut(),
+        );
+
+        assert_eq!(
+            res,
+            Err(ContractError::InsufficientTokenOut {
+                min_required: token_out_amount + Uint128::from(1u128),
+                amount_out: token_out_amount,
+            })
+        );
+
+        let res = transmuter.swap_non_alloyed_exact_amount_in(
+            token_in,
+            "denom2",
+            token_out_amount,
+            sender,
+            deps.as_mut(),
+        );
+
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom1").unwrap().amount(),
+            Uint128::from(100_000_000_000u128) + amount_out_before_fee / Uint128::from(10u128)
+        );
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom2").unwrap().amount(),
+            Uint128::from(500_000_000_000u128) - amount_out_before_fee
+        );
+
+        let incentive_pool_balances = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap();
+
+        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "denom2")]);
+
+        let response = res.unwrap();
+        let data: SwapExactAmountInResponseData = from_json(&response.data.unwrap()).unwrap();
+        assert_eq!(
+            data,
+            SwapExactAmountInResponseData {
+                token_out_amount: amount_out_before_fee - fee,
+            }
+        );
     }
 }
