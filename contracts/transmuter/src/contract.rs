@@ -823,6 +823,16 @@ impl Transmuter {
         })
     }
 
+    #[sv::msg(query)]
+    pub fn get_incentive_pool_balances(
+        &self,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
+    ) -> Result<GetIncentivePoolBalancesResponse, ContractError> {
+        let balances = self.incentive_pool.get_all_pool_balances(deps.storage)?;
+
+        Ok(GetIncentivePoolBalancesResponse { balances })
+    }
+
     // --- admin ---
 
     #[sv::msg(exec)]
@@ -985,6 +995,11 @@ pub struct CalcInAmtGivenOutResponse {
 #[cw_serde]
 pub struct GetCorrruptedScopesResponse {
     pub corrupted_scopes: Vec<Scope>,
+}
+
+#[cw_serde]
+pub struct GetIncentivePoolBalancesResponse {
+    pub balances: Vec<Coin>,
 }
 
 #[cw_serde]
