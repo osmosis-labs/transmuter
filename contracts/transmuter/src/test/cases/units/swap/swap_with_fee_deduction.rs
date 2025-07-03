@@ -12,7 +12,7 @@ use crate::test::{modules::cosmwasm_pool::CosmwasmPool, test_env::TestEnv};
 use crate::{
     asset::AssetConfig,
     contract::sv::{ExecMsg, QueryMsg},
-    contract::GetTotalPoolLiquidityResponse,
+    contract::{GetIncentivePoolBalancesResponse, GetTotalPoolLiquidityResponse},
     scope::Scope,
     test::test_env::TestEnvBuilder,
 };
@@ -243,6 +243,21 @@ fn verify_contract_balances(
         .contract
         .query(&QueryMsg::GetTotalPoolLiquidity {})
         .unwrap();
+
+    // Query the incentive pool balances from the contract
+    let incentive_pool_balances: GetIncentivePoolBalancesResponse = t
+        .contract
+        .query(&QueryMsg::GetIncentivePoolBalances {})
+        .unwrap();
+
+    // Verify the incentive pool balances
+    for balance in incentive_pool_balances.balances {
+        if balance.denom == fee_denom {
+            assert_eq!(balance.amount, expected_fee_amount);
+        } else {
+            assert_eq!(balance.amount, Uint128::zero());
+        }
+    }
 
     // For each denom in the pool, verify contract balance
     for pool_coin in &pool_liquidity.total_pool_liquidity {
