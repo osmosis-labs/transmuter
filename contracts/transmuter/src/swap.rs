@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, HashSet},
+};
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
@@ -360,53 +363,48 @@ impl Transmuter {
 
                 let rebalancing_adjustment =
                     move |token_out: Coin, total_adjustment_value: Int256| {
-                        if total_adjustment_value.is_negative() {
-                            // deduct fee from token_out
-                            let fee_amount = convert_amount(
-                                total_adjustment_value.abs().try_into()?,
-                                std_norm_factor,
-                                token_out_norm_factor,
-                                // rounding up means slightly more fee than required, keeps the incentive pool healthy
-                                &crate::asset::Rounding::Up,
-                            )?;
-                            let token_out_amount: Uint128 =
-                                token_out.amount.checked_sub(fee_amount)?;
-                            let token_out = coin(token_out_amount.u128(), token_out.denom.clone());
-                            let token_out_denom = token_out.denom.clone();
+                        let (token_out, adjustment) =
+                            match total_adjustment_value.cmp(&Int256::zero()) {
+                                Ordering::Less => {
+                                    // deduct fee from token_out
+                                    let fee_amount = convert_amount(
+                                        total_adjustment_value.abs().try_into()?,
+                                        std_norm_factor,
+                                        token_out_norm_factor,
+                                        // rounding up means slightly more fee than required, keeps the incentive pool healthy
+                                        &crate::asset::Rounding::Up,
+                                    )?;
+                                    let token_out_amount: Uint128 =
+                                        token_out.amount.checked_sub(fee_amount)?;
+                                    let token_out =
+                                        coin(token_out_amount.u128(), token_out.denom.clone());
+                                    let token_out_denom = token_out.denom.clone();
 
-                            // ensure token_out amount is greater than or equal to token_out_min_amount
-                            ensure!(
-                                token_out_amount >= token_out_min_amount,
-                                ContractError::InsufficientTokenOut {
-                                    min_required: token_out_min_amount,
-                                    amount_out: token_out_amount,
+                                    (
+                                        token_out,
+                                        Adjustment::DeductFee {
+                                            fee: coin(fee_amount.u128(), token_out_denom),
+                                        },
+                                    )
                                 }
-                            );
+                                Ordering::Greater => (
+                                    token_out,
+                                    Adjustment::CreditIncentive {
+                                        incentive: total_adjustment_value.abs().try_into()?,
+                                    },
+                                ),
+                                Ordering::Equal => (token_out, Adjustment::None),
+                            };
 
-                            Ok((
-                                token_out,
-                                Adjustment::DeductFee {
-                                    fee: coin(fee_amount.u128(), token_out_denom),
-                                },
-                            ))
-                        } else {
-                            // ensure token_out amount is greater than or equal to token_out_min_amount
-                            // this has no deduction of fee, as it's only incentivized or just neutral here
-                            ensure!(
-                                token_out.amount >= token_out_min_amount,
-                                ContractError::InsufficientTokenOut {
-                                    min_required: token_out_min_amount,
-                                    amount_out: token_out.amount,
-                                }
-                            );
+                        ensure!(
+                            token_out.amount >= token_out_min_amount,
+                            ContractError::InsufficientTokenOut {
+                                min_required: token_out_min_amount,
+                                amount_out: token_out.amount,
+                            }
+                        );
 
-                            Ok((
-                                token_out,
-                                Adjustment::CreditIncentive {
-                                    incentive: total_adjustment_value.abs().try_into()?,
-                                },
-                            ))
-                        }
+                        Ok((token_out, adjustment))
                     };
 
                 Ok((pool, token_out, rebalancing_adjustment))
@@ -459,49 +457,49 @@ impl Transmuter {
                     move |token_in: Coin, total_adjustment_value: Int256| {
                         // If adjustment value is negative, fee take from the token_in, so we require addtional token_in // to pay for the fee.
                         // Otherwise, return the token_in as is
-                        if total_adjustment_value.is_negative() {
-                            let fee = convert_amount(
-                                total_adjustment_value.abs().try_into()?,
-                                std_norm_factor,
-                                token_in_norm_factor,
-                                // rounding up means slightly more fee than required, keeps the incentive pool healthy
-                                &crate::asset::Rounding::Up,
-                            )?;
+                        let (token_in, adjustment) =
+                            match total_adjustment_value.cmp(&Int256::zero()) {
+                                // negative adjustment value means fee deduction from token_in
+                                Ordering::Less => {
+                                    let fee = convert_amount(
+                                        total_adjustment_value.abs().try_into()?,
+                                        std_norm_factor,
+                                        token_in_norm_factor,
+                                        // rounding up means slightly more fee than required, keeps the incentive pool healthy
+                                        &crate::asset::Rounding::Up,
+                                    )?;
 
-                            let token_in_amount = token_in.amount.checked_add(fee)?;
+                                    let token_in_amount = token_in.amount.checked_add(fee)?;
 
-                            ensure!(
-                                token_in_amount <= token_in_max_amount,
-                                ContractError::ExcessiveRequiredTokenIn {
-                                    limit: token_in_max_amount,
-                                    required: token_in_amount,
+                                    (
+                                        coin(token_in_amount.u128(), token_in.denom.clone()),
+                                        Adjustment::DeductFee {
+                                            fee: coin(fee.u128(), token_in.denom.clone()),
+                                        },
+                                    )
                                 }
-                            );
+                                // positive adjustment value means incentive credit to the beneficiary
+                                Ordering::Greater => (
+                                    token_in,
+                                    Adjustment::CreditIncentive {
+                                        incentive: total_adjustment_value.abs().try_into()?,
+                                    },
+                                ),
+                                // zero adjustment means no adjustment
+                                Ordering::Equal => (token_in, Adjustment::None),
+                            };
 
-                            Ok((
-                                coin(token_in_amount.u128(), token_in.denom.clone()),
-                                Adjustment::DeductFee {
-                                    fee: coin(fee.u128(), token_in.denom.clone()),
-                                },
-                            ))
-                        } else {
-                            // this has no addtional fee required, so we need to ensure that the token_in amount is less than or equal to token_in_max_amount
-                            // without adding any fee to the token_in
-                            ensure!(
-                                token_in.amount <= token_in_max_amount,
-                                ContractError::ExcessiveRequiredTokenIn {
-                                    limit: token_in_max_amount,
-                                    required: token_in.amount,
-                                }
-                            );
+                        let token_in_amount = token_in.amount.clone();
 
-                            Ok((
-                                token_in,
-                                Adjustment::CreditIncentive {
-                                    incentive: total_adjustment_value.abs().try_into()?,
-                                },
-                            ))
-                        }
+                        ensure!(
+                            token_in_amount <= token_in_max_amount,
+                            ContractError::ExcessiveRequiredTokenIn {
+                                limit: token_in_max_amount,
+                                required: token_in_amount,
+                            }
+                        );
+
+                        Ok((token_in, adjustment))
                     };
 
                 Ok((pool, token_in, rebalancing_adjustment))
