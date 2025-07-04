@@ -128,15 +128,14 @@ impl Transmuter {
             ContractError::ZeroValueOperation {}
         );
 
-        (pool, _) = self.rebalancer_pass(deps.branch(), pool, |_, mut pool| {
-            pool.join_pool(&tokens_in)?;
-            // TODO: add fee deduction here
-            Ok((pool, (), |output, total_adjustment_value| {
-                let fee = coin(0, "");
-                let incentive = Uint128::zero();
-                Ok((output, fee, incentive))
-            }))
-        })?;
+        (pool, _) =
+            self.rebalancer_pass(deps.branch(), pool, &mint_to_address, |_, mut pool| {
+                pool.join_pool(&tokens_in)?;
+                // TODO: add fee deduction  / incentive credit here
+                Ok((pool, (), |output, total_adjustment_value| {
+                    Ok((output, Adjustment::None))
+                }))
+            })?;
 
         // no need for cleaning up drained corrupted assets here
         // since this function will only adding more underlying assets
@@ -305,13 +304,11 @@ impl Transmuter {
             // TODO: Do we need to handle incentive here still?
             pool.unchecked_exit_pool(&tokens_out)?;
         } else {
-            (pool, _) = self.rebalancer_pass(deps.branch(), pool, |_, mut pool| {
+            (pool, _) = self.rebalancer_pass(deps.branch(), pool, &sender, |_, mut pool| {
                 pool.exit_pool(&tokens_out)?;
-                // TODO: add fee deduction here
+                // TODO: add fee deduction  / incentive credit here
                 Ok((pool, (), |output, total_adjustment_value| {
-                    let fee = coin(0, "");
-                    let incentive = Uint128::zero();
-                    Ok((output, fee, incentive))
+                    Ok((output, Adjustment::None))
                 }))
             })?;
         }
@@ -352,7 +349,7 @@ impl Transmuter {
         let pool = self.pool.load(deps.storage)?;
 
         let (mut pool, actual_token_out) =
-            self.rebalancer_pass(deps.branch(), pool, |deps, pool| {
+            self.rebalancer_pass(deps.branch(), pool, &sender, |deps, pool| {
                 let (pool, token_out) =
                     self.out_amt_given_in(deps, pool, token_in, token_out_denom)?;
 
@@ -375,6 +372,7 @@ impl Transmuter {
                             let token_out_amount: Uint128 =
                                 token_out.amount.checked_sub(fee_amount)?;
                             let token_out = coin(token_out_amount.u128(), token_out.denom.clone());
+                            let token_out_denom = token_out.denom.clone();
 
                             // ensure token_out amount is greater than or equal to token_out_min_amount
                             ensure!(
@@ -385,10 +383,12 @@ impl Transmuter {
                                 }
                             );
 
-                            let fee = coin(fee_amount.u128(), token_out.denom.clone());
-                            let incentive = Uint128::zero();
-
-                            Ok((token_out, fee, incentive))
+                            Ok((
+                                token_out,
+                                Adjustment::DeductFee {
+                                    fee: coin(fee_amount.u128(), token_out_denom),
+                                },
+                            ))
                         } else {
                             // ensure token_out amount is greater than or equal to token_out_min_amount
                             // this has no deduction of fee, as it's only incentivized or just neutral here
@@ -400,10 +400,12 @@ impl Transmuter {
                                 }
                             );
 
-                            // TODO: add incentive here
-                            let fee = coin(0, token_out.denom.clone());
-                            let incentive = Uint128::zero();
-                            Ok((token_out, fee, incentive))
+                            Ok((
+                                token_out,
+                                Adjustment::CreditIncentive {
+                                    incentive: total_adjustment_value.abs().try_into()?,
+                                },
+                            ))
                         }
                     };
 
@@ -440,7 +442,7 @@ impl Transmuter {
         let pool = self.pool.load(deps.storage)?;
 
         let (mut pool, actual_token_in) =
-            self.rebalancer_pass(deps.branch(), pool, |deps, pool| {
+            self.rebalancer_pass(deps.branch(), pool, &sender, |deps, pool| {
                 let (pool, token_in) = self.in_amt_given_out(
                     deps,
                     pool,
@@ -455,8 +457,7 @@ impl Transmuter {
 
                 let rebalancing_adjustment =
                     move |token_in: Coin, total_adjustment_value: Int256| {
-                        // If adjustment value is negative, fee take from the token_in, so we require addtional token_in
-                        // to pay for the fee.
+                        // If adjustment value is negative, fee take from the token_in, so we require addtional token_in // to pay for the fee.
                         // Otherwise, return the token_in as is
                         if total_adjustment_value.is_negative() {
                             let fee = convert_amount(
@@ -477,13 +478,11 @@ impl Transmuter {
                                 }
                             );
 
-                            let fee_coin = coin(fee.u128(), token_in.denom.clone());
-                            let incentive = Uint128::zero();
-
                             Ok((
                                 coin(token_in_amount.u128(), token_in.denom.clone()),
-                                fee_coin,
-                                incentive,
+                                Adjustment::DeductFee {
+                                    fee: coin(fee.u128(), token_in.denom.clone()),
+                                },
                             ))
                         } else {
                             // this has no addtional fee required, so we need to ensure that the token_in amount is less than or equal to token_in_max_amount
@@ -496,10 +495,12 @@ impl Transmuter {
                                 }
                             );
 
-                            // TODO: add incentive here
-                            let fee = coin(0, token_in.denom.clone());
-                            let incentive = Uint128::zero();
-                            Ok((token_in, fee, incentive))
+                            Ok((
+                                token_in,
+                                Adjustment::CreditIncentive {
+                                    incentive: total_adjustment_value.abs().try_into()?,
+                                },
+                            ))
                         }
                     };
 
@@ -651,6 +652,7 @@ impl Transmuter {
         &self,
         deps: DepsMut,
         pool: TransmuterPool,
+        beneficiary: &Addr,
         run_pool: RunPool,
     ) -> Result<(TransmuterPool, RunPoolOutput), ContractError>
     where
@@ -661,7 +663,7 @@ impl Transmuter {
             )
                 -> Result<(TransmuterPool, RunPoolOutput, RebalancingAdjustment), ContractError>,
         RebalancingAdjustment:
-            FnOnce(RunPoolOutput, Int256) -> Result<(RunPoolOutput, Coin, Uint128), ContractError>,
+            FnOnce(RunPoolOutput, Int256) -> Result<(RunPoolOutput, Adjustment), ContractError>,
     {
         let prev_asset_weights = pool.asset_weights()?.unwrap_or_default();
         let prev_asset_group_weights = pool.asset_group_weights()?.unwrap_or_default();
@@ -707,10 +709,27 @@ impl Transmuter {
             }
         }
 
-        let (output, fee, incentive) = rebalancing_adjustment(output, total_adjustment_value)?;
+        let (output, adjustment) = rebalancing_adjustment(output, total_adjustment_value)?;
 
-        if !fee.amount.is_zero() {
-            self.incentive_pool.add_tokens(deps.storage, &fee)?;
+        match adjustment {
+            Adjustment::DeductFee { fee } => {
+                self.incentive_pool.add_tokens(deps.storage, &fee)?;
+            }
+            Adjustment::CreditIncentive { incentive } => {
+                let pool_denom_factors = pool
+                    .pool_assets
+                    .iter()
+                    .map(|asset| (asset.denom().to_string(), asset.normalization_factor()))
+                    .collect::<BTreeMap<_, _>>();
+
+                self.incentive_pool.credit_incentive(
+                    deps.storage,
+                    &beneficiary,
+                    incentive,
+                    &pool_denom_factors,
+                )?;
+            }
+            Adjustment::None => {}
         }
 
         Ok((pool, output))
@@ -898,6 +917,16 @@ pub enum BurnTarget {
     /// This is used when the sender wants to swap tokens for alloyed assets,
     /// since alloyed asset needs to be sent to the contract before swapping.
     SentFunds,
+}
+
+/// Adjustment to the output amount after swap
+pub enum Adjustment {
+    /// Deduct fee from the output amount
+    DeductFee { fee: Coin },
+    /// Credit incentive to the beneficiary in a normalized amount
+    CreditIncentive { incentive: Uint128 },
+    /// No adjustment
+    None,
 }
 
 #[cfg(test)]
@@ -2239,6 +2268,12 @@ mod tests {
                 token_in_amount: amount_in_before_fee + fee,
             }
         );
+
+        let credits = transmuter
+            .incentive_pool
+            .get_all_incentive_credits(&deps.storage, None, None)
+            .unwrap();
+        assert_eq!(credits, vec![]);
     }
 
     #[test]
@@ -2304,5 +2339,11 @@ mod tests {
                 token_out_amount: amount_out_before_fee - fee,
             }
         );
+
+        let credits = transmuter
+            .incentive_pool
+            .get_all_incentive_credits(&deps.storage, None, None)
+            .unwrap();
+        assert_eq!(credits, vec![]);
     }
 }
