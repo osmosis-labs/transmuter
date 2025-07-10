@@ -6,11 +6,11 @@ use std::{
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
     coin, ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env,
-    Int256, Response, StdError, Storage, Uint128,
+    Int256, Response, SignedDecimal256, StdError, Storage, Uint128,
 };
 use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
 use serde::Serialize;
-use transmuter_math::rebalancing::compute_adjustment_value;
+use transmuter_math::rebalancing::{compute_total_effective_adjustment_rate, round_adjustment};
 
 use crate::{
     alloyed_asset::{swap_from_alloyed, swap_to_alloyed},
@@ -671,8 +671,14 @@ impl Transmuter {
         // output is token_out for exact_in, token_in for exact_out
         let (pool, output, rebalancing_adjustment) = run_pool(deps.as_ref(), pool)?;
 
+        // balance_total is the total normalized amount of the asset in the pool
+        let balance_total = pool
+            .normalized_asset_values(pool.std_norm_factor()?)?
+            .into_iter()
+            .try_fold(Uint128::zero(), |acc, (_, value)| acc.checked_add(value))?;
+
         // check limits only if pool assets are not zero, calculate adjustment value
-        let mut total_adjustment_value = Int256::zero();
+        let mut total_adjustment_rate = SignedDecimal256::zero();
         if let Some(updated_asset_weights) = pool.asset_weights()? {
             if let Some(updated_asset_group_weights) = pool.asset_group_weights()? {
                 let scope_value_pairs = construct_scope_value_pairs(
@@ -682,23 +688,17 @@ impl Transmuter {
                     updated_asset_group_weights,
                 )?;
 
-                // balance_total is the total normalized amount of the asset in the pool
-                let balance_total = pool
-                    .normalized_asset_values(pool.std_norm_factor()?)?
-                    .into_iter()
-                    .try_fold(Uint128::zero(), |acc, (_, value)| acc.checked_add(value))?;
-
                 for (scope, (prev_weight, updated_weight)) in scope_value_pairs.clone() {
                     let rebalancing_configs =
                         self.rebalancer.get_config_by_scope(deps.storage, &scope)?;
                     if let Some(rebalancing_config) = rebalancing_configs {
-                        total_adjustment_value =
-                            total_adjustment_value.checked_add(compute_adjustment_value(
-                                prev_weight,
-                                updated_weight,
-                                balance_total,
-                                rebalancing_config,
-                            )?)?;
+                        let adjustment = compute_total_effective_adjustment_rate(
+                            prev_weight,
+                            updated_weight,
+                            rebalancing_config,
+                        )?;
+
+                        total_adjustment_rate = total_adjustment_rate.checked_add(adjustment)?;
                     }
                 }
 
@@ -707,7 +707,12 @@ impl Transmuter {
             }
         }
 
-        let (output, adjustment) = rebalancing_adjustment(output, total_adjustment_value)?;
+        let total_adjustment_value = total_adjustment_rate.checked_mul(
+            SignedDecimal256::from_atomics(Int256::from(balance_total), 0)?,
+        )?;
+
+        let (output, adjustment) =
+            rebalancing_adjustment(output, round_adjustment(total_adjustment_value)?)?;
 
         match adjustment {
             Adjustment::DeductFee { fee } => {
