@@ -7,7 +7,6 @@ use crate::{
         GetShareDenomResponse, GetSharesResponse, GetTotalPoolLiquidityResponse,
         GetTotalSharesResponse,
     },
-    limiter::LimiterParams,
     scope::Scope,
     test::{
         modules::cosmwasm_pool::CosmwasmPool,
@@ -25,6 +24,7 @@ use osmosis_std::types::{
     },
 };
 use osmosis_test_tube::{Account, Bank, Module, OsmosisTestApp, Runner};
+use transmuter_math::rebalancing::config::RebalancingConfig;
 
 const AXL_USDC: &str = "ibc/AXLETHUSDC";
 const AXL_DAI: &str = "ibc/AXLETHDAI";
@@ -891,12 +891,9 @@ fn test_limiters() {
     // Register a static limiter for AXL_USDC at 60%
     t.contract
         .execute(
-            &ExecMsg::RegisterLimiter {
+            &ExecMsg::AddRebalancingConfig {
                 scope: Scope::Denom(AXL_USDC.to_string()),
-                label: "static".to_string(),
-                limiter_params: LimiterParams::StaticLimiter {
-                    upper_limit: Decimal::percent(60),
-                },
+                rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(60)).unwrap(),
             },
             &[],
             &t.accounts["admin"],
@@ -979,12 +976,9 @@ fn test_register_limiter_after_having_liquidity() {
     // Register a limiter for COSMOS_USDC at 60% after liquidity exists
     t.contract
         .execute(
-            &ExecMsg::RegisterLimiter {
+            &ExecMsg::AddRebalancingConfig {
                 scope: Scope::Denom(COSMOS_USDC.to_string()),
-                label: "static".to_string(),
-                limiter_params: LimiterParams::StaticLimiter {
-                    upper_limit: Decimal::percent(60),
-                },
+                rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(60)).unwrap(),
             },
             &[],
             &t.accounts["admin"],
@@ -1066,12 +1060,9 @@ fn test_limiter_already_exceeded() {
     // Register a limiter for AXL_USDC at 40% (already exceeded since pool has 50% AXL_USDC)
     t.contract
         .execute(
-            &ExecMsg::RegisterLimiter {
+            &ExecMsg::AddRebalancingConfig {
                 scope: Scope::Denom(AXL_USDC.to_string()),
-                label: "static".to_string(),
-                limiter_params: LimiterParams::StaticLimiter {
-                    upper_limit: Decimal::percent(40),
-                },
+                rebalancing_config: RebalancingConfig::limit_only(Decimal::percent(40)).unwrap(),
             },
             &[],
             &t.accounts["admin"],

@@ -1,16 +1,19 @@
+use serde_json::json;
 use std::{collections::BTreeMap, iter, path::PathBuf};
+use transmuter_math::rebalancing::config::RebalancingConfig;
 
 use crate::{
     asset::AssetConfig,
     contract::{
         sv::{InstantiateMsg, QueryMsg},
         GetModeratorResponse, ListAssetConfigsResponse, ListAssetGroupsResponse,
+        ListRebalancingConfigResponse,
     },
     migrations::v4_0_0::MigrateMsg,
     test::{modules::cosmwasm_pool::CosmwasmPool, test_env::TransmuterContract},
 };
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{coin, from_json, to_json_binary, Uint128};
+use cosmwasm_std::{coin, from_json, to_json_binary, Decimal, Uint128};
 use osmosis_std::types::{
     cosmwasm::wasm::v1::{QueryRawContractStateRequest, QueryRawContractStateResponse},
     osmosis::cosmwasmpool::v1beta1::{
@@ -18,7 +21,7 @@ use osmosis_std::types::{
         MsgCreateCosmWasmPool, UploadCosmWasmPoolCodeAndWhiteListProposal,
     },
 };
-use osmosis_test_tube::{Account, GovWithAppAccess, Module, OsmosisTestApp, Runner};
+use osmosis_test_tube::{Account, GovWithAppAccess, Module, OsmosisTestApp, Runner, Wasm};
 use rstest::rstest;
 
 #[cw_serde]
@@ -346,6 +349,47 @@ fn test_migrate_v4_0_0() {
 
     let t = TransmuterContract::new(&app, code_id, pool_id, contract_address.clone());
 
+    let wasm = Wasm::new(&app);
+    wasm.execute(
+        &t.contract_addr,
+        &json!({
+            "register_limiter": {
+                "denom": "denom1",
+                "label": "static1",
+                "limiter_params": {
+                    "static_limiter": {
+                        "upper_limit": "0.2",
+                    }
+                }
+            }
+        }),
+        &[],
+        &signer,
+    )
+    .unwrap();
+
+    wasm.execute(
+        &t.contract_addr,
+        &json!({
+            "register_limiter": {
+                "denom": "denom2",
+                "label": "change",
+                "limiter_params": {
+                    "change_limiter": {
+                        "window_config": {
+                            "window_size": "10",
+                            "division_count": "2",
+                        },
+                        "boundary_offset": "0.1",
+                    }
+                }
+            }
+        }),
+        &[],
+        &signer,
+    )
+    .unwrap();
+
     // --- migrate pool ---
     let migrate_msg = MigrateMsg {};
 
@@ -412,6 +456,19 @@ fn test_migrate_v4_0_0() {
     let ListAssetGroupsResponse { asset_groups } = t.query(&QueryMsg::ListAssetGroups {}).unwrap();
 
     assert_eq!(asset_groups, BTreeMap::new());
+
+    // list rebalancer configs
+    let ListRebalancingConfigResponse {
+        rebalancing_configs,
+    } = t.query(&QueryMsg::ListRebalancingConfigs {}).unwrap();
+
+    assert_eq!(
+        rebalancing_configs,
+        vec![(
+            "denom::denom1".to_string(),
+            RebalancingConfig::limit_only(Decimal::percent(20)).unwrap()
+        ),]
+    );
 }
 
 fn get_prev_version_of_wasm_byte_code(version: &str) -> Vec<u8> {

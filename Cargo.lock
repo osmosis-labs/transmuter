@@ -3045,6 +3045,7 @@ dependencies = [
  "rstest 0.23.0",
  "schemars",
  "serde",
+ "serde_json",
  "sylvia",
  "thiserror 1.0.63",
  "transmuter_math",

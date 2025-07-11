@@ -117,14 +117,14 @@ pub enum ContractError {
     #[error("Admin transferring state is inoperable for the requested operation")]
     InoperableAdminTransferringState {},
 
-    #[error("Limiter count for {scope} exceed maximum per denom: {max}")]
+    #[error("Rebalancing config count for {scope} exceed maximum per denom: {max}")]
     MaxLimiterCountPerDenomExceeded { scope: Scope, max: Uint64 },
 
-    #[error("Denom: {scope} cannot have an empty limiter after it has been registered")]
+    #[error("Denom: {scope} cannot have an empty rebalancing config after it has been registered")]
     EmptyLimiterNotAllowed { scope: Scope },
 
-    #[error("Limiter label must not be empty")]
-    EmptyLimiterLabel {},
+    #[error("Rebalancing config label must not be empty")]
+    EmptyConfigLabel {},
 
     #[error("Amount of coin to be operated on must be greater than zero")]
     ZeroValueOperation {},
@@ -135,11 +135,11 @@ pub enum ContractError {
     #[error("Upper limit must not exceed 100%")]
     ExceedHundredPercentUpperLimit {},
 
-    #[error("Limiter does not exist for scope: {scope}, label: {label}")]
-    LimiterDoesNotExist { scope: Scope, label: String },
+    #[error("Rebalancing config does not exist for scope: {scope}")]
+    ConfigDoesNotExist { scope: Scope },
 
-    #[error("Limiter already exists for scope: {scope}, label: {label}")]
-    LimiterAlreadyExists { scope: Scope, label: String },
+    #[error("Rebalancing config already exists for scope: {scope}")]
+    ConfigAlreadyExists { scope: Scope },
 
     #[error(
         "Upper limit exceeded for `{scope}`, upper limit is {upper_limit}, but the resulted weight is {value}"
@@ -150,8 +150,8 @@ pub enum ContractError {
         value: Decimal,
     },
 
-    #[error("Modifying wrong limiter type: expected: {expected}, actual: {actual}")]
-    WrongLimiterType { expected: String, actual: String },
+    #[error("Rebalancing params error: {0}")]
+    RebalancingConfigError(#[from] transmuter_math::rebalancing::config::RebalancingConfigError),
 
     #[error("Normalization factor must be positive")]
     NormalizationFactorMustBePositive {},

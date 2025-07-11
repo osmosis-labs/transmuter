@@ -2,22 +2,24 @@ use crate::rebalancing::{
     range::{Bound, Range},
     zone::Zone,
 };
+
+use cosmwasm_schema::cw_serde;
 use cosmwasm_std::Decimal;
 use thiserror::Error;
 
-#[derive(Debug, Clone)]
-pub struct AdjustmentParams {
-    ideal_upper: Decimal,
-    ideal_lower: Decimal,
-    critical_upper: Decimal,
-    critical_lower: Decimal,
-    limit: Decimal,
-    adjustment_rate_strained: Decimal,
-    adjustment_rate_critical: Decimal,
+#[cw_serde]
+pub struct RebalancingConfig {
+    pub ideal_upper: Decimal,
+    pub ideal_lower: Decimal,
+    pub critical_upper: Decimal,
+    pub critical_lower: Decimal,
+    pub limit: Decimal,
+    pub adjustment_rate_strained: Decimal,
+    pub adjustment_rate_critical: Decimal,
 }
 
 #[derive(Debug, Error, PartialEq)]
-pub enum AdjustmentParamsError {
+pub enum RebalancingConfigError {
     #[error("critical range must be within [0, {limit}]")]
     CriticalRangeOutOfBounds { limit: Decimal },
     #[error("ideal range must be within critical range [{critical_start}, {critical_end}]")]
@@ -33,7 +35,23 @@ pub enum AdjustmentParamsError {
     InvalidLimit { limit: Decimal },
 }
 
-impl AdjustmentParams {
+impl Default for RebalancingConfig {
+    /// Default to 100% limit, 0-100% ideal range, 0-0% / 100-100% critical range (essentially no critical range), 0% adjustment rates.
+    /// This means no limit or penalty / incentive.
+    fn default() -> Self {
+        Self {
+            ideal_upper: Decimal::one(),
+            ideal_lower: Decimal::zero(),
+            critical_upper: Decimal::one(),
+            critical_lower: Decimal::zero(),
+            limit: Decimal::one(),
+            adjustment_rate_strained: Decimal::zero(),
+            adjustment_rate_critical: Decimal::zero(),
+        }
+    }
+}
+
+impl RebalancingConfig {
     pub fn new(
         ideal_upper: Decimal,
         ideal_lower: Decimal,
@@ -42,28 +60,27 @@ impl AdjustmentParams {
         limit: Decimal,
         adjustment_rate_strained: Decimal,
         adjustment_rate_critical: Decimal,
-    ) -> Result<Self, AdjustmentParamsError> {
+    ) -> Result<Self, RebalancingConfigError> {
         // Validate ranges are properly ordered
-
         if limit > Decimal::percent(100) {
-            return Err(AdjustmentParamsError::InvalidLimit { limit });
+            return Err(RebalancingConfigError::InvalidLimit { limit });
         }
 
         if ideal_upper < ideal_lower {
-            return Err(AdjustmentParamsError::InvalidIdealRange);
+            return Err(RebalancingConfigError::InvalidIdealRange);
         }
         if critical_upper < critical_lower {
-            return Err(AdjustmentParamsError::InvalidCriticalRange);
+            return Err(RebalancingConfigError::InvalidCriticalRange);
         }
 
         // Validate critical range is within [0, limit]
         if critical_lower < Decimal::zero() || critical_upper > limit {
-            return Err(AdjustmentParamsError::CriticalRangeOutOfBounds { limit });
+            return Err(RebalancingConfigError::CriticalRangeOutOfBounds { limit });
         }
 
         // Validate ideal range is within critical range
         if ideal_upper > critical_upper || ideal_lower < critical_lower {
-            return Err(AdjustmentParamsError::IdealRangeOutOfBounds {
+            return Err(RebalancingConfigError::IdealRangeOutOfBounds {
                 critical_start: critical_upper,
                 critical_end: critical_lower,
             });
@@ -78,6 +95,19 @@ impl AdjustmentParams {
             adjustment_rate_strained,
             adjustment_rate_critical,
         })
+    }
+
+    /// Create a rebalancing params with no adjustment rates and ideal range span across the entire limited range.
+    pub fn limit_only(limit: Decimal) -> Result<Self, RebalancingConfigError> {
+        Self::new(
+            limit,
+            Decimal::zero(),
+            limit,
+            Decimal::zero(),
+            limit,
+            Decimal::zero(),
+            Decimal::zero(),
+        )
     }
 
     pub fn ideal(&self) -> Range {
@@ -250,7 +280,7 @@ mod tests {
         #[case] adjustment_rate_critical: Decimal,
         #[case] should_succeed: bool,
     ) {
-        let result = AdjustmentParams::new(
+        let result = RebalancingConfig::new(
             ideal_upper,
             ideal_lower,
             critical_upper,
@@ -424,7 +454,7 @@ mod tests {
         #[case] adjustment_rate_critical: Decimal,
         #[case] expected_zones: [Zone; 5],
     ) {
-        let params = AdjustmentParams::new(
+        let params = RebalancingConfig::new(
             ideal_upper,
             ideal_lower,
             critical_upper,

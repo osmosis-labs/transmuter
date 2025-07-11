@@ -1,7 +1,7 @@
 use cosmwasm_schema::cw_serde;
 use std::{fmt::Display, str::FromStr};
 
-/// Scope for configuring limiters & rebalacing incentive for
+/// Scope for configuring rebalancer
 #[cw_serde]
 #[serde(tag = "type", content = "value")]
 #[derive(Eq, Hash)]

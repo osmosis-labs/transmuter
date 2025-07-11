@@ -1,11 +1,11 @@
-pub mod adjustment_params;
 pub mod balance_shift;
+pub mod config;
 pub mod range;
 pub mod zone;
 
 use crate::TransmuterMathError as Error;
-use adjustment_params::AdjustmentParams;
 use balance_shift::BalanceShift;
+use config::RebalancingConfig;
 use cosmwasm_std::{Decimal, Int256, SignedDecimal256, StdError, StdResult, Uint128};
 
 const DECIMAL_FRACTIONAL: Int256 = Int256::from_i128(1_000_000_000_000_000_000);
@@ -20,7 +20,7 @@ pub fn compute_adjustment_value(
     balance: Decimal,
     balance_new: Decimal,
     balance_total: Uint128,
-    params: AdjustmentParams,
+    params: RebalancingConfig,
 ) -> Result<Int256, Error> {
     let balance_shift = BalanceShift::new(balance, balance_new)?;
     let ideal = params.ideal().clone();
@@ -72,7 +72,7 @@ fn round_adjustment(adjustment: SignedDecimal256) -> Result<Int256, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adjustment_params::AdjustmentParams;
+    use config::RebalancingConfig;
     use rstest::rstest;
 
     #[rstest]
@@ -119,7 +119,7 @@ mod tests {
         #[case] balance_total: Uint128,
     ) {
         // Create extreme adjustment parameters with 100% rate
-        let params = AdjustmentParams::new(
+        let params = RebalancingConfig::new(
             Decimal::percent(70),  // ideal_upper
             Decimal::percent(30),  // ideal_lower
             Decimal::percent(80),  // critical_upper
@@ -212,7 +212,7 @@ mod tests {
         #[case] balance_total: Uint128,
         #[case] expected_adjustment: Int256,
     ) {
-        let params = AdjustmentParams::new(
+        let params = RebalancingConfig::new(
             Decimal::percent(70),  // ideal_upper
             Decimal::percent(30),  // ideal_lower
             Decimal::percent(80),  // critical_upper

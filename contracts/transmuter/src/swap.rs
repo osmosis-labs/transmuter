@@ -126,7 +126,7 @@ impl Transmuter {
             ContractError::ZeroValueOperation {}
         );
 
-        (pool, _) = self.limiters_pass(deps.branch(), pool, |_, mut pool| {
+        (pool, _) = self.rebalancer_pass(deps.branch(), pool, |_, mut pool| {
             pool.join_pool(&tokens_in)?;
             Ok((pool, ()))
         })?;
@@ -293,11 +293,12 @@ impl Transmuter {
         });
 
         // If all tokens out are corrupted assets and exit with all remaining liquidity
-        // then ignore the limiters and remove the corrupted assets from the pool
+        // then ignore the limit and remove the corrupted assets from the pool
         if is_force_exit_corrupted_assets {
+            // TODO: Do we need to handle incentive here still?
             pool.unchecked_exit_pool(&tokens_out)?;
         } else {
-            (pool, _) = self.limiters_pass(deps.branch(), pool, |_, mut pool| {
+            (pool, _) = self.rebalancer_pass(deps.branch(), pool, |_, mut pool| {
                 pool.exit_pool(&tokens_out)?;
                 Ok((pool, ()))
             })?;
@@ -339,7 +340,7 @@ impl Transmuter {
         let pool = self.pool.load(deps.storage)?;
 
         let (mut pool, actual_token_out) =
-            self.limiters_pass(deps.branch(), pool, |deps, pool| {
+            self.rebalancer_pass(deps.branch(), pool, |deps, pool| {
                 let (pool, actual_token_out) =
                     self.out_amt_given_in(deps, pool, token_in, token_out_denom)?;
 
@@ -385,7 +386,7 @@ impl Transmuter {
         let pool = self.pool.load(deps.storage)?;
 
         let (mut pool, actual_token_in) =
-            self.limiters_pass(deps.branch(), pool, |deps, pool| {
+            self.rebalancer_pass(deps.branch(), pool, |deps, pool| {
                 let (pool, actual_token_in) = self.in_amt_given_out(
                     deps,
                     pool,
@@ -545,7 +546,7 @@ impl Transmuter {
         })
     }
 
-    pub fn limiters_pass<T, F>(
+    pub fn rebalancer_pass<T, F>(
         &self,
         deps: DepsMut,
         pool: TransmuterPool,
@@ -559,7 +560,7 @@ impl Transmuter {
 
         let (pool, payload) = run(deps.as_ref(), pool)?;
 
-        // check and update limiters only if pool assets are not zero
+        // check limits only if pool assets are not zero
         if let Some(updated_asset_weights) = pool.asset_weights()? {
             if let Some(updated_asset_group_weights) = pool.asset_group_weights()? {
                 let scope_value_pairs = construct_scope_value_pairs(
@@ -569,8 +570,8 @@ impl Transmuter {
                     updated_asset_group_weights,
                 )?;
 
-                self.limiters
-                    .check_limits_and_update(deps.storage, scope_value_pairs)?;
+                self.rebalancer
+                    .check_limits(deps.storage, scope_value_pairs)?;
             }
         }
 
@@ -591,7 +592,7 @@ impl Transmuter {
         Ok(())
     }
 
-    /// remove corrupted assets from the pool & deregister all limiters for that denom
+    /// remove corrupted assets from the pool & remove all rebalancing configs for that denom
     /// when each corrupted asset is all redeemed
     fn clean_up_drained_corrupted_assets(
         &self,
@@ -602,8 +603,8 @@ impl Transmuter {
         for corrupted in pool.clone().corrupted_assets() {
             if corrupted.amount().is_zero() {
                 pool.remove_asset(corrupted.denom())?;
-                self.limiters
-                    .uncheck_deregister_all_for_scope(storage, Scope::denom(corrupted.denom()))?;
+                self.rebalancer
+                    .unchecked_remove_config(storage, Scope::denom(corrupted.denom()))?;
             }
         }
 
@@ -619,11 +620,10 @@ impl Transmuter {
                     }
                 }
 
-                // remove asset group is removed
-                // remove limiters for asset group as well
+                // remove rebalancing configs for asset group as well
                 if pool.asset_groups.get(&label).is_none() {
-                    self.limiters
-                        .uncheck_deregister_all_for_scope(storage, Scope::asset_group(&label))?;
+                    self.rebalancer
+                        .unchecked_remove_config(storage, Scope::asset_group(&label))?;
                 }
             }
         }
@@ -764,17 +764,15 @@ pub enum BurnTarget {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        asset::Asset, corruptable::Corruptable, limiter::LimiterParams, transmuter_pool::AssetGroup,
-    };
-
     use super::*;
+    use crate::{asset::Asset, corruptable::Corruptable, transmuter_pool::AssetGroup};
     use cosmwasm_std::{
         coin,
         testing::{mock_dependencies, mock_env, MOCK_CONTRACT_ADDR},
     };
     use itertools::Itertools;
     use rstest::rstest;
+    use transmuter_math::rebalancing::config::RebalancingConfig;
 
     #[rstest]
     #[case("denom1", "denom2", Ok(SwapVariant::TokenToToken))]
@@ -1250,14 +1248,11 @@ mod tests {
 
         for denom in all_denoms.clone() {
             transmuter
-                .limiters
-                .register(
+                .rebalancer
+                .add_config(
                     &mut deps.storage,
                     Scope::denom(denom.as_str()),
-                    "static",
-                    LimiterParams::StaticLimiter {
-                        upper_limit: Decimal::percent(100),
-                    },
+                    RebalancingConfig::limit_only(Decimal::percent(100)).unwrap(),
                 )
                 .unwrap();
         }
@@ -1287,10 +1282,10 @@ mod tests {
                 // limiters should be removed
                 assert!(
                     transmuter
-                        .limiters
-                        .list_limiters_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
+                        .rebalancer
+                        .get_config_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
                         .unwrap()
-                        .is_empty(),
+                        .is_none(),
                     "must not contain limiter for {} since it's corrupted and drained",
                     denom
                 );
@@ -1301,13 +1296,13 @@ mod tests {
                     denom
                 );
 
-                // limiters should be removed
+                // limiters should not be removed
                 assert!(
-                    !transmuter
-                        .limiters
-                        .list_limiters_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
+                    transmuter
+                        .rebalancer
+                        .get_config_by_scope(&deps.storage, &Scope::denom(denom.as_str()))
                         .unwrap()
-                        .is_empty(),
+                        .is_some(),
                     "must contain limiter for {} since it's not corrupted or not drained",
                     denom
                 );
@@ -1351,14 +1346,11 @@ mod tests {
 
         for denom in all_denoms.clone() {
             transmuter
-                .limiters
-                .register(
+                .rebalancer
+                .add_config(
                     &mut deps.storage,
                     Scope::denom(denom.as_str()),
-                    "static",
-                    LimiterParams::StaticLimiter {
-                        upper_limit: Decimal::percent(100),
-                    },
+                    RebalancingConfig::limit_only(Decimal::percent(100)).unwrap(),
                 )
                 .unwrap();
         }
@@ -1385,11 +1377,11 @@ mod tests {
         assert_eq!(denoms, vec!["denom2", "denom3"]);
 
         let limiter_denoms = transmuter
-            .limiters
-            .list_limiters(&deps.storage)
+            .rebalancer
+            .list_configs(&deps.storage)
             .unwrap()
             .into_iter()
-            .map(|((denom, _), _)| denom)
+            .map(|(denom, _)| denom)
             .unique()
             .collect_vec();
 
@@ -1435,14 +1427,11 @@ mod tests {
 
         for denom in all_denoms.clone() {
             transmuter
-                .limiters
-                .register(
+                .rebalancer
+                .add_config(
                     &mut deps.storage,
                     Scope::denom(denom.as_str()),
-                    "static",
-                    LimiterParams::StaticLimiter {
-                        upper_limit: Decimal::percent(100),
-                    },
+                    RebalancingConfig::limit_only(Decimal::percent(100)).unwrap(),
                 )
                 .unwrap();
         }
@@ -1469,11 +1458,11 @@ mod tests {
         assert_eq!(denoms, vec!["denom2", "denom3"]);
 
         let limiter_denoms = transmuter
-            .limiters
-            .list_limiters(&deps.storage)
+            .rebalancer
+            .list_configs(&deps.storage)
             .unwrap()
             .into_iter()
-            .map(|((denom, _), _)| denom)
+            .map(|(denom, _)| denom)
             .unique()
             .collect_vec();
 
@@ -1799,16 +1788,13 @@ mod tests {
         };
         transmuter.pool.save(&mut deps.storage, &init_pool).unwrap();
 
-        // Register limiters for group1
+        // Add a rebalancing config for the group
         transmuter
-            .limiters
-            .register(
+            .rebalancer
+            .add_config(
                 &mut deps.storage,
                 Scope::asset_group("group1"),
-                "1w",
-                LimiterParams::StaticLimiter {
-                    upper_limit: Decimal::percent(60),
-                },
+                RebalancingConfig::limit_only(Decimal::percent(60)).unwrap(),
             )
             .unwrap();
 
@@ -1840,9 +1826,12 @@ mod tests {
         };
         assert_eq!(pool, expected_pool);
 
-        // Check that the limiter for group1 is still registered
-        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
-        assert_eq!(limiters.len(), 1);
+        // Check that the rebalancing config for group1 is still exists
+        let rebalancing_configs = transmuter
+            .rebalancer
+            .get_config_by_scope(&deps.storage, &Scope::asset_group("group1"))
+            .unwrap();
+        assert!(rebalancing_configs.is_some());
 
         // Save the updated pool
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
@@ -1861,9 +1850,12 @@ mod tests {
         };
         assert_eq!(pool, expected_pool);
 
-        // Check that the limiter for group1 is removed
-        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
-        assert_eq!(limiters.len(), 0);
+        // Check that the rebalancing config for group1 is removed
+        let rebalancing_configs = transmuter
+            .rebalancer
+            .get_config_by_scope(&deps.storage, &Scope::asset_group("group1"))
+            .unwrap();
+        assert_eq!(rebalancing_configs, None);
     }
 
     #[test]
@@ -1888,14 +1880,11 @@ mod tests {
 
         // Register a limiter for the group
         transmuter
-            .limiters
-            .register(
+            .rebalancer
+            .add_config(
                 &mut deps.storage,
                 Scope::asset_group("group1"),
-                "limiter1",
-                LimiterParams::StaticLimiter {
-                    upper_limit: Decimal::one(),
-                },
+                RebalancingConfig::limit_only(Decimal::one()).unwrap(),
             )
             .unwrap();
 
@@ -1924,9 +1913,12 @@ mod tests {
         };
         assert_eq!(pool, expected_pool);
 
-        // Check that the limiter for group1 is still registered
-        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
-        assert_eq!(limiters.len(), 1);
+        // Check that the rebalancing config for group1 is still registered
+        let rebalancing_configs = transmuter
+            .rebalancer
+            .get_config_by_scope(&deps.storage, &Scope::asset_group("group1"))
+            .unwrap();
+        assert!(rebalancing_configs.is_some());
 
         // Save the updated pool
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
@@ -1952,8 +1944,11 @@ mod tests {
         };
         assert_eq!(pool, expected_pool);
 
-        // Check that the limiter for group1 is still registered
-        let limiters = transmuter.limiters.list_limiters(&deps.storage).unwrap();
-        assert_eq!(limiters.len(), 1);
+        // Check that the rebalancing config for group1 is still registered
+        let rebalancing_configs = transmuter
+            .rebalancer
+            .get_config_by_scope(&deps.storage, &Scope::asset_group("group1"))
+            .unwrap();
+        assert!(rebalancing_configs.is_some());
     }
 }
