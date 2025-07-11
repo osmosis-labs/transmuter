@@ -666,16 +666,13 @@ impl Transmuter {
         let prev_asset_weights = pool.asset_weights()?.unwrap_or_default();
         let prev_asset_group_weights = pool.asset_group_weights()?.unwrap_or_default();
 
-        // TODO: return also a fee deduction function that takes output as input
-        // with that we can delegate responsibility to the caller to select to which token to deduct fee from, embeded that in the closure
-        // output is token_out for exact_in, token_in for exact_out
+        // total normalized amount of the asset in the pool
+        let total_balance_before = pool.normalized_total_balance()?;
+
         let (pool, output, rebalancing_adjustment) = run_pool(deps.as_ref(), pool)?;
 
-        // balance_total is the total normalized amount of the asset in the pool
-        let balance_total = pool
-            .normalized_asset_values(pool.std_norm_factor()?)?
-            .into_iter()
-            .try_fold(Uint128::zero(), |acc, (_, value)| acc.checked_add(value))?;
+        // in case one of token in or out is alloyed, balance_total is updated
+        let total_balance_after = pool.normalized_total_balance()?;
 
         // check limits only if pool assets are not zero, calculate adjustment value
         let mut total_adjustment_rate = SignedDecimal256::zero();
@@ -707,9 +704,28 @@ impl Transmuter {
             }
         }
 
-        let total_adjustment_value = total_adjustment_rate.checked_mul(
-            SignedDecimal256::from_atomics(Int256::from(balance_total), 0)?,
-        )?;
+        // if total balance is updated, it means that one of token in or out is alloyed
+        let total_balance = if total_balance_before != total_balance_after {
+            match total_adjustment_rate.cmp(&SignedDecimal256::zero()) {
+                // Incentivized case:
+                // Incentives are paid from a pool of previously collected fees. It is logical to scale the reward based on the state of the pool *before* the user's helpful contribution.
+                // This provides a fair reward relative to the pool's history and prevents a single large, helpful deposit from draining a disproportionate amount of the incentive fund.
+                Ordering::Greater => total_balance_before,
+                // Fee deduction case:
+                // This keeps the incentive pool healthy by ensuring that the incentive is proportional to the pool's size.
+                // - For **harmful joins** (liquidity addition), the fee is based on `total_balance_after`. This ensures the penalty is proportional to the new, larger pool size that the user has unbalanced.
+                // - For **harmful exits** (liquidity withdrawal), the fee is based on `total_balance_before`. This ensures the penalty is proportional to the state of the pool *before* it was damaged by the withdrawal.
+                Ordering::Less => total_balance_before.max(total_balance_after),
+
+                // No adjustment, so this doesn't matter
+                Ordering::Equal => Uint128::zero(),
+            }
+        } else {
+            total_balance_before
+        };
+
+        let total_balance = SignedDecimal256::from_atomics(Int256::from(total_balance), 0)?;
+        let total_adjustment_value = total_adjustment_rate.checked_mul(total_balance)?;
 
         let (output, adjustment) =
             rebalancing_adjustment(output, round_adjustment(total_adjustment_value)?)?;

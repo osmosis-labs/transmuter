@@ -234,18 +234,7 @@ impl IncentivePool {
 
         // Then, remove tokens from pool
         for coin in redemptions {
-            let current_balance = self
-                .pool_balances
-                .may_load(storage, coin.denom.clone())?
-                .unwrap_or_default();
-
-            let updated_balance = current_balance.checked_sub(coin.amount)?;
-            if updated_balance.is_zero() {
-                self.pool_balances.remove(storage, coin.denom.clone());
-            } else {
-                self.pool_balances
-                    .save(storage, coin.denom.clone(), &updated_balance)?;
-            }
+            self.remove_tokens(storage, &coin)?;
         }
 
         Ok(())

@@ -73,6 +73,13 @@ impl TransmuterPool {
             })
             .collect()
     }
+
+    pub(crate) fn normalized_total_balance(&self) -> Result<Uint128, ContractError> {
+        self.normalized_asset_values(self.std_norm_factor()?)?
+            .into_iter()
+            .try_fold(Uint128::zero(), |acc, (_, value)| acc.checked_add(value))
+            .map_err(Into::into)
+    }
 }
 
 #[cfg(test)]
