@@ -63,32 +63,110 @@ impl Transmuter {
         mut deps: DepsMut,
         env: Env,
     ) -> Result<Response, ContractError> {
-        let mut pool: TransmuterPool = self.pool.load(deps.storage)?;
+        let pool: TransmuterPool = self.pool.load(deps.storage)?;
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+        let alloyed_norm_factor = self.alloyed_asset.get_normalization_factor(deps.storage)?;
 
         let response = Response::new();
 
-        let (tokens_in, out_amount, response) = match constraint {
+        let (pool, tokens_in, out_amount, response) = match constraint {
             SwapToAlloyedConstraint::ExactIn {
                 tokens_in,
                 token_out_min_amount,
             } => {
                 let tokens_in_with_norm_factor =
                     pool.pair_coins_with_normalization_factor(tokens_in)?;
-                let out_amount = swap_to_alloyed::out_amount_via_exact_in(
+                let out_amount_before_fee = swap_to_alloyed::out_amount_via_exact_in(
                     tokens_in_with_norm_factor,
                     token_out_min_amount,
                     self.alloyed_asset.get_normalization_factor(deps.storage)?,
                 )?;
 
+                // we have now calculated tokens_in, out_amount (which is alloyed)
+                // if it's exact_in:
+                // - fee case: we deduct fee from out_amount
+                // - incentive case: we credit incentive to the beneficiary
+
+                let (pool, token_out, adjustment) =
+                    self.rebalancer_pass(deps.branch(), pool, &mint_to_address, |_, mut pool| {
+                        pool.join_pool(&tokens_in)?;
+
+                        let std_norm_factor = pool.std_norm_factor()?;
+                        let token_out_norm_factor = alloyed_norm_factor;
+                        let token_out = coin(out_amount_before_fee.u128(), alloyed_denom);
+
+                        let rebalancing_adjustment =
+                            move |token_out: Coin, total_adjustment_value: Int256| {
+                                let (token_out, adjustment) = match total_adjustment_value
+                                    .cmp(&Int256::zero())
+                                {
+                                    Ordering::Less => {
+                                        // deduct fee from token_out
+                                        let fee_amount = convert_amount(
+                                            total_adjustment_value.abs().try_into()?,
+                                            std_norm_factor,
+                                            token_out_norm_factor,
+                                            // rounding up means slightly more fee than required, keeps the incentive pool healthy
+                                            &crate::asset::Rounding::Up,
+                                        )?;
+
+                                        let token_out_amount: Uint128 =
+                                            token_out.amount.checked_sub(fee_amount)?;
+                                        let token_out =
+                                            coin(token_out_amount.u128(), token_out.denom.clone());
+                                        let token_out_denom = token_out.denom.clone();
+
+                                        (
+                                            token_out,
+                                            Adjustment::DeductFee {
+                                                fee: coin(fee_amount.u128(), token_out_denom),
+                                            },
+                                        )
+                                    }
+                                    Ordering::Greater => (
+                                        token_out,
+                                        Adjustment::CreditIncentive {
+                                            incentive: total_adjustment_value.abs().try_into()?,
+                                        },
+                                    ),
+                                    Ordering::Equal => (token_out, Adjustment::None),
+                                };
+
+                                ensure!(
+                                    token_out.amount >= token_out_min_amount,
+                                    ContractError::InsufficientTokenOut {
+                                        min_required: token_out_min_amount,
+                                        amount_out: token_out.amount,
+                                    }
+                                );
+
+                                Ok((token_out, adjustment))
+                            };
+
+                        Ok((pool, token_out, rebalancing_adjustment))
+                    })?;
+
                 let response = set_data_if_sudo(
                     response,
                     &entrypoint,
                     &SwapExactAmountInResponseData {
-                        token_out_amount: out_amount,
+                        token_out_amount: token_out.amount,
                     },
                 )?;
 
-                (tokens_in.to_owned(), out_amount, response)
+                let response = match adjustment {
+                    // fee is deducted from the minting token out, mint directly to the contract as it's already recorded as such in the incentive pool
+                    Adjustment::DeductFee { fee } => response.add_message(MsgMint {
+                        sender: env.contract.address.to_string(),
+                        amount: Some(fee.into()),
+                        mint_to_address: env.contract.address.to_string(),
+                    }),
+                    // incentive doesn't require minting or burning anything
+                    Adjustment::CreditIncentive { .. } => response,
+                    Adjustment::None => response,
+                };
+
+                (pool, tokens_in.to_owned(), token_out.amount, response)
             }
 
             SwapToAlloyedConstraint::ExactOut {
@@ -99,23 +177,88 @@ impl Transmuter {
                 let token_in_norm_factor = pool
                     .get_pool_asset_by_denom(token_in_denom)?
                     .normalization_factor();
-                let in_amount = swap_to_alloyed::in_amount_via_exact_out(
+                let in_amount_before_fee = swap_to_alloyed::in_amount_via_exact_out(
                     token_in_norm_factor,
                     token_in_max_amount,
                     token_out_amount,
                     self.alloyed_asset.get_normalization_factor(deps.storage)?,
                 )?;
-                let tokens_in = vec![coin(in_amount.u128(), token_in_denom)];
+                let token_in = coin(in_amount_before_fee.u128(), token_in_denom);
 
+                // if it's exact_out
+                // - fee case: we increase tokens in requirement, it's spreaded through all the tokens in
+                // - incentive case: we credit incentive to the beneficiary
+                let (pool, token_in, _adjustment) =
+                    self.rebalancer_pass(deps.branch(), pool, &mint_to_address, |_, mut pool| {
+                        pool.join_pool(&[token_in.clone()])?;
+                        let std_norm_factor = pool.std_norm_factor()?;
+                        let token_in_norm_factor = pool
+                            .get_pool_asset_by_denom(&token_in_denom)?
+                            .normalization_factor();
+
+                        let rebalancing_adjustment =
+                            move |token_in: Coin, total_adjustment_value: Int256| {
+                                // If adjustment value is negative, fee take from the token_in, so we require addtional token_in to pay for the fee.
+                                // Otherwise, return the token_in as is
+                                let (token_in, adjustment) = match total_adjustment_value
+                                    .cmp(&Int256::zero())
+                                {
+                                    // negative adjustment value means fee deduction from token_in
+                                    Ordering::Less => {
+                                        let fee = convert_amount(
+                                            total_adjustment_value.abs().try_into()?,
+                                            std_norm_factor,
+                                            token_in_norm_factor,
+                                            // rounding up means slightly more fee than required, keeps the incentive pool healthy
+                                            &crate::asset::Rounding::Up,
+                                        )?;
+
+                                        let token_in_amount = token_in.amount.checked_add(fee)?;
+
+                                        (
+                                            coin(token_in_amount.u128(), token_in.denom.clone()),
+                                            Adjustment::DeductFee {
+                                                fee: coin(fee.u128(), token_in.denom.clone()),
+                                            },
+                                        )
+                                    }
+                                    // positive adjustment value means incentive credit to the beneficiary
+                                    Ordering::Greater => (
+                                        token_in,
+                                        Adjustment::CreditIncentive {
+                                            incentive: total_adjustment_value.abs().try_into()?,
+                                        },
+                                    ),
+                                    // zero adjustment means no adjustment
+                                    Ordering::Equal => (token_in, Adjustment::None),
+                                };
+
+                                let token_in_amount = token_in.amount.clone();
+
+                                ensure!(
+                                    token_in_amount <= token_in_max_amount,
+                                    ContractError::ExcessiveRequiredTokenIn {
+                                        limit: token_in_max_amount,
+                                        required: token_in_amount,
+                                    }
+                                );
+
+                                Ok((token_in, adjustment))
+                            };
+                        Ok((pool, token_in, rebalancing_adjustment))
+                    })?;
+
+                // Unlike exact in case where token out is alloyed, there is no separate mint target required here
+                // Because fee is collected from the token_in
                 let response = set_data_if_sudo(
                     response,
                     &entrypoint,
                     &SwapExactAmountOutResponseData {
-                        token_in_amount: in_amount,
+                        token_in_amount: token_in.amount,
                     },
                 )?;
 
-                (tokens_in, token_out_amount, response)
+                (pool, vec![token_in], token_out_amount, response)
             }
         };
 
@@ -130,15 +273,6 @@ impl Transmuter {
             tokens_in.iter().all(|coin| coin.amount > Uint128::zero()),
             ContractError::ZeroValueOperation {}
         );
-
-        (pool, _) =
-            self.rebalancer_pass(deps.branch(), pool, &mint_to_address, |_, mut pool| {
-                pool.join_pool(&tokens_in)?;
-                // TODO: add fee deduction  / incentive credit here
-                Ok((pool, (), |output, total_adjustment_value| {
-                    Ok((output, Adjustment::None))
-                }))
-            })?;
 
         // no need for cleaning up drained corrupted assets here
         // since this function will only adding more underlying assets
@@ -287,6 +421,7 @@ impl Transmuter {
             })
             .collect::<Vec<_>>();
 
+        // TODO: move this logic into rebalancing pass
         let is_force_exit_corrupted_assets = tokens_out.iter().all(|coin| {
             let total_liquidity = pool
                 .get_pool_asset_by_denom(&coin.denom)
@@ -307,7 +442,7 @@ impl Transmuter {
             // TODO: Do we need to handle incentive here still?
             pool.unchecked_exit_pool(&tokens_out)?;
         } else {
-            (pool, _) = self.rebalancer_pass(deps.branch(), pool, &sender, |_, mut pool| {
+            (pool, _, _) = self.rebalancer_pass(deps.branch(), pool, &sender, |_, mut pool| {
                 pool.exit_pool(&tokens_out)?;
                 // TODO: add fee deduction  / incentive credit here
                 Ok((pool, (), |output, total_adjustment_value| {
@@ -351,7 +486,7 @@ impl Transmuter {
     ) -> Result<Response, ContractError> {
         let pool = self.pool.load(deps.storage)?;
 
-        let (mut pool, actual_token_out) =
+        let (mut pool, actual_token_out, _adjustment) =
             self.rebalancer_pass(deps.branch(), pool, &sender, |deps, pool| {
                 let (pool, token_out) =
                     self.out_amt_given_in(deps, pool, token_in, token_out_denom)?;
@@ -439,7 +574,7 @@ impl Transmuter {
     ) -> Result<Response, ContractError> {
         let pool = self.pool.load(deps.storage)?;
 
-        let (mut pool, actual_token_in) =
+        let (mut pool, actual_token_in, _adjustment) =
             self.rebalancer_pass(deps.branch(), pool, &sender, |deps, pool| {
                 let (pool, token_in) = self.in_amt_given_out(
                     deps,
@@ -652,7 +787,7 @@ impl Transmuter {
         pool: TransmuterPool,
         beneficiary: &Addr,
         run_pool: RunPool,
-    ) -> Result<(TransmuterPool, RunPoolOutput), ContractError>
+    ) -> Result<(TransmuterPool, RunPoolOutput, Adjustment), ContractError>
     where
         RunPool:
             FnOnce(
@@ -669,6 +804,7 @@ impl Transmuter {
         // total normalized amount of the asset in the pool
         let total_balance_before = pool.normalized_total_balance()?;
 
+        // **** TODO: separated rebalancing_adjustment into another function to pass in here, instead of this saga-like pattern
         let (pool, output, rebalancing_adjustment) = run_pool(deps.as_ref(), pool)?;
 
         // in case one of token in or out is alloyed, balance_total is updated
@@ -692,13 +828,16 @@ impl Transmuter {
                         let adjustment = compute_total_effective_adjustment_rate(
                             prev_weight,
                             updated_weight,
-                            rebalancing_config,
+                            rebalancing_config.clone(),
                         )?;
+
+                        dbg!(scope, prev_weight, updated_weight, adjustment);
 
                         total_adjustment_rate = total_adjustment_rate.checked_add(adjustment)?;
                     }
                 }
 
+                // TODO: have a way to skip limit check here
                 self.rebalancer
                     .check_limits(deps.storage, scope_value_pairs)?;
             }
@@ -731,15 +870,20 @@ impl Transmuter {
             rebalancing_adjustment(output, round_adjustment(total_adjustment_value)?)?;
 
         match adjustment {
-            Adjustment::DeductFee { fee } => {
+            Adjustment::DeductFee { ref fee } => {
                 self.incentive_pool.add_tokens(deps.storage, &fee)?;
             }
             Adjustment::CreditIncentive { incentive } => {
-                let pool_denom_factors = pool
+                let mut pool_denom_factors = pool
                     .pool_assets
                     .iter()
                     .map(|asset| (asset.denom().to_string(), asset.normalization_factor()))
                     .collect::<BTreeMap<_, _>>();
+
+                let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+                let alloyed_norm_factor =
+                    self.alloyed_asset.get_normalization_factor(deps.storage)?;
+                pool_denom_factors.insert(alloyed_denom, alloyed_norm_factor);
 
                 self.incentive_pool.credit_incentive(
                     deps.storage,
@@ -751,7 +895,7 @@ impl Transmuter {
             Adjustment::None => {}
         }
 
-        Ok((pool, output))
+        Ok((pool, output, adjustment))
     }
 
     pub fn ensure_valid_swap_fee(&self, swap_fee: Decimal) -> Result<(), ContractError> {
@@ -957,9 +1101,10 @@ mod tests {
         testing::{
             mock_dependencies, mock_env, MockApi, MockQuerier, MockStorage, MOCK_CONTRACT_ADDR,
         },
-        OwnedDeps,
+        CosmosMsg, OwnedDeps,
     };
     use itertools::Itertools;
+    use osmosis_test_tube::cosmrs::proto::prost::Message;
     use rstest::rstest;
     use transmuter_math::rebalancing::config::RebalancingConfig;
 
@@ -2535,5 +2680,297 @@ mod tests {
             .unwrap();
 
         assert_eq!(incentive_pool_balances, vec![]);
+    }
+
+    #[test]
+    fn test_swap_tokens_to_alloyed_asset_exact_in_with_fee_deduction_and_incentivization() {
+        let transmuter = Transmuter::new();
+
+        let (sender, mut deps) = setup_fee_deduction_test();
+
+        // Multiple tokens in that will make denom1 55%, denom2 25%
+        let tokens_in = vec![
+            coin(37_500_000_000u128, "denom1"), // contributes 37_500_000_000 * 100 = 3_750_000_000_000 normalized
+            coin(125_000_000_000u128, "denom2"), // contributes 125_000_000_000 * 10 = 1_250_000_000_000 normalized
+        ];
+
+        // fee(denom1) = 25_000_000_000_000u128 * (5% * 1%) = 12_500_000_000u128
+        // fee(group1) = 25_000_000_000_000u128 * 0% = 0
+        let amount_out_before_fee = Uint128::from(3_750_000_000_000 + 1_250_000_000_000u128);
+        let fee = Uint128::from(125_000_000_000u128);
+        let token_out_amount = amount_out_before_fee - fee;
+
+        let res = transmuter.swap_tokens_to_alloyed_asset(
+            Entrypoint::Exec,
+            SwapToAlloyedConstraint::ExactIn {
+                tokens_in: &tokens_in,
+                token_out_min_amount: token_out_amount + Uint128::from(1u128),
+            },
+            sender.clone(),
+            deps.as_mut(),
+            mock_env(),
+        );
+
+        assert_eq!(
+            res,
+            Err(ContractError::InsufficientTokenOut {
+                min_required: token_out_amount + Uint128::from(1u128),
+                amount_out: token_out_amount,
+            })
+        );
+
+        let res = transmuter.swap_tokens_to_alloyed_asset(
+            Entrypoint::Exec,
+            SwapToAlloyedConstraint::ExactIn {
+                tokens_in: &tokens_in,
+                token_out_min_amount: token_out_amount,
+            },
+            sender.clone(),
+            deps.as_mut(),
+            mock_env(),
+        );
+
+        let messages = res
+            .unwrap()
+            .messages
+            .into_iter()
+            .map(|m| {
+                let CosmosMsg::Stargate { value, .. } = m.msg else {
+                    panic!("must be Startgate message")
+                };
+                MsgMint::decode(value.as_slice()).unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            messages,
+            vec![
+                MsgMint {
+                    amount: Some(coin(fee.u128(), "alloyed").into()),
+                    mint_to_address: MOCK_CONTRACT_ADDR.to_string(),
+                    sender: MOCK_CONTRACT_ADDR.to_string(),
+                },
+                MsgMint {
+                    amount: Some(coin(token_out_amount.u128(), "alloyed").into()),
+                    mint_to_address: sender.to_string(),
+                    sender: MOCK_CONTRACT_ADDR.to_string(),
+                }
+            ]
+        );
+
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+
+        // Verify pool state after join
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom1").unwrap().amount(),
+            Uint128::from(100_000_000_000u128) + tokens_in[0].amount
+        );
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom2").unwrap().amount(),
+            Uint128::from(500_000_000_000u128) + tokens_in[1].amount
+        );
+
+        // Verify fee is collected (minted to contract)
+        let incentive_pool_balances = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap();
+
+        // Fee should be collected in alloyed asset
+        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "alloyed")]);
+
+        let credits = transmuter
+            .incentive_pool
+            .get_all_incentive_credits(&deps.storage, None, None)
+            .unwrap();
+        assert_eq!(credits, vec![]);
+
+        // rebalance it back
+
+        let res = transmuter
+            .swap_tokens_to_alloyed_asset(
+                Entrypoint::Exec,
+                SwapToAlloyedConstraint::ExactIn {
+                    tokens_in: &[coin(amount_out_before_fee.u128(), "denom3")],
+                    token_out_min_amount: amount_out_before_fee,
+                },
+                sender.clone(),
+                deps.as_mut(),
+                mock_env(),
+            )
+            .unwrap();
+
+        let messages = res
+            .messages
+            .into_iter()
+            .map(|m| {
+                let CosmosMsg::Stargate { value, .. } = m.msg else {
+                    panic!("must be Startgate message")
+                };
+                MsgMint::decode(value.as_slice()).unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            messages,
+            vec![MsgMint {
+                amount: Some(coin(amount_out_before_fee.u128(), "alloyed").into()),
+                mint_to_address: sender.to_string(),
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+            }]
+        );
+
+        // check pool state
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom3").unwrap().amount(),
+            Uint128::from(5_000_000_000_000u128) + amount_out_before_fee
+        );
+
+        // check incentive pool state
+        let incentive_pool_balances = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap();
+        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "alloyed")]);
+    }
+
+    #[test]
+    fn test_swap_tokens_to_alloyed_asset_exact_out_with_fee_deduction_and_incentivization() {
+        let transmuter = Transmuter::new();
+
+        let (sender, mut deps) = setup_fee_deduction_test();
+
+        // fee(denom1) = 25_000_000_000_000u128 * ((5% * 1%) + (5% * 2%)) = 37_500_000_000
+        // fee(group1) = 25_000_000_000_000u128 * (5% * 1%) = 12_500_000_000
+        // = 50_000_000_000u128
+        let res = transmuter.swap_tokens_to_alloyed_asset(
+            Entrypoint::Exec,
+            SwapToAlloyedConstraint::ExactOut {
+                token_in_denom: "denom1",
+                token_in_max_amount: Uint128::from(55_000_000_000u128 - 1),
+                token_out_amount: Uint128::from(5_000_000_000_000u128),
+            },
+            sender.clone(),
+            deps.as_mut(),
+            mock_env(),
+        );
+
+        assert_eq!(
+            res,
+            Err(ContractError::ExcessiveRequiredTokenIn {
+                limit: Uint128::from(55_000_000_000u128 - 1),
+                required: Uint128::from(55_000_000_000u128),
+            })
+        );
+
+        let token_out_amount = Uint128::from(5_000_000_000_000u128);
+        let amount_in_before_fee = Uint128::from(50_000_000_000u128); // 5_000_000_000_000 / 100
+        let fee = Uint128::from(5_000_000_000u128); // 50_000_000_000 based on the fee calculation
+        let token_in_amount = amount_in_before_fee + fee;
+
+        let res = transmuter.swap_tokens_to_alloyed_asset(
+            Entrypoint::Exec,
+            SwapToAlloyedConstraint::ExactOut {
+                token_in_denom: "denom1",
+                token_in_max_amount: token_in_amount,
+                token_out_amount,
+            },
+            sender.clone(),
+            deps.as_mut(),
+            mock_env(),
+        );
+
+        let messages = res
+            .unwrap()
+            .messages
+            .into_iter()
+            .map(|m| {
+                let CosmosMsg::Stargate { value, .. } = m.msg else {
+                    panic!("must be Startgate message")
+                };
+                MsgMint::decode(value.as_slice()).unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            messages,
+            vec![MsgMint {
+                amount: Some(coin(token_out_amount.u128(), "alloyed").into()),
+                mint_to_address: sender.to_string(),
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+            }]
+        );
+
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+
+        // Verify pool state after join
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom1").unwrap().amount(),
+            Uint128::from(100_000_000_000u128) + amount_in_before_fee
+        );
+
+        // Verify fee is collected
+        let incentive_pool_balances = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap();
+
+        // Fee should be collected in denom1
+        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "denom1")]);
+
+        let credits = transmuter
+            .incentive_pool
+            .get_all_incentive_credits(&deps.storage, None, None)
+            .unwrap();
+        assert_eq!(credits, vec![]);
+
+        // Rebalance back by refilling the same amount for denom2 (which is group1)
+        let res = transmuter
+            .swap_tokens_to_alloyed_asset(
+                Entrypoint::Exec,
+                SwapToAlloyedConstraint::ExactOut {
+                    token_in_denom: "denom2",
+                    token_in_max_amount: Uint128::from(500_000_000_000u128),
+                    token_out_amount: Uint128::from(5_000_000_000_000u128),
+                },
+                sender.clone(),
+                deps.as_mut(),
+                mock_env(),
+            )
+            .unwrap();
+
+        let messages = res
+            .messages
+            .into_iter()
+            .map(|m| {
+                let CosmosMsg::Stargate { value, .. } = m.msg else {
+                    panic!("must be Startgate message")
+                };
+                MsgMint::decode(value.as_slice()).unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            messages,
+            vec![MsgMint {
+                amount: Some(coin(token_out_amount.u128(), "alloyed").into()),
+                mint_to_address: sender.to_string(),
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+            }]
+        );
+
+        // check for pool state
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom2").unwrap().amount(),
+            Uint128::from(500_000_000_000u128 + 500_000_000_000u128)
+        );
+
+        // check for incentive credit
+        let credits = transmuter
+            .incentive_pool
+            .get_all_incentive_credits(&deps.storage, None, None)
+            .unwrap();
+        assert_eq!(credits, vec![(sender, Uint128::from(500_000_000_000u128))]);
     }
 }
