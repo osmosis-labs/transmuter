@@ -336,15 +336,115 @@ impl Transmuter {
                     token_out_min_amount,
                 )?;
 
+                let mut token_out = coin(out_amount.u128(), token_out_denom);
+                let tokens_out = vec![token_out.clone()];
+
+                let denoms_in_corrupted_asset_group = pool
+                    .asset_groups
+                    .iter()
+                    .flat_map(|(_, asset_group)| {
+                        if asset_group.is_corrupted() {
+                            asset_group.denoms().to_vec()
+                        } else {
+                            vec![]
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                // TODO: move this logic into rebalancing pass
+                let is_force_exit_corrupted_assets = tokens_out.iter().all(|coin| {
+                    let total_liquidity = pool
+                        .get_pool_asset_by_denom(&coin.denom)
+                        .map(|asset| asset.amount())
+                        .unwrap_or_default();
+
+                    let is_redeeming_total_liquidity = coin.amount == total_liquidity;
+                    let is_under_corrupted_asset_group =
+                        denoms_in_corrupted_asset_group.contains(&coin.denom);
+
+                    is_redeeming_total_liquidity
+                        && (is_under_corrupted_asset_group || pool.is_corrupted_asset(&coin.denom))
+                });
+
+                // If all tokens out are corrupted assets and exit with all remaining liquidity
+                // then ignore the limit and remove the corrupted assets from the pool
+                if is_force_exit_corrupted_assets {
+                    pool.unchecked_exit_pool(&tokens_out)?;
+                } else {
+                    let run_pool = |_: Deps, mut pool: TransmuterPool| {
+                        pool.exit_pool(&tokens_out)?;
+                        Ok((pool, token_out))
+                    };
+
+                    let rebalancing_adjustment =
+                        |pool: TransmuterPool, token_out: Coin, total_adjustment_value: Int256| {
+                            let std_norm_factor = pool.std_norm_factor()?;
+                            let token_out_norm_factor = pool
+                                .get_pool_asset_by_denom(token_out_denom)?
+                                .normalization_factor();
+
+                            let (token_out, adjustment) =
+                                match total_adjustment_value.cmp(&Int256::zero()) {
+                                    Ordering::Less => {
+                                        // deduct fee from token_out
+                                        let fee_amount = convert_amount(
+                                            total_adjustment_value.abs().try_into()?,
+                                            std_norm_factor,
+                                            token_out_norm_factor,
+                                            // rounding up means slightly more fee than required, keeps the incentive pool healthy
+                                            &crate::asset::Rounding::Up,
+                                        )?;
+                                        let token_out_amount: Uint128 =
+                                            token_out.amount.checked_sub(fee_amount)?;
+                                        let token_out =
+                                            coin(token_out_amount.u128(), token_out.denom.clone());
+                                        let token_out_denom = token_out.denom.clone();
+
+                                        (
+                                            token_out,
+                                            Adjustment::DeductFee {
+                                                fee: coin(fee_amount.u128(), token_out_denom),
+                                            },
+                                        )
+                                    }
+                                    Ordering::Greater => (
+                                        token_out,
+                                        Adjustment::CreditIncentive {
+                                            incentive: total_adjustment_value.abs().try_into()?,
+                                        },
+                                    ),
+                                    Ordering::Equal => (token_out, Adjustment::None),
+                                };
+
+                            ensure!(
+                                token_out.amount >= token_out_min_amount,
+                                ContractError::InsufficientTokenOut {
+                                    min_required: token_out_min_amount,
+                                    amount_out: token_out.amount,
+                                }
+                            );
+
+                            Ok((token_out, adjustment))
+                        };
+
+                    (pool, token_out, _) = self.rebalancer_pass(
+                        deps.branch(),
+                        pool,
+                        &sender,
+                        run_pool,
+                        rebalancing_adjustment,
+                    )?;
+                }
+
                 let response = set_data_if_sudo(
                     response,
                     &entrypoint,
                     &SwapExactAmountInResponseData {
-                        token_out_amount: out_amount,
+                        token_out_amount: token_out.amount,
                     },
                 )?;
 
-                let tokens_out = vec![coin(out_amount.u128(), token_out_denom)];
+                let tokens_out = vec![token_out];
 
                 (token_in_amount, tokens_out, response)
             }
@@ -354,21 +454,123 @@ impl Transmuter {
             } => {
                 let tokens_out_with_norm_factor =
                     pool.pair_coins_with_normalization_factor(tokens_out)?;
+
+                let token_in_norm_factor =
+                    self.alloyed_asset.get_normalization_factor(deps.storage)?;
                 let in_amount = swap_from_alloyed::in_amount_via_exact_out(
                     token_in_max_amount,
-                    self.alloyed_asset.get_normalization_factor(deps.storage)?,
+                    token_in_norm_factor,
                     tokens_out_with_norm_factor,
                 )?;
+
+                let token_in_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+                let mut token_in = coin(in_amount.u128(), token_in_denom.clone());
+
+                let denoms_in_corrupted_asset_group = pool
+                    .asset_groups
+                    .iter()
+                    .flat_map(|(_, asset_group)| {
+                        if asset_group.is_corrupted() {
+                            asset_group.denoms().to_vec()
+                        } else {
+                            vec![]
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                let is_force_exit_corrupted_assets = tokens_out.iter().all(|coin| {
+                    let total_liquidity = pool
+                        .get_pool_asset_by_denom(&coin.denom)
+                        .map(|asset| asset.amount())
+                        .unwrap_or_default();
+
+                    let is_redeeming_total_liquidity = coin.amount == total_liquidity;
+                    let is_under_corrupted_asset_group =
+                        denoms_in_corrupted_asset_group.contains(&coin.denom);
+
+                    is_redeeming_total_liquidity
+                        && (is_under_corrupted_asset_group || pool.is_corrupted_asset(&coin.denom))
+                });
+
+                // If all tokens out are corrupted assets and exit with all remaining liquidity
+                // then ignore the limit and remove the corrupted assets from the pool
+                if is_force_exit_corrupted_assets {
+                    pool.unchecked_exit_pool(&tokens_out)?;
+                } else {
+                    let run_pool = |_: Deps, mut pool: TransmuterPool| {
+                        pool.exit_pool(&tokens_out)?;
+                        Ok((pool, token_in.clone()))
+                    };
+
+                    let rebalancing_adjustment =
+                        |pool: TransmuterPool, token_in: Coin, total_adjustment_value: Int256| {
+                            let std_norm_factor = pool.std_norm_factor()?;
+
+                            // If adjustment value is negative, fee take from the token_in, so we require addtional token_in // to pay for the fee.
+                            // Otherwise, return the token_in as is
+                            let (token_in, adjustment) =
+                                match total_adjustment_value.cmp(&Int256::zero()) {
+                                    // negative adjustment value means fee deduction from token_in
+                                    Ordering::Less => {
+                                        let fee = convert_amount(
+                                            total_adjustment_value.abs().try_into()?,
+                                            std_norm_factor,
+                                            token_in_norm_factor,
+                                            // rounding up means slightly more fee than required, keeps the incentive pool healthy
+                                            &crate::asset::Rounding::Up,
+                                        )?;
+
+                                        let token_in_amount = token_in.amount.checked_add(fee)?;
+
+                                        (
+                                            coin(token_in_amount.u128(), token_in.denom.clone()),
+                                            Adjustment::DeductFee {
+                                                fee: coin(fee.u128(), token_in.denom.clone()),
+                                            },
+                                        )
+                                    }
+                                    // positive adjustment value means incentive credit to the beneficiary
+                                    Ordering::Greater => (
+                                        token_in,
+                                        Adjustment::CreditIncentive {
+                                            incentive: total_adjustment_value.abs().try_into()?,
+                                        },
+                                    ),
+                                    // zero adjustment means no adjustment
+                                    Ordering::Equal => (token_in, Adjustment::None),
+                                };
+
+                            let token_in_amount = token_in.amount.clone();
+
+                            ensure!(
+                                token_in_amount <= token_in_max_amount,
+                                ContractError::ExcessiveRequiredTokenIn {
+                                    limit: token_in_max_amount,
+                                    required: token_in_amount,
+                                }
+                            );
+
+                            Ok((token_in, adjustment))
+                        };
+
+                    (pool, token_in, _) = self.rebalancer_pass(
+                        deps.branch(),
+                        pool,
+                        &sender,
+                        run_pool,
+                        rebalancing_adjustment,
+                    )?;
+                }
 
                 let response = set_data_if_sudo(
                     response,
                     &entrypoint,
                     &SwapExactAmountOutResponseData {
-                        token_in_amount: in_amount,
+                        token_in_amount: token_in.amount,
                     },
                 )?;
 
-                (in_amount, tokens_out.to_vec(), response)
+                (token_in.amount, tokens_out.to_vec(), response)
             }
         };
 
@@ -421,52 +623,6 @@ impl Transmuter {
             }
         }?
         .to_string();
-
-        let denoms_in_corrupted_asset_group = pool
-            .asset_groups
-            .iter()
-            .flat_map(|(_, asset_group)| {
-                if asset_group.is_corrupted() {
-                    asset_group.denoms().to_vec()
-                } else {
-                    vec![]
-                }
-            })
-            .collect::<Vec<_>>();
-
-        // TODO: move this logic into rebalancing pass
-        let is_force_exit_corrupted_assets = tokens_out.iter().all(|coin| {
-            let total_liquidity = pool
-                .get_pool_asset_by_denom(&coin.denom)
-                .map(|asset| asset.amount())
-                .unwrap_or_default();
-
-            let is_redeeming_total_liquidity = coin.amount == total_liquidity;
-            let is_under_corrupted_asset_group =
-                denoms_in_corrupted_asset_group.contains(&coin.denom);
-
-            is_redeeming_total_liquidity
-                && (is_under_corrupted_asset_group || pool.is_corrupted_asset(&coin.denom))
-        });
-
-        // If all tokens out are corrupted assets and exit with all remaining liquidity
-        // then ignore the limit and remove the corrupted assets from the pool
-        if is_force_exit_corrupted_assets {
-            // TODO: Do we need to handle incentive here still?
-            pool.unchecked_exit_pool(&tokens_out)?;
-        } else {
-            (pool, _, _) = self.rebalancer_pass(
-                deps.branch(),
-                pool,
-                &sender,
-                |_, mut pool| {
-                    pool.exit_pool(&tokens_out)?;
-                    // TODO: add fee deduction  / incentive credit here
-                    Ok((pool, ()))
-                },
-                |_, output, _| Ok((output, Adjustment::None)),
-            )?;
-        }
 
         self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
 
@@ -847,8 +1003,6 @@ impl Transmuter {
                             updated_weight,
                             rebalancing_config.clone(),
                         )?;
-
-                        dbg!(scope, prev_weight, updated_weight, adjustment);
 
                         total_adjustment_rate = total_adjustment_rate.checked_add(adjustment)?;
                     }

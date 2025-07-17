@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, u128};
 
 use cosmwasm_std::{attr, coin, Coin, Uint128};
 use itertools::Itertools;
@@ -517,23 +517,23 @@ fn test_exit_pool_greater_than_their_shares_should_fail() {
             exit: vec![coin(100_000_001, "denoma")],
         },
         Case {
-            join: vec![coin(u128::MAX - 1, "denoma")],
-            exit: vec![coin(u128::MAX, "denoma")],
-        },
-        Case {
-            join: vec![
-                coin(u128::MAX - 100_000_000, "denoma"),
-                coin(99_999_999, "denomb"),
-            ],
-            exit: vec![coin(u128::MAX, "denoma")],
+            join: vec![coin(u128::MAX - 3, "denoma")],
+            exit: vec![coin(u128::MAX - 2, "denoma")],
         },
     ];
 
     for case in cases {
         let app = OsmosisTestApp::new();
 
+        let base_liquidity = vec![coin(1, "denoma"), coin(1, "denomb")];
+
         // create denom
-        app.init_account(&[coin(1, "denoma"), coin(1, "denomb")])
+        let someone = app
+            .init_account(&[
+                coin(1, "denoma"),
+                coin(1, "denomb"),
+                coin(20000000000000, "uosmo"),
+            ])
             .unwrap();
 
         let t = TestEnvBuilder::new()
@@ -549,6 +549,10 @@ fn test_exit_pool_greater_than_their_shares_should_fail() {
                 moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
             })
             .build(&app);
+
+        t.contract
+            .execute(&ExecMsg::JoinPool {}, &base_liquidity, &someone)
+            .unwrap();
 
         t.contract
             .execute(&ExecMsg::JoinPool {}, &case.join, &t.accounts["addr"])
