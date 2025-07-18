@@ -320,7 +320,7 @@ impl Transmuter {
 
         let response = Response::new();
 
-        let (in_amount, tokens_out, response) = match constraint {
+        let (in_amount, tokens_out, adjustment, response) = match constraint {
             SwapFromAlloyedConstraint::ExactIn {
                 token_out_denom,
                 token_out_min_amount,
@@ -338,6 +338,7 @@ impl Transmuter {
 
                 let mut token_out = coin(out_amount.u128(), token_out_denom);
                 let tokens_out = vec![token_out.clone()];
+                let mut adjustment = Adjustment::None;
 
                 let denoms_in_corrupted_asset_group = pool
                     .asset_groups
@@ -351,7 +352,6 @@ impl Transmuter {
                     })
                     .collect::<Vec<_>>();
 
-                // TODO: move this logic into rebalancing pass
                 let is_force_exit_corrupted_assets = tokens_out.iter().all(|coin| {
                     let total_liquidity = pool
                         .get_pool_asset_by_denom(&coin.denom)
@@ -394,6 +394,7 @@ impl Transmuter {
                                             // rounding up means slightly more fee than required, keeps the incentive pool healthy
                                             &crate::asset::Rounding::Up,
                                         )?;
+
                                         let token_out_amount: Uint128 =
                                             token_out.amount.checked_sub(fee_amount)?;
                                         let token_out =
@@ -427,7 +428,7 @@ impl Transmuter {
                             Ok((token_out, adjustment))
                         };
 
-                    (pool, token_out, _) = self.rebalancer_pass(
+                    (pool, token_out, adjustment) = self.rebalancer_pass(
                         deps.branch(),
                         pool,
                         &sender,
@@ -446,7 +447,7 @@ impl Transmuter {
 
                 let tokens_out = vec![token_out];
 
-                (token_in_amount, tokens_out, response)
+                (token_in_amount, tokens_out, adjustment, response)
             }
             SwapFromAlloyedConstraint::ExactOut {
                 tokens_out,
@@ -465,6 +466,7 @@ impl Transmuter {
 
                 let token_in_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
                 let mut token_in = coin(in_amount.u128(), token_in_denom.clone());
+                let mut adjustment = Adjustment::None;
 
                 let denoms_in_corrupted_asset_group = pool
                     .asset_groups
@@ -553,7 +555,7 @@ impl Transmuter {
                             Ok((token_in, adjustment))
                         };
 
-                    (pool, token_in, _) = self.rebalancer_pass(
+                    (pool, token_in, adjustment) = self.rebalancer_pass(
                         deps.branch(),
                         pool,
                         &sender,
@@ -570,7 +572,7 @@ impl Transmuter {
                     },
                 )?;
 
-                (token_in.amount, tokens_out.to_vec(), response)
+                (token_in.amount, tokens_out.to_vec(), adjustment, response)
             }
         };
 
@@ -633,8 +635,17 @@ impl Transmuter {
             amount: tokens_out,
         };
 
+        let burn_amount = match (constraint, adjustment) {
+            // If the constraint is exact out, and the adjustment is deduct fee, it means we deduct fee from in amount, which is alloyed
+            // In that case we keep the fee portion in contract and burn the rest
+            (SwapFromAlloyedConstraint::ExactOut { .. }, Adjustment::DeductFee { fee }) => {
+                in_amount.checked_sub(fee.amount)?
+            }
+            _ => in_amount,
+        };
+
         let alloyed_asset_to_burn = coin(
-            in_amount.u128(),
+            burn_amount.u128(),
             self.alloyed_asset.get_alloyed_denom(deps.storage)?,
         )
         .into();
@@ -1275,7 +1286,7 @@ mod tests {
         testing::{
             mock_dependencies, mock_env, MockApi, MockQuerier, MockStorage, MOCK_CONTRACT_ADDR,
         },
-        CosmosMsg, OwnedDeps,
+        CosmosMsg, OwnedDeps, SubMsg,
     };
     use itertools::Itertools;
     use osmosis_test_tube::cosmrs::proto::prost::Message;
@@ -2464,7 +2475,7 @@ mod tests {
         let sender = Addr::unchecked("sender");
         let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
             sender.to_string().as_str(),
-            &[coin(2000000000000u128, "alloyed")],
+            &[coin(20_000_000_000_000u128, "alloyed")],
         )]);
 
         let transmuter = Transmuter::new();
@@ -3146,6 +3157,388 @@ mod tests {
             .get_all_incentive_credits(&deps.storage, None, None)
             .unwrap();
         assert_eq!(credits, vec![(sender, Uint128::from(500_000_000_000u128))]);
+    }
+
+    #[test]
+    fn test_swap_alloyed_asset_to_tokens_exact_in_with_fee_deduction_and_incentivization() {
+        let transmuter = Transmuter::new();
+
+        let (sender, mut deps) = setup_fee_deduction_test();
+
+        // 2_000_000_000_000 alloyed in -> denom1
+
+        // fee(denom1) = 20_000_000_000_000 * (5% * 1%) = 100_000_000_000
+        // fee(group1) = 20_000_000_000_000 * (5% * 1%) = 100_000_000_000
+        let token_in_amount = Uint128::from(2_000_000_000_000u128);
+        let token_out_amount_before_fee = Uint128::from(20_000_000_000u128);
+        let fee = Uint128::from(222_222_223u128);
+        let token_out_amount = token_out_amount_before_fee - fee;
+
+        let res = transmuter.swap_alloyed_asset_to_tokens(
+            Entrypoint::Exec,
+            SwapFromAlloyedConstraint::ExactIn {
+                token_out_denom: "denom1",
+                token_out_min_amount: token_out_amount + Uint128::from(1u128),
+                token_in_amount,
+            },
+            BurnTarget::SenderAccount {},
+            sender.clone(),
+            deps.as_mut(),
+            mock_env(),
+        );
+
+        assert_eq!(
+            res,
+            Err(ContractError::InsufficientTokenOut {
+                min_required: token_out_amount + Uint128::from(1u128),
+                amount_out: token_out_amount,
+            })
+        );
+
+        let res = transmuter
+            .swap_alloyed_asset_to_tokens(
+                Entrypoint::Exec,
+                SwapFromAlloyedConstraint::ExactIn {
+                    token_out_denom: "denom1",
+                    token_out_min_amount: token_out_amount,
+                    token_in_amount,
+                },
+                BurnTarget::SenderAccount {},
+                sender.clone(),
+                deps.as_mut(),
+                mock_env(),
+            )
+            .unwrap();
+
+        let burn_msg = res
+            .messages
+            .get(0)
+            .cloned()
+            .map(|m| {
+                let CosmosMsg::Stargate { value, .. } = m.msg else {
+                    panic!("must be Startgate message")
+                };
+                MsgBurn::decode(value.as_slice()).unwrap()
+            })
+            .unwrap();
+
+        assert_eq!(
+            burn_msg,
+            MsgBurn {
+                burn_from_address: sender.to_string(),
+                amount: Some(coin(token_in_amount.u128(), "alloyed").into()),
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+            }
+        );
+
+        let send_msg = res.messages.get(1).cloned().unwrap();
+
+        assert_eq!(
+            send_msg,
+            SubMsg::new(BankMsg::Send {
+                to_address: sender.to_string(),
+                amount: vec![coin(token_out_amount.u128(), "denom1")],
+            })
+        );
+
+        assert_eq!(res.messages.len(), 2);
+
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+
+        // Verify pool state after exit
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom1").unwrap().amount(),
+            Uint128::from(100_000_000_000u128) - token_out_amount_before_fee
+        );
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom2").unwrap().amount(),
+            Uint128::from(500_000_000_000u128)
+        );
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom3").unwrap().amount(),
+            Uint128::from(5_000_000_000_000u128)
+        );
+
+        // Verify fee is collected (minted to contract)
+        let incentive_pool_balances = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap();
+
+        // Fee should be collected in alloyed asset
+        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "denom1")]);
+
+        let credits = transmuter
+            .incentive_pool
+            .get_all_incentive_credits(&deps.storage, None, None)
+            .unwrap();
+        assert_eq!(credits, vec![]);
+
+        // rebalance it back
+
+        let tokens_out = vec![coin(200_000_000_000u128, "denom2")];
+
+        let res = transmuter
+            .swap_alloyed_asset_to_tokens(
+                Entrypoint::Exec,
+                SwapFromAlloyedConstraint::ExactOut {
+                    tokens_out: &tokens_out,
+                    token_in_max_amount: Uint128::from(2_000_000_000_000u128),
+                },
+                BurnTarget::SenderAccount {},
+                sender.clone(),
+                deps.as_mut(),
+                mock_env(),
+            )
+            .unwrap();
+
+        let burn_msg = res
+            .messages
+            .get(0)
+            .cloned()
+            .map(|m| {
+                let CosmosMsg::Stargate { value, .. } = m.msg else {
+                    panic!("must be Startgate message")
+                };
+                MsgBurn::decode(value.as_slice()).unwrap()
+            })
+            .unwrap();
+
+        assert_eq!(
+            burn_msg,
+            MsgBurn {
+                burn_from_address: sender.to_string(),
+                amount: Some(coin(2_000_000_000_000u128, "alloyed").into()),
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+            }
+        );
+
+        let send_msg = res.messages.get(1).cloned().unwrap();
+
+        assert_eq!(
+            send_msg,
+            SubMsg::new(BankMsg::Send {
+                to_address: sender.to_string(),
+                amount: tokens_out.clone(),
+            })
+        );
+
+        assert_eq!(res.messages.len(), 2);
+
+        // check pool state
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom2").unwrap().amount(),
+            Uint128::from(500_000_000_000u128 - 200_000_000_000u128)
+        );
+
+        // check incentive pool state
+        let incentive_pool_balances = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap();
+        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "denom1")]);
+
+        let incetive_credits = transmuter
+            .incentive_pool
+            .get_all_incentive_credits(&deps.storage, None, None)
+            .unwrap();
+        assert_eq!(
+            incetive_credits,
+            vec![(sender, Uint128::from(19_999_999_999u128))]
+        );
+    }
+
+    #[test]
+    fn test_swap_alloyed_asset_to_tokens_exact_out_with_fee_deduction_and_incentivization() {
+        let transmuter = Transmuter::new();
+
+        let (sender, mut deps) = setup_fee_deduction_test();
+
+        // Multiple tokens out that will make denom1 40%, group1 60%
+        let tokens_out = vec![
+            coin(80_000_000_000u128, "denom1"), // remove 80_000_000_000u128 * 100 = 8_000_000_000_000 normalized
+            coin(300_000_000_000u128, "denom2"), // remove 300_000_000_000u128 * 10 = 3_000_000_000_000 normalized
+            coin(4_000_000_000_000u128, "denom3"), // remove 4_000_000_000_000u128 * 1 = 4_000_000_000_000 normalized
+        ];
+
+        // fee(denom1) = 20_000_000_000_000 * (5% * 1%) = 100_000_000_000
+        // fee(group1) = 20_000_000_000_000 * (5% * 1%) = 100_000_000_000
+        let amount_in_before_fee = Uint128::from(15_000_000_000_000u128);
+        let fee = Uint128::from(200_000_000_000u128);
+        let token_in_amount = amount_in_before_fee + fee;
+
+        let res = transmuter.swap_alloyed_asset_to_tokens(
+            Entrypoint::Exec,
+            SwapFromAlloyedConstraint::ExactOut {
+                tokens_out: &tokens_out,
+                token_in_max_amount: token_in_amount - Uint128::from(1u128),
+            },
+            BurnTarget::SenderAccount {},
+            sender.clone(),
+            deps.as_mut(),
+            mock_env(),
+        );
+
+        assert_eq!(
+            res,
+            Err(ContractError::ExcessiveRequiredTokenIn {
+                limit: token_in_amount - Uint128::from(1u128),
+                required: token_in_amount,
+            })
+        );
+
+        let res = transmuter
+            .swap_alloyed_asset_to_tokens(
+                Entrypoint::Exec,
+                SwapFromAlloyedConstraint::ExactOut {
+                    tokens_out: &tokens_out,
+                    token_in_max_amount: token_in_amount,
+                },
+                BurnTarget::SenderAccount {},
+                sender.clone(),
+                deps.as_mut(),
+                mock_env(),
+            )
+            .unwrap();
+
+        let burn_msg = res
+            .messages
+            .get(0)
+            .cloned()
+            .map(|m| {
+                let CosmosMsg::Stargate { value, .. } = m.msg else {
+                    panic!("must be Startgate message")
+                };
+                MsgBurn::decode(value.as_slice()).unwrap()
+            })
+            .unwrap();
+
+        assert_eq!(
+            burn_msg,
+            MsgBurn {
+                burn_from_address: sender.to_string(),
+                amount: Some(coin(amount_in_before_fee.u128(), "alloyed").into()),
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+            }
+        );
+
+        let send_msg = res.messages.get(1).cloned().unwrap();
+
+        assert_eq!(
+            send_msg,
+            SubMsg::new(BankMsg::Send {
+                to_address: sender.to_string(),
+                amount: tokens_out.clone(),
+            })
+        );
+
+        assert_eq!(res.messages.len(), 2);
+
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+
+        // Verify pool state after exit
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom1").unwrap().amount(),
+            Uint128::from(100_000_000_000u128) - tokens_out[0].amount
+        );
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom2").unwrap().amount(),
+            Uint128::from(500_000_000_000u128) - tokens_out[1].amount
+        );
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom3").unwrap().amount(),
+            Uint128::from(5_000_000_000_000u128) - tokens_out[2].amount
+        );
+
+        // Verify fee is collected (minted to contract)
+        let incentive_pool_balances = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap();
+
+        // Fee should be collected in alloyed asset
+        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "alloyed")]);
+
+        let credits = transmuter
+            .incentive_pool
+            .get_all_incentive_credits(&deps.storage, None, None)
+            .unwrap();
+        assert_eq!(credits, vec![]);
+
+        // rebalance it back
+
+        let tokens_out = vec![coin(100_000_000_000u128, "denom2")];
+
+        let res = transmuter
+            .swap_alloyed_asset_to_tokens(
+                Entrypoint::Exec,
+                SwapFromAlloyedConstraint::ExactOut {
+                    tokens_out: &tokens_out,
+                    token_in_max_amount: Uint128::from(1_000_000_000_000u128),
+                },
+                BurnTarget::SenderAccount {},
+                sender.clone(),
+                deps.as_mut(),
+                mock_env(),
+            )
+            .unwrap();
+
+        let burn_msg = res
+            .messages
+            .get(0)
+            .cloned()
+            .map(|m| {
+                let CosmosMsg::Stargate { value, .. } = m.msg else {
+                    panic!("must be Startgate message")
+                };
+                MsgBurn::decode(value.as_slice()).unwrap()
+            })
+            .unwrap();
+
+        assert_eq!(
+            burn_msg,
+            MsgBurn {
+                burn_from_address: sender.to_string(),
+                amount: Some(coin(1_000_000_000_000u128, "alloyed").into()),
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+            }
+        );
+
+        let send_msg = res.messages.get(1).cloned().unwrap();
+
+        assert_eq!(
+            send_msg,
+            SubMsg::new(BankMsg::Send {
+                to_address: sender.to_string(),
+                amount: tokens_out.clone(),
+            })
+        );
+
+        assert_eq!(res.messages.len(), 2);
+
+        // check pool state
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom3").unwrap().amount(),
+            Uint128::from(1_000_000_000_000u128)
+        );
+
+        // check incentive pool state
+        let incentive_pool_balances = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap();
+        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "alloyed")]);
+
+        let incetive_credits = transmuter
+            .incentive_pool
+            .get_all_incentive_credits(&deps.storage, None, None)
+            .unwrap();
+        assert_eq!(
+            incetive_credits,
+            vec![(sender, Uint128::from(50_000_000_000u128))]
+        );
     }
 }
 
