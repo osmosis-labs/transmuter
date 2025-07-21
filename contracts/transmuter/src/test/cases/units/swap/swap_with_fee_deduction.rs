@@ -8,13 +8,16 @@ use osmosis_std::types::{
 use osmosis_test_tube::{Account, Bank, Module, OsmosisTestApp};
 use transmuter_math::rebalancing::config::RebalancingConfig;
 
-use crate::test::{modules::cosmwasm_pool::CosmwasmPool, test_env::TestEnv};
 use crate::{
     asset::AssetConfig,
     contract::sv::{ExecMsg, QueryMsg},
     contract::{GetIncentivePoolBalancesResponse, GetTotalPoolLiquidityResponse},
     scope::Scope,
     test::test_env::TestEnvBuilder,
+};
+use crate::{
+    contract::GetTotalSharesResponse,
+    test::{modules::cosmwasm_pool::CosmwasmPool, test_env::TestEnv},
 };
 
 const DENOM1_INITIAL: u128 = 100_000_000_000;
@@ -125,12 +128,177 @@ fn test_swap_exact_amount_in_with_fee_deduction() {
     verify_contract_balances(&t, expected_fee, "denom2");
 }
 
+#[test]
+fn test_swap_tokens_to_alloyed_asset_exact_in_with_fee_deduction() {
+    let app = OsmosisTestApp::new();
+    let t = setup_test_env(&app);
+
+    let bank = Bank::new(&app);
+
+    let initial_total_alloyed_asset_supply = t
+        .contract
+        .query::<GetTotalSharesResponse>(&QueryMsg::GetTotalShares {})
+        .unwrap()
+        .total_shares;
+
+    // Query the share denom (alloyed asset denom)
+    let share_denom: String = t
+        .contract
+        .query::<crate::contract::GetShareDenomResponse>(&QueryMsg::GetShareDenom {})
+        .unwrap()
+        .share_denom;
+
+    // Multiple tokens in that will make denom1 55%, denom2 25%
+    let tokens_in = vec![
+        coin(37_500_000_000u128, "denom1"), // 3_750_000_000_000 normalized
+        coin(125_000_000_000u128, "denom2"), // 1_250_000_000_000 normalized
+    ];
+
+    // fee(denom1) = 25_000_000_000_000u128 * (5% * 1%) = 12_500_000_000u128
+    // fee(group1) = 25_000_000_000_000u128 * 0% = 0
+    let amount_out_before_fee = Uint128::from(3_750_000_000_000u128 + 1_250_000_000_000u128);
+    let fee = Uint128::from(125_000_000_000u128);
+    let token_out_amount = amount_out_before_fee - fee;
+
+    // Try with correct min out (should succeed)
+    t.contract
+        .execute(&ExecMsg::JoinPool {}, &tokens_in, &t.accounts["swapper"])
+        .unwrap();
+
+    // The contract should have minted the correct fee and output
+    verify_contract_balances(&t, fee, &share_denom);
+
+    // Check that the swapper has received the correct amount of the share denom
+    let balance = bank
+        .query_balance(&QueryBalanceRequest {
+            address: t.accounts["swapper"].address().to_string(),
+            denom: share_denom.clone(),
+        })
+        .unwrap()
+        .balance
+        .unwrap()
+        .amount
+        .parse::<u128>()
+        .unwrap();
+    assert_eq!(balance, token_out_amount.u128());
+
+    // Check for total alloyed asset total supply
+    let total_shares = t
+        .contract
+        .query::<GetTotalSharesResponse>(&QueryMsg::GetTotalShares {})
+        .unwrap()
+        .total_shares;
+
+    assert_eq!(
+        total_shares,
+        initial_total_alloyed_asset_supply + amount_out_before_fee
+    );
+}
+
+#[test]
+fn test_swap_tokens_to_alloyed_asset_exact_out_with_fee_deduction() {
+    let app = OsmosisTestApp::new();
+    let t = setup_test_env(&app);
+    let cp = CosmwasmPool::new(&app);
+    let bank = Bank::new(&app);
+
+    let initial_total_alloyed_asset_supply = t
+        .contract
+        .query::<GetTotalSharesResponse>(&QueryMsg::GetTotalShares {})
+        .unwrap()
+        .total_shares;
+
+    // Query the share denom (alloyed asset denom)
+    let share_denom: String = t
+        .contract
+        .query::<crate::contract::GetShareDenomResponse>(&QueryMsg::GetShareDenom {})
+        .unwrap()
+        .share_denom;
+
+    // fee(denom1) = 25_000_000_000_000u128 * ((5% * 1%) + (5% * 2%)) = 37_500_000_000
+    // fee(group1) = 25_000_000_000_000u128 * (5% * 1%) = 12_500_000_000
+    // = 50_000_000_000u128
+    let token_out_amount = Uint128::from(5_000_000_000_000u128);
+    let amount_in_before_fee = Uint128::from(50_000_000_000u128); // 5_000_000_000_000 / 100
+    let fee = Uint128::from(5_000_000_000u128); // 50_000_000_000 based on the fee calculation
+    let token_in_amount = amount_in_before_fee + fee;
+
+    // Try with max in too low (should fail)
+    let err = cp
+        .swap_exact_amount_out(
+            MsgSwapExactAmountOut {
+                sender: t.accounts["swapper"].address(),
+                routes: vec![SwapAmountOutRoute {
+                    pool_id: t.contract.pool_id,
+                    token_in_denom: "denom1".to_string(),
+                }],
+                token_out: Some(coin(token_out_amount.u128(), &share_denom).into()),
+                token_in_max_amount: (token_in_amount - Uint128::from(1u128)).to_string(),
+            },
+            &t.accounts["swapper"],
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("Excessive token in required"));
+
+    // Try with correct max in (should succeed)
+    cp.swap_exact_amount_out(
+        MsgSwapExactAmountOut {
+            sender: t.accounts["swapper"].address(),
+            routes: vec![SwapAmountOutRoute {
+                pool_id: t.contract.pool_id,
+                token_in_denom: "denom1".to_string(),
+            }],
+            token_out: Some(coin(token_out_amount.u128(), &share_denom).into()),
+            token_in_max_amount: token_in_amount.to_string(),
+        },
+        &t.accounts["swapper"],
+    )
+    .unwrap();
+
+    // The contract should have minted the correct fee and output
+    verify_contract_balances(&t, fee, "denom1");
+
+    // Check that the swapper has received the correct amount of the share denom
+    let balance = bank
+        .query_balance(&QueryBalanceRequest {
+            address: t.accounts["swapper"].address().to_string(),
+            denom: share_denom.clone(),
+        })
+        .unwrap()
+        .balance
+        .unwrap()
+        .amount
+        .parse::<u128>()
+        .unwrap();
+    assert_eq!(balance, token_out_amount.u128());
+
+    // Check for total alloyed asset total supply
+    let total_shares = t
+        .contract
+        .query::<crate::contract::GetTotalSharesResponse>(&QueryMsg::GetTotalShares {})
+        .unwrap()
+        .total_shares;
+
+    // The total supply should have increased by the output amount
+    assert_eq!(
+        total_shares,
+        initial_total_alloyed_asset_supply + token_out_amount
+    );
+}
+
 fn setup_test_env<'a>(app: &'a OsmosisTestApp) -> TestEnv<'a> {
     let admin = app.init_account(&[coin(100_000u128, "uosmo")]).unwrap();
 
     let t = TestEnvBuilder::new()
         .with_account("admin", vec![])
-        .with_account("swapper", vec![coin(1_000_000_000_000, "denom1")])
+        .with_account(
+            "swapper",
+            vec![
+                coin(1_000_000_000_000, "denom1"),
+                coin(1_000_000_000_000, "denom2"),
+                coin(1_000_000_000_000, "denom3"),
+            ],
+        )
         .with_account(
             "provider",
             vec![

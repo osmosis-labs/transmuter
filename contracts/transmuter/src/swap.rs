@@ -3541,8 +3541,3 @@ mod tests {
         );
     }
 }
-
-// TODO:
-// - separated rebalancing_adjustment into another function to pass in here, instead of this saga-like pattern
-// - complete swap_alloyed_asset_to_tokens
-// - integration test for alloyed case
