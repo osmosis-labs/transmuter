@@ -34,7 +34,7 @@ fn test_swap_exact_amount_out_with_fee_deduction() {
     // This swap makes denom1 weight go from 50% to 60%, triggering fee
     let token_out = coin(200_000_000_000u128, "denom2");
     let amount_in_before_fee = Uint128::from(20_000_000_000u128);
-    let expected_fee = Uint128::from(1_000_000_000u128) + Uint128::from(3_000_000_000u128); // group1 + denom1 fees
+    let expected_fee = Uint128::from(6_000_000_000u128); // group1 + denom1 fees
     let token_in_amount = amount_in_before_fee + expected_fee;
 
     // Test with insufficient max amount (should fail)
@@ -86,7 +86,7 @@ fn test_swap_exact_amount_in_with_fee_deduction() {
     // Test the swap that should require fee deduction from output
     let token_in = coin(20_000_000_000u128, "denom1");
     let amount_out_before_fee = Uint128::from(200_000_000_000u128);
-    let expected_fee = Uint128::from(10_000_000_000u128) + Uint128::from(30_000_000_000u128); // group1 + denom1 fees
+    let expected_fee = Uint128::from(60_000_000_000u128); // group1 + denom1 fees
     let token_out_amount = amount_out_before_fee - expected_fee;
 
     // Test with min amount too high (should fail)
@@ -154,10 +154,10 @@ fn test_swap_tokens_to_alloyed_asset_exact_in_with_fee_deduction() {
         coin(125_000_000_000u128, "denom2"), // 1_250_000_000_000 normalized
     ];
 
-    // fee(denom1) = 25_000_000_000_000u128 * (5% * 1%) = 12_500_000_000u128
+    // fee(denom1) = 25_000_000_000_000u128 * (5% * 2%) = 250_000_000_000u128
     // fee(group1) = 25_000_000_000_000u128 * 0% = 0
     let amount_out_before_fee = Uint128::from(3_750_000_000_000u128 + 1_250_000_000_000u128);
-    let fee = Uint128::from(125_000_000_000u128);
+    let fee = Uint128::from(250_000_000_000u128);
     let token_out_amount = amount_out_before_fee - fee;
 
     // Try with correct min out (should succeed)
@@ -215,12 +215,12 @@ fn test_swap_tokens_to_alloyed_asset_exact_out_with_fee_deduction() {
         .unwrap()
         .share_denom;
 
-    // fee(denom1) = 25_000_000_000_000u128 * ((5% * 1%) + (5% * 2%)) = 37_500_000_000
-    // fee(group1) = 25_000_000_000_000u128 * (5% * 1%) = 12_500_000_000
+    // fee(denom1) = 25_000_000_000_000u128 * ((5% * 2%) + (5% * 2%)) = 50_000_000_000
+    // fee(group1) = 25_000_000_000_000u128 * (5% * 2%) = 25_000_000_000
     // = 50_000_000_000u128
     let token_out_amount = Uint128::from(5_000_000_000_000u128);
     let amount_in_before_fee = Uint128::from(50_000_000_000u128); // 5_000_000_000_000 / 100
-    let fee = Uint128::from(5_000_000_000u128); // 50_000_000_000 based on the fee calculation
+    let fee = Uint128::from(7_500_000_000u128);
     let token_in_amount = amount_in_before_fee + fee;
 
     // Try with max in too low (should fail)
@@ -309,7 +309,7 @@ fn test_swap_alloyed_asset_to_tokens_exact_in_with_fee_deduction() {
     // 2_000_000_000_000 alloyed in -> denom1
     let token_in_amount = Uint128::from(2_000_000_000_000u128);
     let token_out_amount_before_fee = Uint128::from(20_000_000_000u128);
-    let fee = Uint128::from(222_222_223u128);
+    let fee = Uint128::from(444_444_445u128);
     let token_out_amount = token_out_amount_before_fee - fee;
 
     // send share_denom from provider to swapper with token_in_amount
@@ -411,10 +411,10 @@ fn test_swap_alloyed_asset_to_tokens_exact_out_with_fee_deduction() {
         coin(4_000_000_000_000u128, "denom3"),
     ];
 
-    // fee(denom1) = 20_000_000_000_000 * (5% * 1%) = 100_000_000_000
-    // fee(group1) = 20_000_000_000_000 * (5% * 1%) = 100_000_000_000
+    // fee(denom1) = 20_000_000_000_000 * (5% * 2%) = 200_000_000_000
+    // fee(group1) = 20_000_000_000_000 * (5% * 2%) = 200_000_000_000
     let amount_in_before_fee = Uint128::from(15_000_000_000_000u128);
-    let fee = Uint128::from(200_000_000_000u128);
+    let fee = Uint128::from(400_000_000_000u128);
     let token_in_amount = amount_in_before_fee + fee;
 
     // send share_denom from provider to swapper with token_in_amount

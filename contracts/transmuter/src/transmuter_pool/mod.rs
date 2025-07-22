@@ -86,7 +86,7 @@ impl TransmuterPool {
                 expected_denom: self
                     .pool_assets
                     .iter()
-                    .map(|pool_asset| pool_asset.denom().to_string())
+                    .map(|pool_asset: &Asset| pool_asset.denom().to_string())
                     .collect(),
             })
     }

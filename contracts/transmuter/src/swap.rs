@@ -6,15 +6,17 @@ use std::{
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
     coin, ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Env,
-    Int256, Response, SignedDecimal256, StdError, Storage, Uint128,
+    Int256, Response, SignedDecimal256, StdError, Storage, Uint128, Uint256,
 };
 use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
 use serde::Serialize;
-use transmuter_math::rebalancing::{compute_total_effective_adjustment_rate, round_adjustment};
+use transmuter_math::rebalancing::{
+    compute_total_effective_adjustment_rate, config::RebalancingConfig, round_adjustment,
+};
 
 use crate::{
     alloyed_asset::{swap_from_alloyed, swap_to_alloyed},
-    asset::convert_amount,
+    asset::{convert_amount, Rounding},
     contract::Transmuter,
     corruptable::Corruptable,
     scope::Scope,
@@ -994,6 +996,17 @@ impl Transmuter {
         // in case one of token in or out is alloyed, balance_total is updated
         let total_balance_after = pool.normalized_total_balance()?;
 
+        let total_normalized_incentive_pool_balance =
+            self.total_normalized_incentive_pool_balance(deps.storage, &pool)?;
+
+        let total_incentive_credits = self
+            .incentive_pool
+            .get_total_incentive_credits(deps.storage)?;
+
+        // available incentive that can be distributed
+        let available_incentive =
+            total_normalized_incentive_pool_balance.saturating_sub(total_incentive_credits);
+
         // check limits only if pool assets are not zero, calculate adjustment value
         let mut total_adjustment_rate = SignedDecimal256::zero();
         if let Some(updated_asset_weights) = pool.asset_weights()? {
@@ -1005,15 +1018,68 @@ impl Transmuter {
                     updated_asset_group_weights,
                 )?;
 
-                for (scope, (prev_weight, updated_weight)) in scope_value_pairs.clone() {
-                    let rebalancing_configs =
+                // find total adjustment reqruied to move to all assets to ideal balance
+                let mut total_adjustment_to_ideal_required = SignedDecimal256::zero();
+                for (scope, (prev_weight, _)) in scope_value_pairs.clone() {
+                    let rebalancing_config =
                         self.rebalancer.get_config_by_scope(deps.storage, &scope)?;
-                    if let Some(rebalancing_config) = rebalancing_configs {
+                    if let Some(rebalancing_config) = rebalancing_config {
+                        let nearest_ideal_weight =
+                            rebalancing_config.nearest_ideal_weight(prev_weight);
+
+                        // find adjustment in order to move weight from current to nearest ideal weight
+                        // it will always return 0 or positive value as it moves towards ideal weight
+                        let adjustment = compute_total_effective_adjustment_rate(
+                            prev_weight,
+                            nearest_ideal_weight,
+                            rebalancing_config,
+                        )?;
+
+                        total_adjustment_to_ideal_required =
+                            total_adjustment_to_ideal_required.checked_add(adjustment)?;
+                    }
+                }
+
+                let total_balance =
+                    SignedDecimal256::from_atomics(Int256::from(total_balance_before), 0)?;
+                let total_incentive_required_for_rebalance = round_adjustment(
+                    total_adjustment_to_ideal_required.checked_mul(total_balance)?,
+                )?
+                .abs_diff(Int256::zero()); // absolute value
+
+                // incentive pool is unhealthy if total incentive required for rebalance is greater than avaialable incentive pool
+                let is_incentive_pool_unhealthy =
+                    total_incentive_required_for_rebalance > available_incentive;
+
+                for (scope, (prev_weight, updated_weight)) in scope_value_pairs.clone() {
+                    let rebalancing_config =
+                        self.rebalancer.get_config_by_scope(deps.storage, &scope)?;
+                    if let Some(rebalancing_config) = rebalancing_config {
                         let adjustment = compute_total_effective_adjustment_rate(
                             prev_weight,
                             updated_weight,
                             rebalancing_config.clone(),
                         )?;
+
+                        // raise strained rate to equal to critical if incentive pool is unhealthy and it's a fee case
+                        let adjustment = if adjustment < SignedDecimal256::zero() {
+                            let rebalancing_config = RebalancingConfig {
+                                adjustment_rate_strained: if is_incentive_pool_unhealthy {
+                                    rebalancing_config.adjustment_rate_critical
+                                } else {
+                                    rebalancing_config.adjustment_rate_strained
+                                },
+                                ..rebalancing_config
+                            };
+
+                            compute_total_effective_adjustment_rate(
+                                prev_weight,
+                                updated_weight,
+                                rebalancing_config,
+                            )?
+                        } else {
+                            adjustment
+                        };
 
                         total_adjustment_rate = total_adjustment_rate.checked_add(adjustment)?;
                     }
@@ -1134,6 +1200,40 @@ impl Transmuter {
         }
 
         Ok(())
+    }
+
+    fn total_normalized_incentive_pool_balance(
+        &self,
+        storage: &dyn Storage,
+        pool: &TransmuterPool,
+    ) -> Result<Uint256, ContractError> {
+        let std_norm_factor = pool.std_norm_factor()?;
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(storage)?;
+        let alloyed_normalization_factor = self.alloyed_asset.get_normalization_factor(storage)?;
+        self.incentive_pool
+            .get_all_pool_balances(storage)?
+            .into_iter()
+            .try_fold(
+                Uint256::zero(),
+                |acc, c| -> Result<Uint256, ContractError> {
+                    let denom_factor = if c.denom == alloyed_denom {
+                        alloyed_normalization_factor
+                    } else {
+                        pool.get_pool_asset_by_denom(&c.denom)?
+                            .normalization_factor()
+                    };
+
+                    Ok(acc.checked_add(
+                        convert_amount(
+                            c.amount,
+                            denom_factor,
+                            std_norm_factor,
+                            &Rounding::Down, // rounding down because we want to cap what's available
+                        )?
+                        .into(),
+                    )?)
+                },
+            )
     }
 }
 
@@ -1286,7 +1386,7 @@ mod tests {
         testing::{
             mock_dependencies, mock_env, MockApi, MockQuerier, MockStorage, MOCK_CONTRACT_ADDR,
         },
-        CosmosMsg, OwnedDeps, SubMsg,
+        Coins, CosmosMsg, OwnedDeps, SubMsg,
     };
     use itertools::Itertools;
     use osmosis_test_tube::cosmrs::proto::prost::Message;
@@ -2549,6 +2649,19 @@ mod tests {
             )
             .unwrap();
 
+        transmuter
+            .incentive_pool
+            .add_tokens(&mut deps.storage, &coin(100_000_000_000, "denom1"))
+            .unwrap();
+        transmuter
+            .incentive_pool
+            .add_tokens(&mut deps.storage, &coin(1_000_000_000_000, "denom2"))
+            .unwrap();
+        transmuter
+            .incentive_pool
+            .add_tokens(&mut deps.storage, &coin(10_000_000_000_000, "denom3"))
+            .unwrap();
+
         return (sender, deps);
     }
 
@@ -2556,6 +2669,13 @@ mod tests {
     fn test_swap_non_alloyed_exact_amount_out_with_fee_deduction() {
         let (sender, mut deps) = setup_fee_deduction_test();
         let transmuter = Transmuter::new();
+
+        let mut incentive_pool_balances: Coins = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
+            .unwrap();
 
         // the swap makes denom1 60%, denom2 40%
         let token_in_denom = "denom1";
@@ -2602,12 +2722,18 @@ mod tests {
             Uint128::from(500_000_000_000u128) - amount_in_before_fee * Uint128::from(10u128)
         );
 
-        let incentive_pool_balances = transmuter
-            .incentive_pool
-            .get_all_pool_balances(&deps.storage)
+        incentive_pool_balances
+            .add(coin(fee.u128(), "denom1"))
             .unwrap();
 
-        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "denom1")]);
+        let updated_incentive_pool_balances: Coins = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
+            .unwrap();
+
+        assert_eq!(updated_incentive_pool_balances, incentive_pool_balances);
 
         let response = res.unwrap();
         let data: SwapExactAmountOutResponseData = from_json(&response.data.unwrap()).unwrap();
@@ -2697,6 +2823,10 @@ mod tests {
             )
             .unwrap();
 
+        incentive_pool_balances
+            .sub(coin(fee.u128(), "denom1"))
+            .unwrap();
+
         let credits = transmuter
             .incentive_pool
             .get_all_incentive_credits(&deps.storage, None, None)
@@ -2704,18 +2834,27 @@ mod tests {
 
         assert_eq!(credits, vec![]);
 
-        let incentive_pool_balances = transmuter
+        let updated_incentive_pool_balances = transmuter
             .incentive_pool
             .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
             .unwrap();
 
-        assert_eq!(incentive_pool_balances, vec![]);
+        assert_eq!(incentive_pool_balances, updated_incentive_pool_balances);
     }
 
     #[test]
     fn test_swap_non_alloyed_exact_amount_in_with_fee_deduction() {
         let (sender, mut deps) = setup_fee_deduction_test();
         let transmuter = Transmuter::new();
+
+        let mut incentive_pool_balances: Coins = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
+            .unwrap();
 
         // the swap makes denom1 60%, denom2 40%
         // fee(group1) = 20_000_000_000_000u128 * 5% * 10% = 100_000_000_000u128 / 10
@@ -2760,12 +2899,18 @@ mod tests {
             Uint128::from(500_000_000_000u128) - amount_out_before_fee
         );
 
-        let incentive_pool_balances = transmuter
-            .incentive_pool
-            .get_all_pool_balances(&deps.storage)
+        incentive_pool_balances
+            .add(coin(fee.u128(), "denom2"))
             .unwrap();
 
-        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "denom2")]);
+        let updated_incentive_pool_balances = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
+            .unwrap();
+
+        assert_eq!(incentive_pool_balances, updated_incentive_pool_balances);
 
         let response = res.unwrap();
         let data: SwapExactAmountInResponseData = from_json(&response.data.unwrap()).unwrap();
@@ -2852,6 +2997,10 @@ mod tests {
             )
             .unwrap();
 
+        incentive_pool_balances
+            .sub(coin(fee.u128(), "denom2"))
+            .unwrap();
+
         let credits = transmuter
             .incentive_pool
             .get_all_incentive_credits(&deps.storage, None, None)
@@ -2859,12 +3008,14 @@ mod tests {
 
         assert_eq!(credits, vec![]);
 
-        let incentive_pool_balances = transmuter
+        let updated_incentive_pool_balances = transmuter
             .incentive_pool
             .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
             .unwrap();
 
-        assert_eq!(incentive_pool_balances, vec![]);
+        assert_eq!(incentive_pool_balances, updated_incentive_pool_balances);
     }
 
     #[test]
@@ -2872,6 +3023,12 @@ mod tests {
         let transmuter = Transmuter::new();
 
         let (sender, mut deps) = setup_fee_deduction_test();
+        let mut incentive_pool_balances: Coins = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
+            .unwrap();
 
         // Multiple tokens in that will make denom1 55%, denom2 25%
         let tokens_in = vec![
@@ -2954,14 +3111,20 @@ mod tests {
             Uint128::from(500_000_000_000u128) + tokens_in[1].amount
         );
 
+        incentive_pool_balances
+            .add(coin(fee.u128(), "alloyed"))
+            .unwrap();
+
         // Verify fee is collected (minted to contract)
-        let incentive_pool_balances = transmuter
+        let updated_incentive_pool_balances: Coins = transmuter
             .incentive_pool
             .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
             .unwrap();
 
         // Fee should be collected in alloyed asset
-        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "alloyed")]);
+        assert_eq!(incentive_pool_balances, updated_incentive_pool_balances);
 
         let credits = transmuter
             .incentive_pool
@@ -3012,11 +3175,13 @@ mod tests {
         );
 
         // check incentive pool state
-        let incentive_pool_balances = transmuter
+        let updated_incentive_pool_balances: Coins = transmuter
             .incentive_pool
             .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
             .unwrap();
-        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "alloyed")]);
+        assert_eq!(incentive_pool_balances, updated_incentive_pool_balances);
     }
 
     #[test]
@@ -3024,6 +3189,12 @@ mod tests {
         let transmuter = Transmuter::new();
 
         let (sender, mut deps) = setup_fee_deduction_test();
+        let mut incentive_pool_balances: Coins = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
+            .unwrap();
 
         // fee(denom1) = 25_000_000_000_000u128 * ((5% * 1%) + (5% * 2%)) = 37_500_000_000
         // fee(group1) = 25_000_000_000_000u128 * (5% * 1%) = 12_500_000_000
@@ -3094,14 +3265,20 @@ mod tests {
             Uint128::from(100_000_000_000u128) + amount_in_before_fee
         );
 
+        incentive_pool_balances
+            .add(coin(fee.u128(), "denom1"))
+            .unwrap();
+
         // Verify fee is collected
-        let incentive_pool_balances = transmuter
+        let updated_incentive_pool_balances: Coins = transmuter
             .incentive_pool
             .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
             .unwrap();
 
         // Fee should be collected in denom1
-        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "denom1")]);
+        assert_eq!(incentive_pool_balances, updated_incentive_pool_balances);
 
         let credits = transmuter
             .incentive_pool
@@ -3164,6 +3341,12 @@ mod tests {
         let transmuter = Transmuter::new();
 
         let (sender, mut deps) = setup_fee_deduction_test();
+        let mut incentive_pool_balance: Coins = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
+            .unwrap();
 
         // 2_000_000_000_000 alloyed in -> denom1
 
@@ -3260,13 +3443,19 @@ mod tests {
         );
 
         // Verify fee is collected (minted to contract)
-        let incentive_pool_balances = transmuter
+        let updated_incentive_pool_balances: Coins = transmuter
             .incentive_pool
             .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
+            .unwrap();
+
+        incentive_pool_balance
+            .add(coin(fee.u128(), "denom1"))
             .unwrap();
 
         // Fee should be collected in alloyed asset
-        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "denom1")]);
+        assert_eq!(incentive_pool_balance, updated_incentive_pool_balances);
 
         let credits = transmuter
             .incentive_pool
@@ -3333,11 +3522,14 @@ mod tests {
         );
 
         // check incentive pool state
-        let incentive_pool_balances = transmuter
+        let updated_incentive_pool_balances: Coins = transmuter
             .incentive_pool
             .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
             .unwrap();
-        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "denom1")]);
+
+        assert_eq!(incentive_pool_balance, updated_incentive_pool_balances);
 
         let incetive_credits = transmuter
             .incentive_pool
@@ -3354,6 +3546,12 @@ mod tests {
         let transmuter = Transmuter::new();
 
         let (sender, mut deps) = setup_fee_deduction_test();
+        let mut incentive_pool_balances: Coins = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
+            .unwrap();
 
         // Multiple tokens out that will make denom1 40%, group1 60%
         let tokens_out = vec![
@@ -3452,13 +3650,18 @@ mod tests {
         );
 
         // Verify fee is collected (minted to contract)
-        let incentive_pool_balances = transmuter
+        let updated_incentive_pool_balances: Coins = transmuter
             .incentive_pool
             .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
             .unwrap();
 
         // Fee should be collected in alloyed asset
-        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "alloyed")]);
+        incentive_pool_balances
+            .add(coin(fee.u128(), "alloyed"))
+            .unwrap();
+        assert_eq!(incentive_pool_balances, updated_incentive_pool_balances);
 
         let credits = transmuter
             .incentive_pool
@@ -3525,11 +3728,14 @@ mod tests {
         );
 
         // check incentive pool state
-        let incentive_pool_balances = transmuter
+        let updated_incentive_pool_balances = transmuter
             .incentive_pool
             .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
             .unwrap();
-        assert_eq!(incentive_pool_balances, vec![coin(fee.u128(), "alloyed")]);
+
+        assert_eq!(incentive_pool_balances, updated_incentive_pool_balances);
 
         let incetive_credits = transmuter
             .incentive_pool
