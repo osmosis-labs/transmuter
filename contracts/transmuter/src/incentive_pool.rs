@@ -8,6 +8,10 @@ use crate::{
     ContractError,
 };
 
+// Default settings for pagination
+const MAX_LIMIT: u32 = 30;
+const DEFAULT_LIMIT: u32 = 10;
+
 /// Incentive pool state management for rebalancing fees and incentives
 pub struct IncentivePool {
     /// Track incentive pool balances by denom (exact amounts)
@@ -240,18 +244,6 @@ impl IncentivePool {
         Ok(())
     }
 
-    /// Get the exact pool balance for a specific denom
-    pub fn get_pool_balance(
-        &self,
-        storage: &dyn Storage,
-        denom: &str,
-    ) -> Result<Uint128, ContractError> {
-        Ok(self
-            .pool_balances
-            .may_load(storage, denom.to_string())?
-            .unwrap_or_default())
-    }
-
     /// Get the total outstanding credits to all users in normalized amount
     pub fn get_total_incentive_credits(
         &self,
@@ -289,15 +281,22 @@ impl IncentivePool {
     }
 
     /// Get all users with outstanding credits
-    pub fn get_all_incentive_credits(
+    pub fn get_incentive_credits(
         &self,
         storage: &dyn Storage,
-        min: Option<Bound<Addr>>,
-        max: Option<Bound<Addr>>,
+        start: Option<Addr>,
+        limit: Option<u32>,
     ) -> Result<Vec<(Addr, Uint128)>, ContractError> {
+        let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
         let all_credits: Result<Vec<_>, _> = self
             .outstanding_credits
-            .range(storage, min, max, cosmwasm_std::Order::Ascending)
+            .range(
+                storage,
+                start.map(Bound::exclusive),
+                None,
+                cosmwasm_std::Order::Ascending,
+            )
+            .take(limit)
             .collect();
 
         Ok(all_credits?)
@@ -409,18 +408,6 @@ mod tests {
         let overflow_coin = coin(1, "overflow_denom");
         let result = incentive_pool.add_tokens(&mut storage, &overflow_coin);
         assert!(result.is_err(), "Adding to max amount should overflow");
-    }
-
-    #[test]
-    fn test_get_pool_balance_nonexistent_denom() {
-        let mut storage = MockStorage::new();
-        let incentive_pool = setup_incentive_pool(&mut storage, vec![], vec![]);
-
-        // Should return zero for non-existent denoms
-        let balance = incentive_pool
-            .get_pool_balance(&storage, "nonexistent")
-            .unwrap();
-        assert_eq!(balance, Uint128::zero());
     }
 
     #[rstest]
@@ -868,7 +855,7 @@ mod tests {
         assert_eq!(final_balances, expected_balances, "balances mismatch");
 
         let user_credits = incentive_pool
-            .get_all_incentive_credits(&storage, None, None)
+            .get_incentive_credits(&storage, None, None)
             .unwrap();
         assert_eq!(
             user_credits,

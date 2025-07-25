@@ -2746,7 +2746,7 @@ mod tests {
 
         let credits = transmuter
             .incentive_pool
-            .get_all_incentive_credits(&deps.storage, None, None)
+            .get_incentive_credits(&deps.storage, None, None)
             .unwrap();
         assert_eq!(credits, vec![]);
 
@@ -2781,7 +2781,7 @@ mod tests {
 
         let credits = transmuter
             .incentive_pool
-            .get_all_incentive_credits(&deps.storage, None, None)
+            .get_incentive_credits(&deps.storage, None, None)
             .unwrap();
         assert_eq!(
             credits,
@@ -2829,7 +2829,7 @@ mod tests {
 
         let credits = transmuter
             .incentive_pool
-            .get_all_incentive_credits(&deps.storage, None, None)
+            .get_incentive_credits(&deps.storage, None, None)
             .unwrap();
 
         assert_eq!(credits, vec![]);
@@ -2923,7 +2923,7 @@ mod tests {
 
         let credits = transmuter
             .incentive_pool
-            .get_all_incentive_credits(&deps.storage, None, None)
+            .get_incentive_credits(&deps.storage, None, None)
             .unwrap();
         assert_eq!(credits, vec![]);
 
@@ -2957,7 +2957,7 @@ mod tests {
 
         let credits = transmuter
             .incentive_pool
-            .get_all_incentive_credits(&deps.storage, None, None)
+            .get_incentive_credits(&deps.storage, None, None)
             .unwrap();
 
         assert_eq!(credits, vec![(sender.clone(), fee * Uint128::from(10u128))]);
@@ -3003,7 +3003,7 @@ mod tests {
 
         let credits = transmuter
             .incentive_pool
-            .get_all_incentive_credits(&deps.storage, None, None)
+            .get_incentive_credits(&deps.storage, None, None)
             .unwrap();
 
         assert_eq!(credits, vec![]);
@@ -3128,7 +3128,7 @@ mod tests {
 
         let credits = transmuter
             .incentive_pool
-            .get_all_incentive_credits(&deps.storage, None, None)
+            .get_incentive_credits(&deps.storage, None, None)
             .unwrap();
         assert_eq!(credits, vec![]);
 
@@ -3282,7 +3282,7 @@ mod tests {
 
         let credits = transmuter
             .incentive_pool
-            .get_all_incentive_credits(&deps.storage, None, None)
+            .get_incentive_credits(&deps.storage, None, None)
             .unwrap();
         assert_eq!(credits, vec![]);
 
@@ -3331,7 +3331,7 @@ mod tests {
         // check for incentive credit
         let credits = transmuter
             .incentive_pool
-            .get_all_incentive_credits(&deps.storage, None, None)
+            .get_incentive_credits(&deps.storage, None, None)
             .unwrap();
         assert_eq!(credits, vec![(sender, Uint128::from(500_000_000_000u128))]);
     }
@@ -3459,7 +3459,7 @@ mod tests {
 
         let credits = transmuter
             .incentive_pool
-            .get_all_incentive_credits(&deps.storage, None, None)
+            .get_incentive_credits(&deps.storage, None, None)
             .unwrap();
         assert_eq!(credits, vec![]);
 
@@ -3533,7 +3533,7 @@ mod tests {
 
         let incetive_credits = transmuter
             .incentive_pool
-            .get_all_incentive_credits(&deps.storage, None, None)
+            .get_incentive_credits(&deps.storage, None, None)
             .unwrap();
         assert_eq!(
             incetive_credits,
@@ -3665,7 +3665,7 @@ mod tests {
 
         let credits = transmuter
             .incentive_pool
-            .get_all_incentive_credits(&deps.storage, None, None)
+            .get_incentive_credits(&deps.storage, None, None)
             .unwrap();
         assert_eq!(credits, vec![]);
 
@@ -3739,7 +3739,7 @@ mod tests {
 
         let incetive_credits = transmuter
             .incentive_pool
-            .get_all_incentive_credits(&deps.storage, None, None)
+            .get_incentive_credits(&deps.storage, None, None)
             .unwrap();
         assert_eq!(
             incetive_credits,

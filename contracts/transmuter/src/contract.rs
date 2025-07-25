@@ -15,11 +15,11 @@ use crate::{
 };
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    ensure, ensure_ne, Addr, Coin, Decimal, DepsMut, Env, Reply, Response, StdError, Storage,
-    SubMsg, Uint128,
+    ensure, ensure_ne, Addr, BankMsg, Coin, CosmosMsg, Decimal, DepsMut, Env, Reply, Response,
+    StdError, Storage, SubMsg, Uint128, Uint256, Uint64,
 };
 
-use cw_storage_plus::Item;
+use cw_storage_plus::{Bound, Item};
 use osmosis_std::types::{
     cosmos::bank::v1beta1::Metadata,
     osmosis::tokenfactory::v1beta1::{MsgCreateDenom, MsgCreateDenomResponse, MsgSetDenomMetadata},
@@ -607,6 +607,47 @@ impl Transmuter {
         .map(|res| res.add_attribute("method", "exit_pool"))
     }
 
+    #[sv::msg(exec)]
+    pub fn redeem_incentive(
+        &self,
+        ctx::ExecCtx { deps, info, .. }: ctx::ExecCtx,
+        redemptions: Vec<Coin>,
+    ) -> Result<Response, ContractError> {
+        let address = info.sender;
+        let pool_denom_factors = self
+            .pool
+            .load(deps.storage)?
+            .pool_assets
+            .into_iter()
+            .map(|asset| (asset.denom().to_string(), asset.normalization_factor()))
+            .collect::<BTreeMap<String, Uint128>>();
+
+        let redemption_string = redemptions
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<String>>()
+            .join(",");
+
+        let attrs = vec![
+            ("method", "redeem_incentive"),
+            ("address", address.as_str()),
+            ("redemptions", redemption_string.as_str()),
+        ];
+        self.incentive_pool.redeem_incentive(
+            deps.storage,
+            &address,
+            redemptions.clone(),
+            &pool_denom_factors,
+        )?;
+
+        let bank_send = CosmosMsg::Bank(BankMsg::Send {
+            to_address: address.to_string(),
+            amount: redemptions,
+        });
+
+        Ok(Response::new().add_message(bank_send).add_attributes(attrs))
+    }
+
     // === queries ===
 
     #[sv::msg(query)]
@@ -833,6 +874,53 @@ impl Transmuter {
         Ok(GetIncentivePoolBalancesResponse { balances })
     }
 
+    #[sv::msg(query)]
+    pub fn get_incentive_credit_by_address(
+        &self,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
+        address: String,
+    ) -> Result<GetIncentiveCreditByAddressResponse, ContractError> {
+        let credit = self
+            .incentive_pool
+            .get_incentive_credit_by_address(deps.storage, &deps.api.addr_validate(&address)?)?;
+
+        Ok(GetIncentiveCreditByAddressResponse { credit })
+    }
+
+    #[sv::msg(query)]
+    pub fn get_total_incentive_credits(
+        &self,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
+    ) -> Result<GetTotalIncentiveCreditsResponse, ContractError> {
+        let total_credits = self
+            .incentive_pool
+            .get_total_incentive_credits(deps.storage)?;
+
+        Ok(GetTotalIncentiveCreditsResponse { total_credits })
+    }
+
+    #[sv::msg(query)]
+    pub fn get_incentive_credits(
+        &self,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
+        start: Option<String>,
+        limit: Option<Uint64>,
+    ) -> Result<GetIncentiveCreditsResponse, ContractError> {
+        let start = start.map(|s| deps.api.addr_validate(&s)).transpose()?;
+        let limit = limit
+            .map(|l| u32::try_from(l.u64()))
+            .transpose()
+            .map_err(|_| {
+                ContractError::Std(StdError::generic_err("limit must be less than 2^32"))
+            })?;
+
+        let credits = self
+            .incentive_pool
+            .get_incentive_credits(deps.storage, start, limit)?;
+
+        Ok(GetIncentiveCreditsResponse { credits })
+    }
+
     // --- admin ---
 
     #[sv::msg(exec)]
@@ -1000,6 +1088,21 @@ pub struct GetCorrruptedScopesResponse {
 #[cw_serde]
 pub struct GetIncentivePoolBalancesResponse {
     pub balances: Vec<Coin>,
+}
+
+#[cw_serde]
+pub struct GetIncentiveCreditByAddressResponse {
+    pub credit: Uint128,
+}
+
+#[cw_serde]
+pub struct GetTotalIncentiveCreditsResponse {
+    pub total_credits: Uint256,
+}
+
+#[cw_serde]
+pub struct GetIncentiveCreditsResponse {
+    pub credits: Vec<(Addr, Uint128)>,
 }
 
 #[cw_serde]
@@ -4282,5 +4385,296 @@ mod tests {
             payload: Binary::new(vec![]),
             gas_used: 0,
         }
+    }
+
+    #[test]
+    fn test_get_and_redeem_incentives() {
+        let mut deps = mock_dependencies();
+
+        // Set up test addresses
+        let admin = deps.api.addr_make("admin");
+        let moderator = deps.api.addr_make("moderator");
+        let mut users = vec![
+            deps.api.addr_make("x"),
+            deps.api.addr_make("y"),
+            deps.api.addr_make("z"),
+        ];
+        users.sort();
+        let user1 = users[0].clone();
+        let user2 = users[1].clone();
+        let user3 = users[2].clone();
+
+        // Set up bank balances for the test
+        deps.querier
+            .bank
+            .update_balance(&admin, vec![coin(1000, "uosmo"), coin(1000, "uion")]);
+
+        // Initialize the contract
+        let init_msg = InstantiateMsg {
+            pool_asset_configs: vec![
+                AssetConfig::from_denom_str("uosmo"),
+                AssetConfig::from_denom_str("uion"),
+            ],
+            alloyed_asset_subdenom: "uosmouion".to_string(),
+            alloyed_asset_normalization_factor: Uint128::one(),
+            admin: Some(admin.to_string()),
+            moderator: moderator.to_string(),
+        };
+        let env = mock_env();
+        let info = message_info(&admin, &[]);
+
+        // Instantiate the contract
+        instantiate(deps.as_mut(), env.clone(), info.clone(), init_msg).unwrap();
+
+        // Manually reply to set the alloyed denom
+        let alloyed_denom = "factory/osmo1xxx/uosmouion";
+        let reply_msg = reply_create_denom_response(alloyed_denom);
+        reply(deps.as_mut(), env.clone(), reply_msg).unwrap();
+
+        // Get the contract instance to access incentive pool directly
+        let contract = Transmuter::new();
+
+        // Add tokens to the incentive pool (simulating fees collected)
+        let incentive_tokens = vec![coin(100, "uosmo"), coin(200, "uion")];
+        for token in &incentive_tokens {
+            contract
+                .incentive_pool
+                .add_tokens(deps.as_mut().storage, token)
+                .unwrap();
+        }
+
+        // Get pool denom factors for crediting incentives
+        let pool = contract.pool.load(deps.as_ref().storage).unwrap();
+        let mut pool_denom_factors = pool
+            .pool_assets
+            .iter()
+            .map(|asset| (asset.denom().to_string(), asset.normalization_factor()))
+            .collect::<BTreeMap<String, Uint128>>();
+
+        // Add alloyed asset to the factors
+        let alloyed_denom = contract
+            .alloyed_asset
+            .get_alloyed_denom(deps.as_ref().storage)
+            .unwrap();
+        let alloyed_norm_factor = contract
+            .alloyed_asset
+            .get_normalization_factor(deps.as_ref().storage)
+            .unwrap();
+        pool_denom_factors.insert(alloyed_denom, alloyed_norm_factor);
+
+        // Credit incentives to users
+        contract
+            .incentive_pool
+            .credit_incentive(
+                deps.as_mut().storage,
+                &user1,
+                Uint128::new(50),
+                &pool_denom_factors,
+            )
+            .unwrap();
+
+        contract
+            .incentive_pool
+            .credit_incentive(
+                deps.as_mut().storage,
+                &user2,
+                Uint128::new(75),
+                &pool_denom_factors,
+            )
+            .unwrap();
+
+        contract
+            .incentive_pool
+            .credit_incentive(
+                deps.as_mut().storage,
+                &user3,
+                Uint128::new(25),
+                &pool_denom_factors,
+            )
+            .unwrap();
+
+        // Test 1: get_incentive_credit_by_address
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetIncentiveCreditByAddress {
+            address: user1.to_string(),
+        });
+        let query_res: GetIncentiveCreditByAddressResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+        assert_eq!(query_res.credit, Uint128::new(50));
+
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetIncentiveCreditByAddress {
+            address: user2.to_string(),
+        });
+        let query_res: GetIncentiveCreditByAddressResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+        assert_eq!(query_res.credit, Uint128::new(75));
+
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetIncentiveCreditByAddress {
+            address: user3.to_string(),
+        });
+        let query_res: GetIncentiveCreditByAddressResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+        assert_eq!(query_res.credit, Uint128::new(25));
+
+        // Test address with no credits
+        let no_credit_user = deps.api.addr_make("no_credit_user");
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetIncentiveCreditByAddress {
+            address: no_credit_user.to_string(),
+        });
+        let query_res: GetIncentiveCreditByAddressResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+        assert_eq!(query_res.credit, Uint128::zero());
+
+        // get_total_incentive_credits
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetTotalIncentiveCredits {});
+        let query_res: GetTotalIncentiveCreditsResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+        assert_eq!(query_res.total_credits, Uint256::from(150u128)); // 50 + 75 + 25
+
+        // get_incentive_credits (without pagination)
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetIncentiveCredits {
+            start: None,
+            limit: None,
+        });
+        let query_res: GetIncentiveCreditsResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+
+        // Verify the credits are correct
+        let expected_credits = vec![
+            (user1.clone(), Uint128::new(50)),
+            (user2.clone(), Uint128::new(75)),
+            (user3.clone(), Uint128::new(25)),
+        ];
+
+        let actual_credits = query_res.credits.clone();
+
+        assert_eq!(actual_credits, expected_credits);
+
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetIncentiveCredits {
+            start: None,
+            limit: None,
+        });
+        let query_res: GetIncentiveCreditsResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+
+        assert_eq!(
+            query_res,
+            GetIncentiveCreditsResponse {
+                credits: vec![
+                    (user1.clone(), Uint128::new(50)),
+                    (user2.clone(), Uint128::new(75)),
+                    (user3.clone(), Uint128::new(25)),
+                ],
+            }
+        );
+
+        // get_incentive_credits (with limit)
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetIncentiveCredits {
+            start: None,
+            limit: Some(Uint64::new(2)),
+        });
+        let query_res: GetIncentiveCreditsResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+        assert_eq!(
+            query_res,
+            GetIncentiveCreditsResponse {
+                credits: vec![
+                    (user1.clone(), Uint128::new(50)),
+                    (user2.clone(), Uint128::new(75)),
+                ],
+            }
+        );
+
+        // get_incentive_credits (with start address)
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetIncentiveCredits {
+            start: Some(user2.to_string()),
+            limit: None,
+        });
+        let query_res: GetIncentiveCreditsResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+
+        // Should return users starting from user2 onwards exclusive
+        assert_eq!(
+            query_res,
+            GetIncentiveCreditsResponse {
+                credits: vec![(user3.clone(), Uint128::new(25)),],
+            }
+        );
+
+        // get_incentive_credits (with start address and limit)
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetIncentiveCredits {
+            start: Some(user1.to_string()),
+            limit: Some(Uint64::new(1)),
+        });
+        let query_res: GetIncentiveCreditsResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+        assert_eq!(
+            query_res,
+            GetIncentiveCreditsResponse {
+                credits: vec![(user2.clone(), Uint128::new(75)),],
+            }
+        );
+
+        let info = message_info(&user1, &[]);
+        // try redeeming incentive for user1 over what's available
+        let redeem_msg = ContractExecMsg::Transmuter(ExecMsg::RedeemIncentive {
+            redemptions: vec![coin(50, "uosmo"), coin(1, "uion")],
+        });
+        let err =
+            execute(deps.as_mut(), env.clone(), info.clone(), redeem_msg.clone()).unwrap_err();
+        assert_eq!(
+            err,
+            ContractError::InsufficientIncentiveCredit {
+                user: user1.clone(),
+                available: Uint128::new(50),
+                requested: Uint128::new(51),
+            }
+        );
+
+        // give user1 more incentive
+        contract
+            .incentive_pool
+            .credit_incentive(
+                deps.as_mut().storage,
+                &user1,
+                Uint128::new(1),
+                &pool_denom_factors,
+            )
+            .unwrap();
+
+        // redeem incentive
+        let res = execute(deps.as_mut(), env.clone(), info.clone(), redeem_msg.clone()).unwrap();
+        assert_eq!(
+            res.attributes,
+            vec![
+                attr("method", "redeem_incentive"),
+                attr("address", user1.to_string()),
+                attr("redemptions", "50uosmo,1uion")
+            ]
+        );
+
+        let bank_send = res.messages[0].msg.clone();
+        assert_eq!(
+            bank_send,
+            CosmosMsg::Bank(BankMsg::Send {
+                to_address: user1.to_string(),
+                amount: vec![coin(50, "uosmo"), coin(1, "uion")],
+            })
+        );
+        assert_eq!(res.messages.len(), 1);
+
+        // check incentive credits
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetIncentiveCredits {
+            start: None,
+            limit: None,
+        });
+        let query_res: GetIncentiveCreditsResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+        assert_eq!(
+            query_res.credits,
+            vec![
+                (user2.clone(), Uint128::new(75)),
+                (user3.clone(), Uint128::new(25)),
+            ]
+        );
     }
 }
