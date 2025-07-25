@@ -19,7 +19,7 @@ use cosmwasm_std::{
     StdError, Storage, SubMsg, Uint128, Uint256, Uint64,
 };
 
-use cw_storage_plus::{Bound, Item};
+use cw_storage_plus::Item;
 use osmosis_std::types::{
     cosmos::bank::v1beta1::Metadata,
     osmosis::tokenfactory::v1beta1::{MsgCreateDenom, MsgCreateDenomResponse, MsgSetDenomMetadata},
