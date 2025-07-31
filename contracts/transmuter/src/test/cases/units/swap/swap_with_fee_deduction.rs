@@ -1,4 +1,4 @@
-use cosmwasm_std::{coin, Decimal, Uint128};
+use cosmwasm_std::{coin, Addr, Decimal, Uint128};
 use osmosis_std::types::{
     cosmos::bank::v1beta1::{MsgSend, QueryBalanceRequest},
     osmosis::poolmanager::v1beta1::{
@@ -10,8 +10,11 @@ use transmuter_math::rebalancing::config::RebalancingConfig;
 
 use crate::{
     asset::AssetConfig,
-    contract::sv::{ExecMsg, QueryMsg},
-    contract::{GetIncentivePoolBalancesResponse, GetTotalPoolLiquidityResponse},
+    contract::{
+        sv::{ExecMsg, QueryMsg},
+        GetIncentiveCreditsResponse, GetIncentivePoolBalancesResponse,
+        GetTotalPoolLiquidityResponse,
+    },
     scope::Scope,
     test::test_env::TestEnvBuilder,
 };
@@ -382,6 +385,133 @@ fn test_swap_alloyed_asset_to_tokens_exact_in_with_fee_deduction() {
     assert_eq!(
         total_shares,
         initial_total_alloyed_asset_supply - token_in_amount
+    );
+}
+
+#[test]
+fn test_fee_deduction_and_redemption() {
+    let app = OsmosisTestApp::new();
+    let t = setup_test_env(&app);
+    let cp = CosmwasmPool::new(&app);
+    let bank = Bank::new(&app);
+
+    // Test the swap that should require fee
+    // This swap makes denom1 weight go from 50% to 60%, triggering fee
+    let token_out = coin(200_000_000_000u128, "denom2");
+    let amount_in_before_fee = Uint128::from(20_000_000_000u128);
+    let expected_fee = Uint128::from(6_000_000_000u128); // group1 + denom1 fees
+    let token_in_amount = amount_in_before_fee + expected_fee;
+
+    // Test with sufficient max amount (should succeed)
+    cp.swap_exact_amount_out(
+        MsgSwapExactAmountOut {
+            sender: t.accounts["swapper"].address(),
+            routes: vec![SwapAmountOutRoute {
+                pool_id: t.contract.pool_id,
+                token_in_denom: "denom1".to_string(),
+            }],
+            token_out: Some(token_out.clone().into()),
+            token_in_max_amount: token_in_amount.to_string(),
+        },
+        &t.accounts["swapper"],
+    )
+    .unwrap();
+
+    // Verify contract balances include pool liquidity + collected fees
+    verify_contract_balances(&t, expected_fee, "denom1");
+
+    // swap back should gives swapper incentive
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["swapper"].address(),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: "denom1".to_string(),
+            }],
+            token_in: Some(token_out.into()),
+            token_out_min_amount: (token_in_amount - expected_fee).to_string(),
+        },
+        &t.accounts["swapper"],
+    )
+    .unwrap();
+
+    // query incentive credit
+    let query_msg = QueryMsg::GetIncentiveCredits {
+        start: None,
+        limit: None,
+    };
+
+    let query_res = t
+        .contract
+        .query::<GetIncentiveCreditsResponse>(&query_msg)
+        .unwrap();
+    assert_eq!(
+        query_res,
+        GetIncentiveCreditsResponse {
+            credits: vec![(
+                Addr::unchecked(t.accounts["swapper"].address().clone()),
+                Uint128::new(400_000_000_000), // smaller than fee taken at first because incentive pool started out unhealthy
+            ),],
+        }
+    );
+
+    let denom1_balance_before_redeem = bank
+        .query_balance(&QueryBalanceRequest {
+            address: t.accounts["swapper"].address().to_string(),
+            denom: "denom1".to_string(),
+        })
+        .unwrap()
+        .balance
+        .unwrap()
+        .amount
+        .parse::<u128>()
+        .unwrap();
+
+    // redeem incentive
+    t.contract
+        .execute(
+            &ExecMsg::RedeemIncentive {
+                redemptions: vec![coin(4_000_000_000u128, "denom1")],
+            },
+            &[],
+            &t.accounts["swapper"],
+        )
+        .unwrap();
+
+    // query incentive credit
+    let query_msg = QueryMsg::GetIncentiveCredits {
+        start: None,
+        limit: None,
+    };
+
+    let query_res = t
+        .contract
+        .query::<GetIncentiveCreditsResponse>(&query_msg)
+        .unwrap();
+    assert_eq!(query_res, GetIncentiveCreditsResponse { credits: vec![] });
+
+    verify_contract_balances(
+        &t,
+        expected_fee - Uint128::from(4_000_000_000u128),
+        "denom1",
+    );
+
+    // swapper should gain 400_000_000_000 denom1
+    let denom1_balance_after_redeem = bank
+        .query_balance(&QueryBalanceRequest {
+            address: t.accounts["swapper"].address().to_string(),
+            denom: "denom1".to_string(),
+        })
+        .unwrap()
+        .balance
+        .unwrap()
+        .amount
+        .parse::<u128>()
+        .unwrap();
+
+    assert_eq!(
+        denom1_balance_after_redeem - denom1_balance_before_redeem,
+        4_000_000_000u128
     );
 }
 
