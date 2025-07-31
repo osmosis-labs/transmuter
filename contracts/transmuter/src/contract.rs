@@ -1,4 +1,6 @@
-use crate::{corruptable::Corruptable, rebalancer::Rebalancer, scope::Scope};
+use crate::{
+    corruptable::Corruptable, incentive_pool::IncentivePool, rebalancer::Rebalancer, scope::Scope,
+};
 use std::{collections::BTreeMap, iter};
 
 use crate::{
@@ -41,6 +43,7 @@ pub struct Transmuter {
     pub(crate) alloyed_asset: AlloyedAsset,
     pub(crate) role: Role,
     pub(crate) rebalancer: Rebalancer,
+    pub(crate) incentive_pool: IncentivePool,
 }
 
 pub mod key {
@@ -50,7 +53,11 @@ pub mod key {
     pub const ALLOYED_ASSET_NORMALIZATION_FACTOR: &str = "alloyed_asset_normalization_factor";
     pub const ADMIN: &str = "admin";
     pub const MODERATOR: &str = "moderator";
-    pub const REBALANCER: &str = "rebalancer"; // TODO: migrate data from limiters
+    pub const REBALANCER: &str = "rebalancer";
+    pub const INCENTIVE_POOL_BALANCES: &str = "incentive_pool_balances";
+    pub const INCENTIVE_POOL_OUTSTANDING_CREDITS: &str = "incentive_pool_outstanding_credits";
+    pub const INCENTIVE_POOL_TOTAL_OUTSTANDING_CREDITS: &str =
+        "incentive_pool_total_outstanding_credits";
 }
 
 #[contract]
@@ -67,6 +74,11 @@ impl Transmuter {
             ),
             role: Role::new(key::ADMIN, key::MODERATOR),
             rebalancer: Rebalancer::new(key::REBALANCER),
+            incentive_pool: IncentivePool::new(
+                key::INCENTIVE_POOL_BALANCES,
+                key::INCENTIVE_POOL_OUTSTANDING_CREDITS,
+                key::INCENTIVE_POOL_TOTAL_OUTSTANDING_CREDITS,
+            ),
         }
     }
 
@@ -811,6 +823,16 @@ impl Transmuter {
         })
     }
 
+    #[sv::msg(query)]
+    pub fn get_incentive_pool_balances(
+        &self,
+        ctx::QueryCtx { deps, .. }: ctx::QueryCtx,
+    ) -> Result<GetIncentivePoolBalancesResponse, ContractError> {
+        let balances = self.incentive_pool.get_all_pool_balances(deps.storage)?;
+
+        Ok(GetIncentivePoolBalancesResponse { balances })
+    }
+
     // --- admin ---
 
     #[sv::msg(exec)]
@@ -973,6 +995,11 @@ pub struct CalcInAmtGivenOutResponse {
 #[cw_serde]
 pub struct GetCorrruptedScopesResponse {
     pub corrupted_scopes: Vec<Scope>,
+}
+
+#[cw_serde]
+pub struct GetIncentivePoolBalancesResponse {
+    pub balances: Vec<Coin>,
 }
 
 #[cw_serde]

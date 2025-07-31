@@ -162,6 +162,14 @@ impl RebalancingConfig {
             critical_high,
         ]
     }
+
+    /// Given a balanece, find the nearest ideal weight from that balance
+    pub fn nearest_ideal_weight(&self, balance: Decimal) -> Decimal {
+        let ideal_lower_distance = balance.abs_diff(self.ideal_lower);
+        let ideal_upper_distance = balance.abs_diff(self.ideal_upper);
+
+        ideal_lower_distance.min(ideal_upper_distance)
+    }
 }
 
 #[cfg(test)]

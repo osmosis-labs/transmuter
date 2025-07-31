@@ -532,5 +532,6 @@ fn pool_with_single_lp(
 mod client_error;
 mod non_empty_pool;
 mod swap_share_denom;
+mod swap_with_fee_deduction;
 
 mod swap_with_asset_group_limiters;

@@ -21,11 +21,7 @@ impl TransmuterPool {
     /// If total pool asset amount is zero, returns None to signify that
     /// it makes no sense to calculate ratios, but not an error.
     pub fn asset_weights(&self) -> Result<Option<BTreeMap<String, Decimal>>, ContractError> {
-        let std_norm_factor = lcm_from_iter(
-            self.pool_assets
-                .iter()
-                .map(|pool_asset| pool_asset.normalization_factor()),
-        )?;
+        let std_norm_factor = self.std_norm_factor()?;
 
         let normalized_asset_values = self.normalized_asset_values(std_norm_factor)?;
 
@@ -51,6 +47,14 @@ impl TransmuterPool {
         Ok(Some(ratios))
     }
 
+    pub fn std_norm_factor(&self) -> Result<Uint128, ContractError> {
+        Ok(lcm_from_iter(
+            self.pool_assets
+                .iter()
+                .map(|pool_asset| pool_asset.normalization_factor()),
+        )?)
+    }
+
     pub(crate) fn normalized_asset_values(
         &self,
         std_norm_factor: Uint128,
@@ -68,6 +72,13 @@ impl TransmuterPool {
                 Ok((asset.denom().to_string(), value))
             })
             .collect()
+    }
+
+    pub(crate) fn normalized_total_balance(&self) -> Result<Uint128, ContractError> {
+        self.normalized_asset_values(self.std_norm_factor()?)?
+            .into_iter()
+            .try_fold(Uint128::zero(), |acc, (_, value)| acc.checked_add(value))
+            .map_err(Into::into)
     }
 }
 

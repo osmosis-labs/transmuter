@@ -6,22 +6,25 @@ pub mod zone;
 use crate::TransmuterMathError as Error;
 use balance_shift::BalanceShift;
 use config::RebalancingConfig;
-use cosmwasm_std::{Decimal, Int256, SignedDecimal256, StdError, StdResult, Uint128};
+use cosmwasm_std::{Decimal, Int256, SignedDecimal256, StdError, StdResult};
 
 const DECIMAL_FRACTIONAL: Int256 = Int256::from_i128(1_000_000_000_000_000_000);
 
 /// Compute fee or incentive adjustment for a single asset's balance movement.
 ///
-/// This function calculates the incentive (if positive) or fee (if negative)
+/// This function calculates the incentive (if positive) or fee (if negative) rate
 /// for a swap that moves an asset's balance from balance to balance_new. The goal is to
 /// encourage movements toward the ideal balance range [ideal.start, ideal.end] and
 /// discourage movements away from it.
-pub fn compute_adjustment_value(
+///
+/// The total effective adjustment rate is the sum of the effective adjustment rates for each zone.
+/// The effective adjustment rate for a zone is the product of the zone's adjustment rate and the
+/// zone's weight. The weight is the normalized balance of the asset in the zone.
+pub fn compute_total_effective_adjustment_rate(
     balance: Decimal,
     balance_new: Decimal,
-    balance_total: Uint128,
     params: RebalancingConfig,
-) -> Result<Int256, Error> {
+) -> Result<SignedDecimal256, Error> {
     let balance_shift = BalanceShift::new(balance, balance_new)?;
     let ideal = params.ideal().clone();
 
@@ -38,18 +41,13 @@ pub fn compute_adjustment_value(
             })
         })?;
 
-    // Calculate the adjustment value
-    let adjustment_value = total_effective_adjustment_rate.checked_mul(
-        SignedDecimal256::from_atomics(Int256::from(balance_total), 0)?,
-    )?;
-
-    round_adjustment(adjustment_value)
+    Ok(total_effective_adjustment_rate)
 }
 
 /// Round a SignedDecimal256 to Int256 with appropriate rounding behavior:
 /// - For positive values: round down (give less incentive)
 /// - For negative values: round up (take more fee)
-fn round_adjustment(adjustment: SignedDecimal256) -> Result<Int256, Error> {
+pub fn round_adjustment(adjustment: SignedDecimal256) -> Result<Int256, Error> {
     if adjustment > SignedDecimal256::zero() {
         // For positive adjustments (incentives), round down to give less
         Ok(adjustment.atomics().checked_div(DECIMAL_FRACTIONAL)?)
@@ -73,7 +71,9 @@ fn round_adjustment(adjustment: SignedDecimal256) -> Result<Int256, Error> {
 mod tests {
     use super::*;
     use config::RebalancingConfig;
+    use cosmwasm_std::Decimal256;
     use rstest::rstest;
+    use std::str::FromStr;
 
     #[rstest]
     #[case(SignedDecimal256::percent(100), Int256::from(1))] // 1.0 -> 1
@@ -96,7 +96,6 @@ mod tests {
             (Decimal::percent(33), Decimal::percent(33)),
             (Decimal::percent(34), Decimal::percent(34)),
         ],
-        Uint128::new(1000)
     )]
     #[case::extreme_imbalance(
         vec![
@@ -104,7 +103,6 @@ mod tests {
             (Decimal::zero(), Decimal::zero()),
             (Decimal::percent(100), Decimal::percent(100)),
         ],
-        Uint128::new(1000)
     )]
     #[case::moving_to_balance(
         vec![
@@ -112,11 +110,9 @@ mod tests {
             (Decimal::percent(10), Decimal::percent(33)),
             (Decimal::percent(80), Decimal::percent(34)),
         ],
-        Uint128::new(1000)
     )]
     fn test_compute_adjustment_value_extreme_cases_properties(
         #[case] balances: Vec<(Decimal, Decimal)>,
-        #[case] balance_total: Uint128,
     ) {
         // Create extreme adjustment parameters with 100% rate
         let params = RebalancingConfig::new(
@@ -131,17 +127,17 @@ mod tests {
         .unwrap();
 
         // Calculate adjustments for each asset
-        let adjustments: Vec<Int256> = balances
+        let adjustments: Vec<SignedDecimal256> = balances
             .iter()
             .map(|(balance, balance_new)| {
-                compute_adjustment_value(*balance, *balance_new, balance_total, params.clone())
+                compute_total_effective_adjustment_rate(*balance, *balance_new, params.clone())
                     .unwrap()
             })
             .collect();
 
         // Verify adjustments are within bounds
         for adj in &adjustments {
-            assert!(adj.abs() <= Int256::from(balance_total));
+            assert!(adj.abs_diff(SignedDecimal256::zero()) <= Decimal256::one());
         }
 
         // Verify sum of balances is 100%
@@ -155,62 +151,52 @@ mod tests {
     #[case::no_movement(
         Decimal::percent(50),  // balance
         Decimal::percent(50),  // balance_new
-        Uint128::new(1000),   // balance_total
-        Int256::zero()        // expected_adjustment
+        SignedDecimal256::zero()        // expected_adjustment
     )]
     #[case::moving_into_ideal_range(
         Decimal::percent(10),  // balance
         Decimal::percent(33),  // balance_new
-        Uint128::new(1000),   // balance_total
-        Int256::from(11)      // expected_adjustment (positive, rounded down)
+        SignedDecimal256::from_str("0.011").unwrap()      // expected_adjustment (11/1000 = 0.011)
     )]
     #[case::moving_out_of_ideal_range(
         Decimal::percent(33),  // balance
         Decimal::percent(10),  // balance_new
-        Uint128::new(1000),   // balance_total
-        Int256::from(-11)     // expected_adjustment (negative, rounded up)
+        SignedDecimal256::from_str("-0.011").unwrap()     // expected_adjustment (-11/1000 = -0.011)
     )]
     #[case::small_movement_into_ideal(
         Decimal::percent(20),  // balance
         Decimal::percent(25),  // balance_new
-        Uint128::new(1000),   // balance_total
-        Int256::from(0)       // expected_adjustment (positive, rounded down)
+        SignedDecimal256::from_str("0.0005").unwrap()       // expected_adjustment (0.5/1000 = 0.0005)
     )]
     #[case::small_movement_out_of_ideal(
         Decimal::percent(25),  // balance
         Decimal::percent(20),  // balance_new
-        Uint128::new(1000),   // balance_total
-        Int256::from(-1)      // expected_adjustment (negative, rounded up)
+        SignedDecimal256::from_str("-0.0005").unwrap()      // expected_adjustment (-0.5/1000 = -0.0005)
     )]
     #[case::crossing_all_zones_into_ideal(
         Decimal::percent(5),   // balance (below critical lower)
         Decimal::percent(50),  // balance_new (into ideal range)
-        Uint128::new(1000),   // balance_total
-        Int256::from(16)     // expected_adjustment (positive, combines critical and strained rates)
+        SignedDecimal256::from_str("0.016").unwrap()     // expected_adjustment (16/1000 = 0.016)
     )]
     #[case::crossing_all_zones_out_of_ideal(
         Decimal::percent(50),  // balance (in ideal range)
         Decimal::percent(5),   // balance_new (below critical lower)
-        Uint128::new(1000),   // balance_total
-        Int256::from(-16)     // expected_adjustment (negative, combines critical and strained rates)
+        SignedDecimal256::from_str("-0.016").unwrap()     // expected_adjustment (-16/1000 = -0.016)
     )]
     #[case::crossing_critical_to_strained(
         Decimal::percent(5),   // balance (below critical lower)
         Decimal::percent(25),  // balance_new (into strained range)
-        Uint128::new(1000),   // balance_total
-        Int256::from(15)      // expected_adjustment (positive, critical rate)
+        SignedDecimal256::from_str("0.0155").unwrap()      // expected_adjustment (15.5/1000 = 0.0155)
     )]
     #[case::crossing_strained_to_critical(
         Decimal::percent(25),  // balance (in strained range)
         Decimal::percent(5),   // balance_new (below critical lower)
-        Uint128::new(1000),   // balance_total
-        Int256::from(-16)     // expected_adjustment (negative, critical rate)
+        SignedDecimal256::from_str("-0.0155").unwrap()     // expected_adjustment (-15.5/1000 = -0.0155)
     )]
     fn test_compute_adjustment_value(
         #[case] balance: Decimal,
         #[case] balance_new: Decimal,
-        #[case] balance_total: Uint128,
-        #[case] expected_adjustment: Int256,
+        #[case] expected_adjustment: SignedDecimal256,
     ) {
         let params = RebalancingConfig::new(
             Decimal::percent(70),  // ideal_upper
@@ -224,7 +210,7 @@ mod tests {
         .unwrap();
 
         let adjustment =
-            compute_adjustment_value(balance, balance_new, balance_total, params).unwrap();
+            compute_total_effective_adjustment_rate(balance, balance_new, params).unwrap();
 
         assert_eq!(adjustment, expected_adjustment);
     }

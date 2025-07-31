@@ -17,7 +17,7 @@ use crate::{
 use cosmwasm_std::{coin, Decimal, Uint128};
 
 use osmosis_std::types::{
-    cosmos::bank::v1beta1::MsgSend,
+    cosmos::bank::v1beta1::{MsgSend, QueryBalanceRequest},
     osmosis::poolmanager::v1beta1::{
         EstimateSwapExactAmountInRequest, EstimateSwapExactAmountInResponse, MsgSwapExactAmountIn,
         MsgSwapExactAmountOut, SwapAmountInRoute, SwapAmountOutRoute,
@@ -472,6 +472,10 @@ fn test_exit_pool() {
             "provider",
             vec![coin(100_000, AXL_USDC), coin(100_000, COSMOS_USDC)],
         )
+        .with_account(
+            "another_provider",
+            vec![coin(100_000, AXL_USDC), coin(100_000, COSMOS_USDC)],
+        )
         .with_account("user", vec![coin(1_000, AXL_USDC)])
         .with_instantiate_msg(InstantiateMsg {
             pool_asset_configs: vec![
@@ -486,6 +490,14 @@ fn test_exit_pool() {
         .build(&app);
 
     // Join pool with 50:50 ratio
+    t.contract
+        .execute(
+            &ExecMsg::JoinPool {},
+            &[coin(50_000, AXL_USDC), coin(50_000, COSMOS_USDC)],
+            &t.accounts["another_provider"],
+        )
+        .unwrap();
+
     t.contract
         .execute(
             &ExecMsg::JoinPool {},
@@ -585,6 +597,28 @@ fn test_exit_pool() {
         },
         err,
     );
+
+    let GetShareDenomResponse { share_denom } =
+        t.contract.query(&QueryMsg::GetShareDenom {}).unwrap();
+
+    let bank = Bank::new(&app);
+    let another_provider_share = bank
+        .query_balance(&QueryBalanceRequest {
+            address: t.accounts["another_provider"].address(),
+            denom: share_denom,
+        })
+        .unwrap()
+        .balance
+        .unwrap();
+    bank.send(
+        MsgSend {
+            from_address: t.accounts["another_provider"].address(),
+            to_address: t.accounts["provider"].address(),
+            amount: vec![another_provider_share],
+        },
+        &t.accounts["another_provider"],
+    )
+    .unwrap();
 
     // Exit remaining tokens in the pool
     let GetTotalPoolLiquidityResponse {
