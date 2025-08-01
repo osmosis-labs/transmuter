@@ -1,14 +1,13 @@
 mod rebalancer_pass;
 mod rebalancing_adjustment;
+mod response_data;
 
 pub use rebalancing_adjustment::*;
+pub use response_data::*;
 
-use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    coin, ensure, ensure_eq, to_json_binary, Coin, Decimal, Deps, Response, StdError, Storage,
-    Uint128, Uint256,
+    coin, ensure, ensure_eq, Coin, Decimal, Deps, StdError, Storage, Uint128, Uint256,
 };
-use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 
 use crate::{
@@ -23,6 +22,29 @@ use crate::{
 
 /// Swap fee is hardcoded to zero intentionally.
 pub const SWAP_FEE: Decimal = Decimal::zero();
+
+/// Possible variants of swap, depending on the input and output tokens
+#[derive(PartialEq, Debug)]
+pub enum SwapVariant {
+    /// Swap any token to alloyed asset
+    TokenToAlloyed,
+
+    /// Swap alloyed asset to any token
+    AlloyedToToken,
+
+    /// Swap any token to any token
+    TokenToToken,
+}
+
+/// Adjustment to the output amount after swap
+pub enum Adjustment {
+    /// Deduct fee from the output amount
+    DeductFee { fee: Coin },
+    /// Credit incentive to the beneficiary in a normalized amount
+    CreditIncentive { incentive: Uint128 },
+    /// No adjustment
+    None,
+}
 
 impl Transmuter {
     /// Getting the [SwapVariant] of the swap operation
@@ -310,58 +332,4 @@ pub fn construct_scope_value_pairs(
     }
 
     Ok(scope_value_pairs)
-}
-
-/// Possible variants of swap, depending on the input and output tokens
-#[derive(PartialEq, Debug)]
-pub enum SwapVariant {
-    /// Swap any token to alloyed asset
-    TokenToAlloyed,
-
-    /// Swap alloyed asset to any token
-    AlloyedToToken,
-
-    /// Swap any token to any token
-    TokenToToken,
-}
-
-pub enum Entrypoint {
-    Exec,
-    Sudo,
-}
-
-pub fn set_data_if_sudo<T>(
-    response: Response,
-    entrypoint: &Entrypoint,
-    data: &T,
-) -> Result<Response, StdError>
-where
-    T: Serialize + ?Sized,
-{
-    Ok(match entrypoint {
-        Entrypoint::Sudo => response.set_data(to_json_binary(data)?),
-        Entrypoint::Exec => response,
-    })
-}
-
-#[cw_serde]
-/// Fixing token in amount makes token amount out varies
-pub struct SwapExactAmountInResponseData {
-    pub token_out_amount: Uint128,
-}
-
-#[cw_serde]
-/// Fixing token out amount makes token amount in varies
-pub struct SwapExactAmountOutResponseData {
-    pub token_in_amount: Uint128,
-}
-
-/// Adjustment to the output amount after swap
-pub enum Adjustment {
-    /// Deduct fee from the output amount
-    DeductFee { fee: Coin },
-    /// Credit incentive to the beneficiary in a normalized amount
-    CreditIncentive { incentive: Uint128 },
-    /// No adjustment
-    None,
 }
