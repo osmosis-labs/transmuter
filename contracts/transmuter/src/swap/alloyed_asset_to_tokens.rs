@@ -11,12 +11,37 @@ use crate::{
     contract::Transmuter,
     corruptable::Corruptable as _,
     swap::{
-        set_data_if_sudo, Adjustment, BurnTarget, Entrypoint, SwapExactAmountInResponseData,
-        SwapExactAmountOutResponseData, SwapFromAlloyedConstraint,
+        set_data_if_sudo, Adjustment, Entrypoint, SwapExactAmountInResponseData,
+        SwapExactAmountOutResponseData,
     },
     transmuter_pool::TransmuterPool,
     ContractError,
 };
+
+#[derive(Debug)]
+pub enum SwapFromAlloyedConstraint<'a> {
+    ExactIn {
+        token_out_denom: &'a str,
+        token_out_min_amount: Uint128,
+        token_in_amount: Uint128,
+    },
+    ExactOut {
+        tokens_out: &'a [Coin],
+        token_in_max_amount: Uint128,
+    },
+}
+
+/// Determines where to burn alloyed assets from.
+pub enum BurnTarget {
+    /// Burn alloyed asset from the sender's account.
+    /// This is used when the sender wants to exit pool
+    /// forcing no funds attached in the process.
+    SenderAccount,
+    /// Burn alloyed assets from the sent funds.
+    /// This is used when the sender wants to swap tokens for alloyed assets,
+    /// since alloyed asset needs to be sent to the contract before swapping.
+    SentFunds,
+}
 
 impl Transmuter {
     pub fn swap_alloyed_asset_to_tokens(

@@ -9,11 +9,24 @@ use crate::{
     contract::Transmuter,
     swap::{
         set_data_if_sudo, Adjustment, Entrypoint, SwapExactAmountInResponseData,
-        SwapExactAmountOutResponseData, SwapToAlloyedConstraint,
+        SwapExactAmountOutResponseData,
     },
     transmuter_pool::TransmuterPool,
     ContractError,
 };
+
+#[derive(Debug)]
+pub enum SwapToAlloyedConstraint<'a> {
+    ExactIn {
+        tokens_in: &'a [Coin],
+        token_out_min_amount: Uint128,
+    },
+    ExactOut {
+        token_in_denom: &'a str,
+        token_in_max_amount: Uint128,
+        token_out_amount: Uint128,
+    },
+}
 
 impl Transmuter {
     pub fn swap_tokens_to_alloyed_asset(

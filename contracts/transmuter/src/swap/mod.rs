@@ -1,6 +1,9 @@
 mod alloyed_asset_to_tokens;
 mod tokens_to_alloyed_asset;
 
+pub use alloyed_asset_to_tokens::{BurnTarget, SwapFromAlloyedConstraint};
+pub use tokens_to_alloyed_asset::SwapToAlloyedConstraint;
+
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashSet},
@@ -724,44 +727,6 @@ pub struct SwapExactAmountInResponseData {
 /// Fixing token out amount makes token amount in varies
 pub struct SwapExactAmountOutResponseData {
     pub token_in_amount: Uint128,
-}
-
-#[derive(Debug)]
-pub enum SwapToAlloyedConstraint<'a> {
-    ExactIn {
-        tokens_in: &'a [Coin],
-        token_out_min_amount: Uint128,
-    },
-    ExactOut {
-        token_in_denom: &'a str,
-        token_in_max_amount: Uint128,
-        token_out_amount: Uint128,
-    },
-}
-
-#[derive(Debug)]
-pub enum SwapFromAlloyedConstraint<'a> {
-    ExactIn {
-        token_out_denom: &'a str,
-        token_out_min_amount: Uint128,
-        token_in_amount: Uint128,
-    },
-    ExactOut {
-        tokens_out: &'a [Coin],
-        token_in_max_amount: Uint128,
-    },
-}
-
-/// Determines where to burn alloyed assets from.
-pub enum BurnTarget {
-    /// Burn alloyed asset from the sender's account.
-    /// This is used when the sender wants to exit pool
-    /// forcing no funds attached in the process.
-    SenderAccount,
-    /// Burn alloyed assets from the sent funds.
-    /// This is used when the sender wants to swap tokens for alloyed assets,
-    /// since alloyed asset needs to be sent to the contract before swapping.
-    SentFunds,
 }
 
 /// Adjustment to the output amount after swap
