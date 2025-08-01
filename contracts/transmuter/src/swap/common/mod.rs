@@ -1,4 +1,7 @@
 mod rebalancer_pass;
+mod rebalancing_adjustment;
+
+pub use rebalancing_adjustment::*;
 
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
