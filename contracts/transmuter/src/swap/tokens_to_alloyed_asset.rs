@@ -29,6 +29,9 @@ pub enum SwapToAlloyedConstraint<'a> {
 }
 
 impl Transmuter {
+    /// Swap tokens to alloyed asset. (eg. swap nBTC -> allBTC or join pool pool nBTC, wBTC -> allBTC)
+    ///
+    /// Send token to the contract and mint equal value of alloyed asset to the sender.
     pub fn swap_tokens_to_alloyed_asset(
         &self,
         entrypoint: Entrypoint,

@@ -42,6 +42,9 @@ pub enum BurnTarget {
 }
 
 impl Transmuter {
+    /// Swap alloyed asset to tokens. (eg. allBTC -> nBTC or exit pool allBTC -> nBTC, wBTC)
+    ///
+    /// It burns alloyed asset used for the swap then sends equal value of tokens to the sender.
     pub fn swap_alloyed_asset_to_tokens(
         &self,
         entrypoint: Entrypoint,
