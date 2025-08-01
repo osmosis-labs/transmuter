@@ -1,6 +1,6 @@
 use crate::{
     contract::Transmuter,
-    swap::{construct_scope_value_pairs, Adjustment},
+    swap::common::{construct_scope_value_pairs, Adjustment},
     transmuter_pool::TransmuterPool,
     ContractError,
 };

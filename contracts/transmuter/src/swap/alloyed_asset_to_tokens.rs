@@ -10,7 +10,7 @@ use crate::{
     asset::convert_amount,
     contract::Transmuter,
     corruptable::Corruptable as _,
-    swap::{
+    swap::common::{
         set_data_if_sudo, Adjustment, Entrypoint, SwapExactAmountInResponseData,
         SwapExactAmountOutResponseData,
     },
@@ -147,20 +147,12 @@ impl Transmuter {
 
             let rebalancing_adjustment =
                 |_pool: TransmuterPool, token_out: Coin, total_adjustment_value: Int256| {
-                    let (token_out, adjustment) = match total_adjustment_value.cmp(&Int256::zero())
-                    {
-                        // negative adjustment value means fee deduction from token_out
-                        Ordering::Less => deduct_fee_from_token_out(
-                            &token_out,
-                            std_norm_factor,
-                            token_out_norm_factor,
-                            total_adjustment_value,
-                        )?,
-                        // positive adjustment value means incentive credit to the beneficiary
-                        Ordering::Greater => credit_incentive(token_out, total_adjustment_value)?,
-                        // zero adjustment means no adjustment
-                        Ordering::Equal => (token_out, Adjustment::None),
-                    };
+                    let (token_out, adjustment) = rebalancing_adjustment_for_exact_in(
+                        token_out,
+                        token_out_norm_factor,
+                        std_norm_factor,
+                        total_adjustment_value,
+                    )?;
 
                     ensure!(
                         token_out.amount >= token_out_min_amount,
@@ -231,21 +223,12 @@ impl Transmuter {
 
             let rebalancing_adjustment =
                 |_pool: TransmuterPool, token_in: Coin, total_adjustment_value: Int256| {
-                    // If adjustment value is negative, fee take from the token_in, so we require additional token_in to pay for the fee.
-                    // Otherwise, return the token_in as is.
-                    let (token_in, adjustment) = match total_adjustment_value.cmp(&Int256::zero()) {
-                        // negative adjustment value means fee deduction from token_in
-                        Ordering::Less => increase_and_deduct_fee_from_token_in(
-                            &token_in,
-                            token_in_norm_factor,
-                            std_norm_factor,
-                            total_adjustment_value,
-                        )?,
-                        // positive adjustment value means incentive credit to the beneficiary
-                        Ordering::Greater => credit_incentive(token_in, total_adjustment_value)?,
-                        // zero adjustment means no adjustment
-                        Ordering::Equal => (token_in, Adjustment::None),
-                    };
+                    let (token_in, adjustment) = rebalancing_adjustment_for_exact_out(
+                        token_in,
+                        token_in_norm_factor,
+                        std_norm_factor,
+                        total_adjustment_value,
+                    )?;
 
                     let token_in_amount = token_in.amount.clone();
 
@@ -398,6 +381,58 @@ impl Transmuter {
                 && (is_under_corrupted_asset_group || pool.is_corrupted_asset(&coin.denom))
         })
     }
+}
+
+/// Rebalancing adjustment for exact in.
+///
+/// If adjustment value is negative, fee take from the token_out, so we require additional token_out to pay for the fee.
+/// If adjustment value is positive, incentive is credited to the beneficiary, return the token_out as is.
+/// If adjustment value is zero, no adjustment is made, return the token_out as is.
+fn rebalancing_adjustment_for_exact_in(
+    token_out: Coin,
+    token_out_norm_factor: Uint128,
+    std_norm_factor: Uint128,
+    total_adjustment_value: Int256,
+) -> Result<(Coin, Adjustment), ContractError> {
+    match total_adjustment_value.cmp(&Int256::zero()) {
+        // negative adjustment value means fee deduction from token_out
+        Ordering::Less => deduct_fee_from_token_out(
+            &token_out,
+            std_norm_factor,
+            token_out_norm_factor,
+            total_adjustment_value,
+        ),
+        // positive adjustment value means incentive credit to the beneficiary
+        Ordering::Greater => credit_incentive(token_out, total_adjustment_value),
+        // zero adjustment means no adjustment
+        Ordering::Equal => Ok((token_out, Adjustment::None)),
+    }
+}
+
+/// Rebalancing adjustment for exact out.
+///
+/// If adjustment value is negative, fee take from the token_in, so we require additional token_in to pay for the fee.
+/// If adjustment value is positive, incentive is credited to the beneficiary, return the token_in as is.
+/// If adjustment value is zero, no adjustment is made, return the token_in as is.
+fn rebalancing_adjustment_for_exact_out(
+    token_in: Coin,
+    token_in_norm_factor: Uint128,
+    std_norm_factor: Uint128,
+    total_adjustment_value: Int256,
+) -> Result<(Coin, Adjustment), ContractError> {
+    Ok(match total_adjustment_value.cmp(&Int256::zero()) {
+        // negative adjustment value means fee deduction from token_in
+        Ordering::Less => increase_and_deduct_fee_from_token_in(
+            &token_in,
+            token_in_norm_factor,
+            std_norm_factor,
+            total_adjustment_value,
+        )?,
+        // positive adjustment value means incentive credit to the beneficiary
+        Ordering::Greater => credit_incentive(token_in, total_adjustment_value)?,
+        // zero adjustment means no adjustment
+        Ordering::Equal => (token_in, Adjustment::None),
+    })
 }
 
 /// Deduct fee from the token out, used when adjustment is negative and token in needs to be exact.

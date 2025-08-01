@@ -7,7 +7,7 @@ use cosmwasm_std::{
 use crate::{
     asset::convert_amount,
     contract::Transmuter,
-    swap::{Adjustment, SwapExactAmountOutResponseData},
+    swap::common::{Adjustment, SwapExactAmountOutResponseData},
     transmuter_pool::TransmuterPool,
     ContractError,
 };
