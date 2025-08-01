@@ -22,12 +22,8 @@ impl Transmuter {
     where
         RunPool:
             FnOnce(Deps, TransmuterPool) -> Result<(TransmuterPool, RunPoolOutput), ContractError>,
-        RebalancingAdjustment: FnOnce(
-            TransmuterPool,
-            RunPoolOutput,
-            Int256,
-        )
-            -> Result<(RunPoolOutput, Adjustment), ContractError>,
+        RebalancingAdjustment:
+            FnOnce(RunPoolOutput, Int256) -> Result<(RunPoolOutput, Adjustment), ContractError>,
     {
         let prev_asset_weights = pool.asset_weights()?.unwrap_or_default();
         let prev_asset_group_weights = pool.asset_group_weights()?.unwrap_or_default();
@@ -158,11 +154,8 @@ impl Transmuter {
         let total_balance = SignedDecimal256::from_atomics(Int256::from(total_balance), 0)?;
         let total_adjustment_value = total_adjustment_rate.checked_mul(total_balance)?;
 
-        let (output, adjustment) = rebalancing_adjustment(
-            pool.clone(),
-            output,
-            round_adjustment(total_adjustment_value)?,
-        )?;
+        let (output, adjustment) =
+            rebalancing_adjustment(output, round_adjustment(total_adjustment_value)?)?;
 
         match adjustment {
             Adjustment::DeductFee { ref fee } => {
