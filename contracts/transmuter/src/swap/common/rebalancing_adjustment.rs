@@ -39,12 +39,39 @@ pub fn rebalancing_adjustment_for_exact_out(
     )
 }
 
+pub fn rebalancing_adjustment_for_exact_in(
+    token_out_min_amount: Uint128,
+    std_norm_factor: Uint128,
+    token_out_norm_factor: Uint128,
+) -> Box<dyn FnOnce(TransmuterPool, Coin, Int256) -> Result<(Coin, Adjustment), ContractError>> {
+    Box::new(
+        move |_pool: TransmuterPool, token_out: Coin, total_adjustment_value: Int256| {
+            let (token_out, adjustment) = adjust_exact_in(
+                token_out,
+                token_out_norm_factor,
+                std_norm_factor,
+                total_adjustment_value,
+            )?;
+
+            ensure!(
+                token_out.amount >= token_out_min_amount,
+                ContractError::InsufficientTokenOut {
+                    min_required: token_out_min_amount,
+                    amount_out: token_out.amount,
+                }
+            );
+
+            Ok((token_out, adjustment))
+        },
+    )
+}
+
 /// Adjust token out for exact in.
 ///
 /// If adjustment value is negative, fee take from the token_out, so we require additional token_out to pay for the fee.
 /// If adjustment value is positive, incentive is credited to the beneficiary, return the token_out as is.
 /// If adjustment value is zero, no adjustment is made, return the token_out as is.
-pub fn adjust_exact_in(
+fn adjust_exact_in(
     token_out: Coin,
     token_out_norm_factor: Uint128,
     std_norm_factor: Uint128,
@@ -70,7 +97,7 @@ pub fn adjust_exact_in(
 /// If adjustment value is negative, fee take from the token_in, so we require additional token_in to pay for the fee.
 /// If adjustment value is positive, incentive is credited to the beneficiary, return the token_in as is.
 /// If adjustment value is zero, no adjustment is made, return the token_in as is.
-pub fn adjust_exact_out(
+fn adjust_exact_out(
     token_in: Coin,
     token_in_norm_factor: Uint128,
     std_norm_factor: Uint128,

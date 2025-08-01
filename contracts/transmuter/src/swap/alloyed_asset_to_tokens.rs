@@ -1,6 +1,4 @@
-use cosmwasm_std::{
-    coin, ensure, Addr, BankMsg, Coin, Deps, DepsMut, Env, Int256, Response, Uint128,
-};
+use cosmwasm_std::{coin, ensure, Addr, BankMsg, Coin, Deps, DepsMut, Env, Response, Uint128};
 use osmosis_std::types::osmosis::tokenfactory::v1beta1::MsgBurn;
 
 use crate::{
@@ -8,12 +6,11 @@ use crate::{
     contract::Transmuter,
     corruptable::Corruptable as _,
     swap::{
-        adjust_exact_in,
         common::{
             set_data_if_sudo, Adjustment, Entrypoint, SwapExactAmountInResponseData,
             SwapExactAmountOutResponseData,
         },
-        rebalancing_adjustment_for_exact_out,
+        rebalancing_adjustment_for_exact_in, rebalancing_adjustment_for_exact_out,
     },
     transmuter_pool::TransmuterPool,
     ContractError,
@@ -146,25 +143,11 @@ impl Transmuter {
                 Ok((pool, token_out))
             };
 
-            let rebalancing_adjustment =
-                |_pool: TransmuterPool, token_out: Coin, total_adjustment_value: Int256| {
-                    let (token_out, adjustment) = adjust_exact_in(
-                        token_out,
-                        token_out_norm_factor,
-                        std_norm_factor,
-                        total_adjustment_value,
-                    )?;
-
-                    ensure!(
-                        token_out.amount >= token_out_min_amount,
-                        ContractError::InsufficientTokenOut {
-                            min_required: token_out_min_amount,
-                            amount_out: token_out.amount,
-                        }
-                    );
-
-                    Ok((token_out, adjustment))
-                };
+            let rebalancing_adjustment = rebalancing_adjustment_for_exact_in(
+                token_out_min_amount,
+                std_norm_factor,
+                token_out_norm_factor,
+            );
 
             (pool, token_out, adjustment) = self.rebalancer_pass(
                 deps.branch(),

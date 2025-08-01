@@ -1,10 +1,8 @@
-use cosmwasm_std::{
-    ensure, to_json_binary, Addr, BankMsg, Coin, Deps, DepsMut, Int256, Response, Uint128,
-};
+use cosmwasm_std::{to_json_binary, Addr, BankMsg, Coin, Deps, DepsMut, Response, Uint128};
 
 use crate::{
     contract::Transmuter,
-    swap::{adjust_exact_in, common::SwapExactAmountInResponseData},
+    swap::{common::SwapExactAmountInResponseData, rebalancing_adjustment_for_exact_in},
     transmuter_pool::TransmuterPool,
     ContractError,
 };
@@ -27,25 +25,11 @@ impl Transmuter {
             self.out_amt_given_in(deps, pool, token_in, token_out_denom)
         };
 
-        let rebalancing_adjustment =
-            |pool: TransmuterPool, token_out: Coin, total_adjustment_value: Int256| {
-                let (token_out, adjustment) = adjust_exact_in(
-                    token_out,
-                    token_out_norm_factor,
-                    std_norm_factor,
-                    total_adjustment_value,
-                )?;
-
-                ensure!(
-                    token_out.amount >= token_out_min_amount,
-                    ContractError::InsufficientTokenOut {
-                        min_required: token_out_min_amount,
-                        amount_out: token_out.amount,
-                    }
-                );
-
-                Ok((token_out, adjustment))
-            };
+        let rebalancing_adjustment = rebalancing_adjustment_for_exact_in(
+            token_out_min_amount,
+            std_norm_factor,
+            token_out_norm_factor,
+        );
 
         let (mut pool, actual_token_out, _adjustment) = self.rebalancer_pass(
             deps.branch(),

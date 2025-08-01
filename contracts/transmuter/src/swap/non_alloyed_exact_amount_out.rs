@@ -1,13 +1,8 @@
-use cosmwasm_std::{
-    ensure, to_json_binary, Addr, BankMsg, Coin, Deps, DepsMut, Int256, Response, Uint128,
-};
+use cosmwasm_std::{to_json_binary, Addr, BankMsg, Coin, Deps, DepsMut, Response, Uint128};
 
 use crate::{
     contract::Transmuter,
-    swap::{
-        adjust_exact_out, common::SwapExactAmountOutResponseData,
-        rebalancing_adjustment_for_exact_out,
-    },
+    swap::{common::SwapExactAmountOutResponseData, rebalancing_adjustment_for_exact_out},
     transmuter_pool::TransmuterPool,
     ContractError,
 };
