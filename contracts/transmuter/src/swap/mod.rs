@@ -1,23 +1,19 @@
+mod rebalancer_pass;
+
 mod alloyed_asset_to_tokens;
+mod non_alloyed_exact_amount_in;
+mod non_alloyed_exact_amount_out;
 mod tokens_to_alloyed_asset;
 
 pub use alloyed_asset_to_tokens::{BurnTarget, SwapFromAlloyedConstraint};
-pub use tokens_to_alloyed_asset::SwapToAlloyedConstraint;
-
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, HashSet},
-};
-
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{
-    coin, ensure, ensure_eq, to_json_binary, Addr, BankMsg, Coin, Decimal, Deps, DepsMut, Int256,
-    Response, SignedDecimal256, StdError, Storage, Uint128, Uint256,
+    coin, ensure, ensure_eq, to_json_binary, Coin, Decimal, Deps, Response, StdError, Storage,
+    Uint128, Uint256,
 };
 use serde::Serialize;
-use transmuter_math::rebalancing::{
-    compute_total_effective_adjustment_rate, config::RebalancingConfig, round_adjustment,
-};
+use std::collections::{BTreeMap, HashSet};
+pub use tokens_to_alloyed_asset::SwapToAlloyedConstraint;
 
 use crate::{
     alloyed_asset::{swap_from_alloyed, swap_to_alloyed},
@@ -60,189 +56,6 @@ impl Transmuter {
         }
 
         Ok(SwapVariant::TokenToToken)
-    }
-
-    pub fn swap_non_alloyed_exact_amount_in(
-        &self,
-        token_in: Coin,
-        token_out_denom: &str,
-        token_out_min_amount: Uint128,
-        sender: Addr,
-        mut deps: DepsMut,
-    ) -> Result<Response, ContractError> {
-        let pool = self.pool.load(deps.storage)?;
-
-        let run_pool = |deps: Deps, pool: TransmuterPool| {
-            self.out_amt_given_in(deps, pool, token_in, token_out_denom)
-        };
-
-        let rebalancing_adjustment =
-            |pool: TransmuterPool, token_out: Coin, total_adjustment_value: Int256| {
-                let std_norm_factor = pool.std_norm_factor()?;
-                let token_out_norm_factor = pool
-                    .get_pool_asset_by_denom(token_out_denom)?
-                    .normalization_factor();
-
-                let (token_out, adjustment) = match total_adjustment_value.cmp(&Int256::zero()) {
-                    Ordering::Less => {
-                        // deduct fee from token_out
-                        let fee_amount = convert_amount(
-                            total_adjustment_value.abs().try_into()?,
-                            std_norm_factor,
-                            token_out_norm_factor,
-                            // rounding up means slightly more fee than required, keeps the incentive pool healthy
-                            &crate::asset::Rounding::Up,
-                        )?;
-                        let token_out_amount: Uint128 = token_out.amount.checked_sub(fee_amount)?;
-                        let token_out = coin(token_out_amount.u128(), token_out.denom.clone());
-                        let token_out_denom = token_out.denom.clone();
-
-                        (
-                            token_out,
-                            Adjustment::DeductFee {
-                                fee: coin(fee_amount.u128(), token_out_denom),
-                            },
-                        )
-                    }
-                    Ordering::Greater => (
-                        token_out,
-                        Adjustment::CreditIncentive {
-                            incentive: total_adjustment_value.abs().try_into()?,
-                        },
-                    ),
-                    Ordering::Equal => (token_out, Adjustment::None),
-                };
-
-                ensure!(
-                    token_out.amount >= token_out_min_amount,
-                    ContractError::InsufficientTokenOut {
-                        min_required: token_out_min_amount,
-                        amount_out: token_out.amount,
-                    }
-                );
-
-                Ok((token_out, adjustment))
-            };
-
-        let (mut pool, actual_token_out, _adjustment) = self.rebalancer_pass(
-            deps.branch(),
-            pool,
-            &sender,
-            run_pool,
-            rebalancing_adjustment,
-        )?;
-
-        self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
-
-        // save pool
-        self.pool.save(deps.storage, &pool)?;
-
-        let send_token_out_to_sender_msg = BankMsg::Send {
-            to_address: sender.to_string(),
-            amount: vec![actual_token_out.clone()],
-        };
-
-        let swap_result = SwapExactAmountInResponseData {
-            token_out_amount: actual_token_out.amount,
-        };
-
-        Ok(Response::new()
-            .add_message(send_token_out_to_sender_msg)
-            .set_data(to_json_binary(&swap_result)?))
-    }
-
-    pub fn swap_non_alloyed_exact_amount_out(
-        &self,
-        token_in_denom: &str,
-        token_in_max_amount: Uint128,
-        token_out: Coin,
-        sender: Addr,
-        mut deps: DepsMut,
-    ) -> Result<Response, ContractError> {
-        let pool = self.pool.load(deps.storage)?;
-
-        let run_pool = |deps: Deps, pool: TransmuterPool| {
-            self.in_amt_given_out(deps, pool, token_out.clone(), token_in_denom.to_string())
-        };
-
-        let rebalancing_adjustment =
-            |pool: TransmuterPool, token_in: Coin, total_adjustment_value: Int256| {
-                let std_norm_factor = pool.std_norm_factor()?;
-                let token_in_norm_factor = pool
-                    .get_pool_asset_by_denom(&token_in_denom)?
-                    .normalization_factor();
-
-                // If adjustment value is negative, fee take from the token_in, so we require addtional token_in // to pay for the fee.
-                // Otherwise, return the token_in as is
-                let (token_in, adjustment) = match total_adjustment_value.cmp(&Int256::zero()) {
-                    // negative adjustment value means fee deduction from token_in
-                    Ordering::Less => {
-                        let fee = convert_amount(
-                            total_adjustment_value.abs().try_into()?,
-                            std_norm_factor,
-                            token_in_norm_factor,
-                            // rounding up means slightly more fee than required, keeps the incentive pool healthy
-                            &crate::asset::Rounding::Up,
-                        )?;
-
-                        let token_in_amount = token_in.amount.checked_add(fee)?;
-
-                        (
-                            coin(token_in_amount.u128(), token_in.denom.clone()),
-                            Adjustment::DeductFee {
-                                fee: coin(fee.u128(), token_in.denom.clone()),
-                            },
-                        )
-                    }
-                    // positive adjustment value means incentive credit to the beneficiary
-                    Ordering::Greater => (
-                        token_in,
-                        Adjustment::CreditIncentive {
-                            incentive: total_adjustment_value.abs().try_into()?,
-                        },
-                    ),
-                    // zero adjustment means no adjustment
-                    Ordering::Equal => (token_in, Adjustment::None),
-                };
-
-                let token_in_amount = token_in.amount.clone();
-
-                ensure!(
-                    token_in_amount <= token_in_max_amount,
-                    ContractError::ExcessiveRequiredTokenIn {
-                        limit: token_in_max_amount,
-                        required: token_in_amount,
-                    }
-                );
-
-                Ok((token_in, adjustment))
-            };
-
-        let (mut pool, actual_token_in, _adjustment) = self.rebalancer_pass(
-            deps.branch(),
-            pool,
-            &sender,
-            run_pool,
-            rebalancing_adjustment,
-        )?;
-
-        self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
-
-        // save pool
-        self.pool.save(deps.storage, &pool)?;
-
-        let send_token_out_to_sender_msg = BankMsg::Send {
-            to_address: sender.to_string(),
-            amount: vec![token_out],
-        };
-
-        let swap_result = SwapExactAmountOutResponseData {
-            token_in_amount: actual_token_in.amount,
-        };
-
-        Ok(Response::new()
-            .add_message(send_token_out_to_sender_msg)
-            .set_data(to_json_binary(&swap_result)?))
     }
 
     pub fn in_amt_given_out(
@@ -365,188 +178,6 @@ impl Transmuter {
                 (pool, token_out)
             }
         })
-    }
-
-    pub fn rebalancer_pass<RunPoolOutput, RunPool, RebalancingAdjustment>(
-        &self,
-        deps: DepsMut,
-        pool: TransmuterPool,
-        beneficiary: &Addr,
-        run_pool: RunPool,
-        rebalancing_adjustment: RebalancingAdjustment,
-    ) -> Result<(TransmuterPool, RunPoolOutput, Adjustment), ContractError>
-    where
-        RunPool:
-            FnOnce(Deps, TransmuterPool) -> Result<(TransmuterPool, RunPoolOutput), ContractError>,
-        RebalancingAdjustment: FnOnce(
-            TransmuterPool,
-            RunPoolOutput,
-            Int256,
-        )
-            -> Result<(RunPoolOutput, Adjustment), ContractError>,
-    {
-        let prev_asset_weights = pool.asset_weights()?.unwrap_or_default();
-        let prev_asset_group_weights = pool.asset_group_weights()?.unwrap_or_default();
-
-        // total normalized amount of the asset in the pool
-        let total_balance_before = pool.normalized_total_balance()?;
-
-        let (pool, output) = run_pool(deps.as_ref(), pool)?;
-
-        // in case one of token in or out is alloyed, balance_total is updated
-        let total_balance_after = pool.normalized_total_balance()?;
-
-        let total_normalized_incentive_pool_balance =
-            self.total_normalized_incentive_pool_balance(deps.storage, &pool)?;
-
-        let total_incentive_credits = self
-            .incentive_pool
-            .get_total_incentive_credits(deps.storage)?;
-
-        // available incentive that can be distributed
-        let available_incentive =
-            total_normalized_incentive_pool_balance.saturating_sub(total_incentive_credits);
-
-        // check limits only if pool assets are not zero, calculate adjustment value
-        let mut total_adjustment_rate = SignedDecimal256::zero();
-        if let Some(updated_asset_weights) = pool.asset_weights()? {
-            if let Some(updated_asset_group_weights) = pool.asset_group_weights()? {
-                let scope_value_pairs = construct_scope_value_pairs(
-                    prev_asset_weights,
-                    updated_asset_weights,
-                    prev_asset_group_weights,
-                    updated_asset_group_weights,
-                )?;
-
-                // find total adjustment reqruied to move to all assets to ideal balance
-                let mut total_adjustment_to_ideal_required = SignedDecimal256::zero();
-                for (scope, (prev_weight, _)) in scope_value_pairs.clone() {
-                    let rebalancing_config =
-                        self.rebalancer.get_config_by_scope(deps.storage, &scope)?;
-                    if let Some(rebalancing_config) = rebalancing_config {
-                        let nearest_ideal_weight =
-                            rebalancing_config.nearest_ideal_weight(prev_weight);
-
-                        // find adjustment in order to move weight from current to nearest ideal weight
-                        // it will always return 0 or positive value as it moves towards ideal weight
-                        let adjustment = compute_total_effective_adjustment_rate(
-                            prev_weight,
-                            nearest_ideal_weight,
-                            rebalancing_config,
-                        )?;
-
-                        total_adjustment_to_ideal_required =
-                            total_adjustment_to_ideal_required.checked_add(adjustment)?;
-                    }
-                }
-
-                let total_balance =
-                    SignedDecimal256::from_atomics(Int256::from(total_balance_before), 0)?;
-                let total_incentive_required_for_rebalance = round_adjustment(
-                    total_adjustment_to_ideal_required.checked_mul(total_balance)?,
-                )?
-                .abs_diff(Int256::zero()); // absolute value
-
-                // incentive pool is unhealthy if total incentive required for rebalance is greater than avaialable incentive pool
-                let is_incentive_pool_unhealthy =
-                    total_incentive_required_for_rebalance > available_incentive;
-
-                for (scope, (prev_weight, updated_weight)) in scope_value_pairs.clone() {
-                    let rebalancing_config =
-                        self.rebalancer.get_config_by_scope(deps.storage, &scope)?;
-                    if let Some(rebalancing_config) = rebalancing_config {
-                        let adjustment = compute_total_effective_adjustment_rate(
-                            prev_weight,
-                            updated_weight,
-                            rebalancing_config.clone(),
-                        )?;
-
-                        // raise strained rate to equal to critical if incentive pool is unhealthy and it's a fee case
-                        let adjustment = if adjustment < SignedDecimal256::zero() {
-                            let rebalancing_config = RebalancingConfig {
-                                adjustment_rate_strained: if is_incentive_pool_unhealthy {
-                                    rebalancing_config.adjustment_rate_critical
-                                } else {
-                                    rebalancing_config.adjustment_rate_strained
-                                },
-                                ..rebalancing_config
-                            };
-
-                            compute_total_effective_adjustment_rate(
-                                prev_weight,
-                                updated_weight,
-                                rebalancing_config,
-                            )?
-                        } else {
-                            adjustment
-                        };
-
-                        total_adjustment_rate = total_adjustment_rate.checked_add(adjustment)?;
-                    }
-                }
-
-                // TODO: have a way to skip limit check here
-                self.rebalancer
-                    .check_limits(deps.storage, scope_value_pairs)?;
-            }
-        }
-
-        // if total balance is updated, it means that one of token in or out is alloyed
-        let total_balance = if total_balance_before != total_balance_after {
-            match total_adjustment_rate.cmp(&SignedDecimal256::zero()) {
-                // Incentivized case:
-                // Incentives are paid from a pool of previously collected fees. It is logical to scale the reward based on the state of the pool *before* the user's helpful contribution.
-                // This provides a fair reward relative to the pool's history and prevents a single large, helpful deposit from draining a disproportionate amount of the incentive fund.
-                Ordering::Greater => total_balance_before,
-                // Fee deduction case:
-                // This keeps the incentive pool healthy by ensuring that the incentive is proportional to the pool's size.
-                // - For **harmful joins** (liquidity addition), the fee is based on `total_balance_after`. This ensures the penalty is proportional to the new, larger pool size that the user has unbalanced.
-                // - For **harmful exits** (liquidity withdrawal), the fee is based on `total_balance_before`. This ensures the penalty is proportional to the state of the pool *before* it was damaged by the withdrawal.
-                Ordering::Less => total_balance_before.max(total_balance_after),
-
-                // No adjustment, so this doesn't matter
-                Ordering::Equal => Uint128::zero(),
-            }
-        } else {
-            total_balance_before
-        };
-
-        let total_balance = SignedDecimal256::from_atomics(Int256::from(total_balance), 0)?;
-        let total_adjustment_value = total_adjustment_rate.checked_mul(total_balance)?;
-
-        let (output, adjustment) = rebalancing_adjustment(
-            pool.clone(),
-            output,
-            round_adjustment(total_adjustment_value)?,
-        )?;
-
-        match adjustment {
-            Adjustment::DeductFee { ref fee } => {
-                self.incentive_pool.add_tokens(deps.storage, &fee)?;
-            }
-            Adjustment::CreditIncentive { incentive } => {
-                let mut pool_denom_factors = pool
-                    .pool_assets
-                    .iter()
-                    .map(|asset| (asset.denom().to_string(), asset.normalization_factor()))
-                    .collect::<BTreeMap<_, _>>();
-
-                let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
-                let alloyed_norm_factor =
-                    self.alloyed_asset.get_normalization_factor(deps.storage)?;
-                pool_denom_factors.insert(alloyed_denom, alloyed_norm_factor);
-
-                self.incentive_pool.credit_incentive(
-                    deps.storage,
-                    &beneficiary,
-                    incentive,
-                    &pool_denom_factors,
-                )?;
-            }
-            Adjustment::None => {}
-        }
-
-        Ok((pool, output, adjustment))
     }
 
     pub fn ensure_valid_swap_fee(&self, swap_fee: Decimal) -> Result<(), ContractError> {
@@ -748,7 +379,7 @@ mod tests {
         testing::{
             mock_dependencies, mock_env, MockApi, MockQuerier, MockStorage, MOCK_CONTRACT_ADDR,
         },
-        Coins, CosmosMsg, OwnedDeps, SubMsg,
+        Addr, BankMsg, Coins, CosmosMsg, OwnedDeps, SubMsg,
     };
     use itertools::Itertools;
     use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
