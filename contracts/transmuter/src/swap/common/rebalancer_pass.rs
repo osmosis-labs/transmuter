@@ -1,16 +1,26 @@
 use crate::{
     contract::Transmuter,
+    scope::Scope,
     swap::common::{construct_scope_value_pairs, Adjustment},
     transmuter_pool::TransmuterPool,
     ContractError,
 };
-use cosmwasm_std::{Addr, Deps, DepsMut, Int256, SignedDecimal256, Uint128};
+use cosmwasm_std::{Addr, Decimal, Deps, DepsMut, Int256, SignedDecimal256, Uint128, Uint256};
 use std::{cmp::Ordering, collections::BTreeMap};
 use transmuter_math::rebalancing::{
     compute_total_effective_adjustment_rate, config::RebalancingConfig, round_adjustment,
 };
 
 impl Transmuter {
+    /// Executes core rebalancing logic that applies rebalancing adjustments to a pool operation and check limits.
+    ///
+    /// This function is a core component of the transmuter's rebalancing mechanism. It:
+    /// - Captures the pool state before the operation
+    /// - Executes the provided pool operation
+    /// - Calculates rebalancing adjustments based on weight changes
+    /// - Applies incentives or fees based on whether the operation helps or harms pool balance
+    /// - Updates the incentive pool accordingly
+    /// - Checks limits
     pub fn rebalancer_pass<RunPoolOutput, RunPool, RebalancingAdjustment>(
         &self,
         deps: DepsMut,
@@ -58,79 +68,148 @@ impl Transmuter {
                     updated_asset_group_weights,
                 )?;
 
-                // find total adjustment reqruied to move to all assets to ideal balance
-                let mut total_adjustment_to_ideal_required = SignedDecimal256::zero();
-                for (scope, (prev_weight, _)) in scope_value_pairs.clone() {
-                    let rebalancing_config =
-                        self.rebalancer.get_config_by_scope(deps.storage, &scope)?;
-                    if let Some(rebalancing_config) = rebalancing_config {
-                        let nearest_ideal_weight =
-                            rebalancing_config.nearest_ideal_weight(prev_weight);
+                // compute total incentive required to rebalance the pool to ideal balance
+                let total_incentive_required_to_rebalance = self
+                    .compute_total_incentive_required_to_rebalance(
+                        deps.as_ref(),
+                        &scope_value_pairs,
+                        total_balance_before,
+                    )?;
 
-                        // find adjustment in order to move weight from current to nearest ideal weight
-                        // it will always return 0 or positive value as it moves towards ideal weight
-                        let adjustment = compute_total_effective_adjustment_rate(
-                            prev_weight,
-                            nearest_ideal_weight,
-                            rebalancing_config,
-                        )?;
-
-                        total_adjustment_to_ideal_required =
-                            total_adjustment_to_ideal_required.checked_add(adjustment)?;
-                    }
-                }
-
-                let total_balance =
-                    SignedDecimal256::from_atomics(Int256::from(total_balance_before), 0)?;
-                let total_incentive_required_for_rebalance = round_adjustment(
-                    total_adjustment_to_ideal_required.checked_mul(total_balance)?,
-                )?
-                .abs_diff(Int256::zero()); // absolute value
-
-                // incentive pool is unhealthy if total incentive required for rebalance is greater than avaialable incentive pool
+                // incentive pool is unhealthy if total incentive required to rebalance
+                // is greater than avaialable incentive pool
                 let is_incentive_pool_unhealthy =
-                    total_incentive_required_for_rebalance > available_incentive;
+                    total_incentive_required_to_rebalance > available_incentive;
 
-                for (scope, (prev_weight, updated_weight)) in scope_value_pairs.clone() {
-                    let rebalancing_config =
-                        self.rebalancer.get_config_by_scope(deps.storage, &scope)?;
-                    if let Some(rebalancing_config) = rebalancing_config {
-                        let adjustment = compute_total_effective_adjustment_rate(
-                            prev_weight,
-                            updated_weight,
-                            rebalancing_config.clone(),
-                        )?;
+                // compute total adjustment rate based on the incentive pool health
+                total_adjustment_rate = self.compute_total_adjustment_rate(
+                    deps.as_ref(),
+                    &scope_value_pairs,
+                    is_incentive_pool_unhealthy,
+                )?;
 
-                        // raise strained rate to equal to critical if incentive pool is unhealthy and it's a fee case
-                        let adjustment = if adjustment < SignedDecimal256::zero() {
-                            let rebalancing_config = RebalancingConfig {
-                                adjustment_rate_strained: if is_incentive_pool_unhealthy {
-                                    rebalancing_config.adjustment_rate_critical
-                                } else {
-                                    rebalancing_config.adjustment_rate_strained
-                                },
-                                ..rebalancing_config
-                            };
-
-                            compute_total_effective_adjustment_rate(
-                                prev_weight,
-                                updated_weight,
-                                rebalancing_config,
-                            )?
-                        } else {
-                            adjustment
-                        };
-
-                        total_adjustment_rate = total_adjustment_rate.checked_add(adjustment)?;
-                    }
-                }
-
-                // TODO: have a way to skip limit check here
+                // check limits
                 self.rebalancer
                     .check_limits(deps.storage, scope_value_pairs)?;
             }
         }
 
+        // Compute total adjustment value. It's used to apply incentives or fees to the output.
+        let total_adjustment_value = self.compute_total_adjustment_value(
+            total_adjustment_rate,
+            total_balance_before,
+            total_balance_after,
+        )?;
+
+        // Apply adjustment effect on the swap output and return the adjustment information
+        let (output, adjustment) = rebalancing_adjustment(output, total_adjustment_value)?;
+
+        // Update incentive pool accounting due to the adjustment
+        self.update_incentive_pool_accounting(deps, &pool, beneficiary, &adjustment)?;
+
+        Ok((pool, output, adjustment))
+    }
+
+    /// Compute total incentive required to rebalance the pool to ideal balance.
+    ///
+    /// This function calculates the total incentive required to rebalance the pool to its ideal balance.
+    /// It considers the current weights of the assets and the ideal weights defined in the rebalancing configuration.
+    /// The function returns the total normalized incentive required.
+    fn compute_total_incentive_required_to_rebalance(
+        &self,
+        deps: Deps,
+        scope_value_pairs: &Vec<(Scope, (Decimal, Decimal))>,
+        total_balance_before: Uint128,
+    ) -> Result<Uint256, ContractError> {
+        // find total adjustment reqruied to move to all assets to ideal balance
+        let mut total_adjustment_to_ideal_required = SignedDecimal256::zero();
+        for (scope, (prev_weight, _)) in scope_value_pairs.clone() {
+            let rebalancing_config = self.rebalancer.get_config_by_scope(deps.storage, &scope)?;
+            if let Some(rebalancing_config) = rebalancing_config {
+                let nearest_ideal_weight = rebalancing_config.nearest_ideal_weight(prev_weight);
+
+                // find adjustment in order to move weight from current to nearest ideal weight
+                // it will always return 0 or positive value as it moves towards ideal weight
+                let adjustment = compute_total_effective_adjustment_rate(
+                    prev_weight,
+                    nearest_ideal_weight,
+                    rebalancing_config,
+                )?;
+
+                total_adjustment_to_ideal_required =
+                    total_adjustment_to_ideal_required.checked_add(adjustment)?;
+            }
+        }
+
+        let total_balance = SignedDecimal256::from_atomics(Int256::from(total_balance_before), 0)?;
+        let total_incentive_required_for_rebalance =
+            round_adjustment(total_adjustment_to_ideal_required.checked_mul(total_balance)?)?
+                .abs_diff(Int256::zero()); // absolute value
+
+        Ok(total_incentive_required_for_rebalance)
+    }
+
+    /// Compute total adjustment rate. It's sum of each asset's effective adjustment rate.
+    ///
+    /// Effective adjustment rate is the adjustment rate that is applied to the asset's balance shift.
+    /// If incentive pool is unhealthy and it's a fee case, the adjustment rate is raised to the critical rate.
+    /// Otherwise, the adjustment rate is the same as the effective adjustment rate.
+    fn compute_total_adjustment_rate(
+        &self,
+        deps: Deps,
+        scope_value_pairs: &Vec<(Scope, (Decimal, Decimal))>,
+        is_incentive_pool_unhealthy: bool,
+    ) -> Result<SignedDecimal256, ContractError> {
+        let mut total_adjustment_rate = SignedDecimal256::zero();
+        for (scope, (prev_weight, updated_weight)) in scope_value_pairs.clone() {
+            let rebalancing_config = self.rebalancer.get_config_by_scope(deps.storage, &scope)?;
+            if let Some(rebalancing_config) = rebalancing_config {
+                let adjustment = compute_total_effective_adjustment_rate(
+                    prev_weight,
+                    updated_weight,
+                    rebalancing_config.clone(),
+                )?;
+
+                // raise strained rate to equal to critical if incentive pool is unhealthy and it's a fee case
+                let adjustment = if adjustment < SignedDecimal256::zero() {
+                    let rebalancing_config = RebalancingConfig {
+                        adjustment_rate_strained: if is_incentive_pool_unhealthy {
+                            rebalancing_config.adjustment_rate_critical
+                        } else {
+                            rebalancing_config.adjustment_rate_strained
+                        },
+                        ..rebalancing_config
+                    };
+
+                    compute_total_effective_adjustment_rate(
+                        prev_weight,
+                        updated_weight,
+                        rebalancing_config,
+                    )?
+                } else {
+                    adjustment
+                };
+
+                total_adjustment_rate = total_adjustment_rate.checked_add(adjustment)?;
+            }
+        }
+
+        Ok(total_adjustment_rate)
+    }
+
+    /// Compute total adjustment value. It's used to apply incentives or fees to the output.
+    ///
+    /// At its core, it is: total adjustment rate * total balance.
+    ///
+    /// If total balance is updated, it means that one of token in or out is alloyed.
+    /// In this case, we need to use the balance before the operation to calculate the adjustment value.
+    /// Otherwise, we use the balance after the operation.
+    fn compute_total_adjustment_value(
+        &self,
+        total_adjustment_rate: SignedDecimal256,
+        total_balance_before: Uint128,
+        total_balance_after: Uint128,
+    ) -> Result<Int256, ContractError> {
         // if total balance is updated, it means that one of token in or out is alloyed
         let total_balance = if total_balance_before != total_balance_after {
             match total_adjustment_rate.cmp(&SignedDecimal256::zero()) {
@@ -154,9 +233,16 @@ impl Transmuter {
         let total_balance = SignedDecimal256::from_atomics(Int256::from(total_balance), 0)?;
         let total_adjustment_value = total_adjustment_rate.checked_mul(total_balance)?;
 
-        let (output, adjustment) =
-            rebalancing_adjustment(output, round_adjustment(total_adjustment_value)?)?;
+        Ok(round_adjustment(total_adjustment_value)?)
+    }
 
+    fn update_incentive_pool_accounting(
+        &self,
+        deps: DepsMut,
+        pool: &TransmuterPool,
+        beneficiary: &Addr,
+        adjustment: &Adjustment,
+    ) -> Result<(), ContractError> {
         match adjustment {
             Adjustment::DeductFee { ref fee } => {
                 self.incentive_pool.add_tokens(deps.storage, &fee)?;
@@ -176,13 +262,13 @@ impl Transmuter {
                 self.incentive_pool.credit_incentive(
                     deps.storage,
                     &beneficiary,
-                    incentive,
+                    incentive.clone(),
                     &pool_denom_factors,
                 )?;
             }
             Adjustment::None => {}
         }
 
-        Ok((pool, output, adjustment))
+        Ok(())
     }
 }
