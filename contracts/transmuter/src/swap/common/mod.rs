@@ -2,6 +2,9 @@ mod rebalancer_pass;
 mod rebalancing_adjustment;
 mod response_data;
 
+#[cfg(test)]
+pub mod test_utils;
+
 pub use rebalancing_adjustment::*;
 pub use response_data::*;
 

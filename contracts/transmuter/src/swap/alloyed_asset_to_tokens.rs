@@ -360,11 +360,15 @@ mod tests {
 
     use cosmwasm_std::testing::mock_env;
     use cosmwasm_std::{coin, testing::MOCK_CONTRACT_ADDR, to_json_binary, Addr, Decimal};
-    use osmosis_std::types::osmosis::tokenfactory::v1beta1::MsgBurn;
+    use cosmwasm_std::{Coins, CosmosMsg};
+    use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
+    use osmosis_test_tube::cosmrs::proto::prost::Message as _;
     use rstest::rstest;
     use std::collections::BTreeMap;
     use transmuter_math::rebalancing::config::RebalancingConfig;
 
+    use crate::swap::common::test_utils::setup_fee_deduction_test;
+    use crate::swap::SwapToAlloyedConstraint;
     use crate::{
         asset::Asset,
         contract::Transmuter,
@@ -772,5 +776,171 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_swap_tokens_to_alloyed_asset_exact_in_with_fee_deduction_and_incentivization() {
+        let transmuter = Transmuter::new();
+
+        let (sender, mut deps) = setup_fee_deduction_test();
+        let mut incentive_pool_balances: Coins = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
+            .unwrap();
+
+        // Multiple tokens in that will make denom1 55%, denom2 25%
+        let tokens_in = vec![
+            coin(37_500_000_000u128, "denom1"), // contributes 37_500_000_000 * 100 = 3_750_000_000_000 normalized
+            coin(125_000_000_000u128, "denom2"), // contributes 125_000_000_000 * 10 = 1_250_000_000_000 normalized
+        ];
+
+        // fee(denom1) = 25_000_000_000_000u128 * (5% * 1%) = 12_500_000_000u128
+        // fee(group1) = 25_000_000_000_000u128 * 0% = 0
+        let amount_out_before_fee = Uint128::from(3_750_000_000_000 + 1_250_000_000_000u128);
+        let fee = Uint128::from(125_000_000_000u128);
+        let token_out_amount = amount_out_before_fee - fee;
+
+        let res = transmuter.swap_tokens_to_alloyed_asset(
+            Entrypoint::Exec,
+            SwapToAlloyedConstraint::ExactIn {
+                tokens_in: &tokens_in,
+                token_out_min_amount: token_out_amount + Uint128::from(1u128),
+            },
+            sender.clone(),
+            deps.as_mut(),
+            mock_env(),
+        );
+
+        assert_eq!(
+            res,
+            Err(ContractError::InsufficientTokenOut {
+                min_required: token_out_amount + Uint128::from(1u128),
+                amount_out: token_out_amount,
+            })
+        );
+
+        let res = transmuter.swap_tokens_to_alloyed_asset(
+            Entrypoint::Exec,
+            SwapToAlloyedConstraint::ExactIn {
+                tokens_in: &tokens_in,
+                token_out_min_amount: token_out_amount,
+            },
+            sender.clone(),
+            deps.as_mut(),
+            mock_env(),
+        );
+
+        let messages = res
+            .unwrap()
+            .messages
+            .into_iter()
+            .map(|m| {
+                let CosmosMsg::Stargate { value, .. } = m.msg else {
+                    panic!("must be Startgate message")
+                };
+                MsgMint::decode(value.as_slice()).unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            messages,
+            vec![
+                MsgMint {
+                    amount: Some(coin(fee.u128(), "alloyed").into()),
+                    mint_to_address: MOCK_CONTRACT_ADDR.to_string(),
+                    sender: MOCK_CONTRACT_ADDR.to_string(),
+                },
+                MsgMint {
+                    amount: Some(coin(token_out_amount.u128(), "alloyed").into()),
+                    mint_to_address: sender.to_string(),
+                    sender: MOCK_CONTRACT_ADDR.to_string(),
+                }
+            ]
+        );
+
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+
+        // Verify pool state after join
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom1").unwrap().amount(),
+            Uint128::from(100_000_000_000u128) + tokens_in[0].amount
+        );
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom2").unwrap().amount(),
+            Uint128::from(500_000_000_000u128) + tokens_in[1].amount
+        );
+
+        incentive_pool_balances
+            .add(coin(fee.u128(), "alloyed"))
+            .unwrap();
+
+        // Verify fee is collected (minted to contract)
+        let updated_incentive_pool_balances: Coins = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
+            .unwrap();
+
+        // Fee should be collected in alloyed asset
+        assert_eq!(incentive_pool_balances, updated_incentive_pool_balances);
+
+        let credits = transmuter
+            .incentive_pool
+            .get_all_incentive_credits(&deps.storage, None, None)
+            .unwrap();
+        assert_eq!(credits, vec![]);
+
+        // rebalance it back
+
+        let res = transmuter
+            .swap_tokens_to_alloyed_asset(
+                Entrypoint::Exec,
+                SwapToAlloyedConstraint::ExactIn {
+                    tokens_in: &[coin(amount_out_before_fee.u128(), "denom3")],
+                    token_out_min_amount: amount_out_before_fee,
+                },
+                sender.clone(),
+                deps.as_mut(),
+                mock_env(),
+            )
+            .unwrap();
+
+        let messages = res
+            .messages
+            .into_iter()
+            .map(|m| {
+                let CosmosMsg::Stargate { value, .. } = m.msg else {
+                    panic!("must be Startgate message")
+                };
+                MsgMint::decode(value.as_slice()).unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            messages,
+            vec![MsgMint {
+                amount: Some(coin(amount_out_before_fee.u128(), "alloyed").into()),
+                mint_to_address: sender.to_string(),
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+            }]
+        );
+
+        // check pool state
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom3").unwrap().amount(),
+            Uint128::from(5_000_000_000_000u128) + amount_out_before_fee
+        );
+
+        // check incentive pool state
+        let updated_incentive_pool_balances: Coins = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
+            .unwrap();
+        assert_eq!(incentive_pool_balances, updated_incentive_pool_balances);
     }
 }

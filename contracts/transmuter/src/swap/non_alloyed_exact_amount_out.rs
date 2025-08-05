@@ -64,11 +64,13 @@ impl Transmuter {
 mod tests {
     use super::*;
     use cosmwasm_std::testing::mock_dependencies;
-    use cosmwasm_std::{coin, Decimal};
+    use cosmwasm_std::{coin, from_json, Coins, Decimal};
     use itertools::Itertools;
     use std::collections::BTreeMap;
     use transmuter_math::rebalancing::config::RebalancingConfig;
 
+    use crate::swap::common::test_utils::setup_fee_deduction_test;
+    use crate::swap::SwapExactAmountInResponseData;
     use crate::{asset::Asset, contract::Transmuter, scope::Scope};
     use rstest::rstest;
 
@@ -248,5 +250,184 @@ mod tests {
             limiter_denoms,
             vec![Scope::denom("denom2").key(), Scope::denom("denom3").key()]
         );
+    }
+
+    #[test]
+    fn test_swap_non_alloyed_exact_amount_out_with_fee_deduction() {
+        let (sender, mut deps) = setup_fee_deduction_test();
+        let transmuter = Transmuter::new();
+
+        let mut incentive_pool_balances: Coins = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
+            .unwrap();
+
+        // the swap makes denom1 60%, denom2 40%
+        let token_in_denom = "denom1";
+
+        // fee(group1) = 20_000_000_000_000u128 * 5% * 10% = 100_000_000_000u128 / 100
+        // fee(denom1) = 20_000_000_000_000u128 * (5% * 10% + 5% * 20%) = 300_000_000_000u128 / 100
+        let amount_in_before_fee = Uint128::from(20_000_000_000u128);
+        let fee = Uint128::from(1_000_000_000u128) + Uint128::from(3_000_000_000u128);
+        let token_out = coin(200_000_000_000u128, "denom2");
+        let token_in_amount = amount_in_before_fee + fee;
+
+        let res = transmuter.swap_non_alloyed_exact_amount_out(
+            token_in_denom,
+            token_in_amount - Uint128::from(1u128),
+            token_out.clone(),
+            sender.clone(),
+            deps.as_mut(),
+        );
+
+        assert_eq!(
+            res,
+            Err(ContractError::ExcessiveRequiredTokenIn {
+                limit: token_in_amount - Uint128::from(1u128),
+                required: token_in_amount,
+            })
+        );
+
+        let res = transmuter.swap_non_alloyed_exact_amount_out(
+            token_in_denom,
+            token_in_amount,
+            token_out.clone(),
+            sender.clone(),
+            deps.as_mut(),
+        );
+
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom1").unwrap().amount(),
+            Uint128::from(100_000_000_000u128) + amount_in_before_fee
+        );
+        assert_eq!(
+            pool.get_pool_asset_by_denom("denom2").unwrap().amount(),
+            Uint128::from(500_000_000_000u128) - amount_in_before_fee * Uint128::from(10u128)
+        );
+
+        incentive_pool_balances
+            .add(coin(fee.u128(), "denom1"))
+            .unwrap();
+
+        let updated_incentive_pool_balances: Coins = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
+            .unwrap();
+
+        assert_eq!(updated_incentive_pool_balances, incentive_pool_balances);
+
+        let response = res.unwrap();
+        let data: SwapExactAmountOutResponseData = from_json(&response.data.unwrap()).unwrap();
+        assert_eq!(
+            data,
+            SwapExactAmountOutResponseData {
+                token_in_amount: amount_in_before_fee + fee,
+            }
+        );
+
+        let credits = transmuter
+            .incentive_pool
+            .get_all_incentive_credits(&deps.storage, None, None)
+            .unwrap();
+        assert_eq!(credits, vec![]);
+
+        // swap back with the same amount
+        let res = transmuter
+            .swap_non_alloyed_exact_amount_in(
+                token_out,
+                "denom1",
+                amount_in_before_fee,
+                sender.clone(),
+                deps.as_mut(),
+            )
+            .unwrap();
+        let data: SwapExactAmountInResponseData = from_json(&res.data.unwrap()).unwrap();
+        assert_eq!(
+            data,
+            SwapExactAmountInResponseData {
+                token_out_amount: amount_in_before_fee,
+            }
+        );
+
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+
+        assert_eq!(
+            pool.pool_assets,
+            vec![
+                Asset::new(Uint128::from(100_000_000_000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(500_000_000_000u128), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(5_000_000_000_000u128), "denom3", 100u128).unwrap(),
+            ]
+        );
+
+        let credits = transmuter
+            .incentive_pool
+            .get_all_incentive_credits(&deps.storage, None, None)
+            .unwrap();
+        assert_eq!(
+            credits,
+            vec![(sender.clone(), fee * Uint128::from(100u128))]
+        );
+
+        let pool_denom_factors = pool
+            .pool_assets
+            .iter()
+            .map(|asset| (asset.denom().to_string(), asset.normalization_factor()))
+            .collect::<BTreeMap<_, _>>();
+
+        let err = transmuter
+            .incentive_pool
+            .redeem_incentive(
+                &mut deps.storage,
+                &sender,
+                vec![coin(fee.u128() + 1, "denom1")],
+                &pool_denom_factors,
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            ContractError::InsufficientIncentiveCredit {
+                user: sender.clone(),
+                available: fee * Uint128::from(100u128),
+                requested: (fee + Uint128::from(1u128)) * Uint128::from(100u128),
+            }
+        );
+
+        transmuter
+            .incentive_pool
+            .redeem_incentive(
+                &mut deps.storage,
+                &sender,
+                vec![coin(fee.u128(), "denom1")],
+                &pool_denom_factors,
+            )
+            .unwrap();
+
+        incentive_pool_balances
+            .sub(coin(fee.u128(), "denom1"))
+            .unwrap();
+
+        let credits = transmuter
+            .incentive_pool
+            .get_all_incentive_credits(&deps.storage, None, None)
+            .unwrap();
+
+        assert_eq!(credits, vec![]);
+
+        let updated_incentive_pool_balances = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
+            .unwrap();
+
+        assert_eq!(incentive_pool_balances, updated_incentive_pool_balances);
     }
 }
