@@ -7,6 +7,7 @@ use crate::{
     swap::common::{Adjustment, ContractError},
 };
 
+/// Create a function that returns adjusted token in amount for exact out along with the adjustment information.
 pub fn rebalancing_adjustment_for_exact_out(
     token_in_max_amount: Uint128,
     std_norm_factor: Uint128,
@@ -36,6 +37,7 @@ pub fn rebalancing_adjustment_for_exact_out(
     })
 }
 
+/// Create a function that returns adjusted token out amount for exact in along with the adjustment information.
 pub fn rebalancing_adjustment_for_exact_in(
     token_out_min_amount: Uint128,
     std_norm_factor: Uint128,
