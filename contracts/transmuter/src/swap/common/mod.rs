@@ -333,3 +333,36 @@ pub fn construct_scope_value_pairs(
 
     Ok(scope_value_pairs)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::contract::Transmuter;
+    use crate::{swap::common::SwapVariant, ContractError};
+    use rstest::rstest;
+
+    #[rstest]
+    #[case("denom1", "denom2", Ok(SwapVariant::TokenToToken))]
+    #[case("denom2", "denom1", Ok(SwapVariant::TokenToToken))]
+    #[case("denom1", "denom1", Err(ContractError::SameDenomNotAllowed {
+        denom: "denom1".to_string()
+    }))]
+    #[case("denom1", "alloyed", Ok(SwapVariant::TokenToAlloyed))]
+    #[case("alloyed", "denom1", Ok(SwapVariant::AlloyedToToken))]
+    #[case("alloyed", "alloyed", Err(ContractError::SameDenomNotAllowed {
+        denom: "alloyed".to_string()
+    }))]
+    fn test_swap_variant(
+        #[case] denom1: &str,
+        #[case] denom2: &str,
+        #[case] res: Result<SwapVariant, ContractError>,
+    ) {
+        let mut deps = cosmwasm_std::testing::mock_dependencies();
+        let transmuter = Transmuter::new();
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        assert_eq!(transmuter.swap_variant(denom1, denom2, deps.as_ref()), res);
+    }
+}
