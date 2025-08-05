@@ -58,3 +58,195 @@ impl Transmuter {
             .set_data(to_json_binary(&swap_result)?))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        asset::Asset, contract::Transmuter, scope::Scope,
+        swap::common::SwapExactAmountInResponseData,
+    };
+    use cosmwasm_std::{coin, testing::mock_dependencies, Decimal};
+    use itertools::Itertools;
+    use rstest::rstest;
+    use std::collections::BTreeMap;
+    use transmuter_math::rebalancing::config::RebalancingConfig;
+
+    #[rstest]
+    #[case(
+        coin(100u128, "denom1"),
+        "denom2",
+        1000u128,
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(BankMsg::Send {
+                to_address: "addr1".to_string(),
+                amount: vec![coin(1000u128, "denom2")]
+            })
+            .set_data(to_json_binary(&SwapExactAmountInResponseData {
+                token_out_amount: Uint128::from(1000u128)
+            }).unwrap()))
+    )]
+    #[case(
+        coin(100u128, "denom2"),
+        "denom1",
+        10u128,
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(BankMsg::Send {
+                to_address: "addr1".to_string(),
+                amount: vec![coin(10u128, "denom1")]
+            })
+            .set_data(to_json_binary(&SwapExactAmountInResponseData {
+                token_out_amount: Uint128::from(10u128)
+            }).unwrap()))
+    )]
+    #[case(
+        coin(100u128, "denom2"),
+        "denom1",
+        100u128,
+        Addr::unchecked("addr1"),
+        Err(ContractError::InsufficientTokenOut {
+            min_required: 100u128.into(),
+            amount_out: 10u128.into()
+        })
+    )]
+    #[case(
+        coin(100000000001u128, "denom1"),
+        "denom2",
+        1000000000010u128,
+        Addr::unchecked("addr1"),
+        Err(ContractError::InsufficientPoolAsset {
+            required: coin(1000000000010u128, "denom2"),
+            available: coin(1000000000000u128, "denom2"),
+        })
+    )]
+    fn test_swap_non_alloyed_exact_amount_in(
+        #[case] token_in: Coin,
+        #[case] token_out_denom: &str,
+        #[case] token_out_min_amount: u128,
+        #[case] sender: Addr,
+        #[case] expected_res: Result<Response, ContractError>,
+    ) {
+        let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
+            sender.to_string().as_str(),
+            &[coin(2000000000000u128, "alloyed")],
+        )]);
+
+        let transmuter = Transmuter::new();
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_normalization_factor(&mut deps.storage, 100u128.into())
+            .unwrap();
+
+        transmuter
+            .pool
+            .save(
+                &mut deps.storage,
+                &TransmuterPool {
+                    pool_assets: vec![
+                        Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                        Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
+                    ],
+                    asset_groups: BTreeMap::new(),
+                },
+            )
+            .unwrap();
+
+        let res = transmuter.swap_non_alloyed_exact_amount_in(
+            token_in.clone(),
+            token_out_denom,
+            token_out_min_amount.into(),
+            sender,
+            deps.as_mut(),
+        );
+
+        assert_eq!(res, expected_res);
+    }
+
+    #[test]
+    fn test_swap_non_alloyed_exact_amount_in_with_corrupted_assets() {
+        let mut deps = mock_dependencies();
+        let transmuter = Transmuter::new();
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_normalization_factor(&mut deps.storage, 100u128.into())
+            .unwrap();
+
+        let mut pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(), // 1000000000000 * 100
+                Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(), // 1000000000000 * 10
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 1u128).unwrap(), // 1000000000000 * 100
+            ],
+            asset_groups: BTreeMap::new(),
+        };
+
+        let all_denoms = pool
+            .clone()
+            .pool_assets
+            .into_iter()
+            .map(|asset| asset.denom().to_string())
+            .collect::<Vec<_>>();
+
+        pool.mark_corrupted_asset("denom1").unwrap();
+
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        for denom in all_denoms.clone() {
+            transmuter
+                .rebalancer
+                .add_config(
+                    &mut deps.storage,
+                    Scope::denom(denom.as_str()),
+                    RebalancingConfig::limit_only(Decimal::percent(100)).unwrap(),
+                )
+                .unwrap();
+        }
+
+        transmuter
+            .swap_non_alloyed_exact_amount_in(
+                coin(1000000000000, "denom3"),
+                "denom1",
+                1000000000000u128.into(),
+                deps.api.addr_make("sender"),
+                deps.as_mut(),
+            )
+            .unwrap();
+
+        // all drained denoms that are corrupted should not be in the pool
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+
+        let denoms = pool
+            .pool_assets
+            .into_iter()
+            .map(|a| a.denom().to_string())
+            .collect_vec();
+
+        assert_eq!(denoms, vec!["denom2", "denom3"]);
+
+        let limiter_denoms = transmuter
+            .rebalancer
+            .list_configs(&deps.storage)
+            .unwrap()
+            .into_iter()
+            .map(|(denom, _)| denom)
+            .unique()
+            .collect_vec();
+
+        assert_eq!(
+            limiter_denoms,
+            vec![Scope::denom("denom2").key(), Scope::denom("denom3").key()]
+        );
+    }
+}

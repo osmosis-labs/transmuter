@@ -336,9 +336,15 @@ pub fn construct_scope_value_pairs(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::asset::Asset;
     use crate::contract::Transmuter;
+    use crate::transmuter_pool::AssetGroup;
     use crate::{swap::common::SwapVariant, ContractError};
+    use cosmwasm_std::testing::mock_dependencies;
+    use cosmwasm_std::Addr;
     use rstest::rstest;
+    use transmuter_math::rebalancing::config::RebalancingConfig;
 
     #[rstest]
     #[case("denom1", "denom2", Ok(SwapVariant::TokenToToken))]
@@ -364,5 +370,291 @@ mod tests {
             .unwrap();
 
         assert_eq!(transmuter.swap_variant(denom1, denom2, deps.as_ref()), res);
+    }
+
+    #[rstest]
+    #[case::empty(
+        BTreeMap::new(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        vec![],
+    )]
+    #[case::no_prev_asset_weights(
+        BTreeMap::new(),
+        BTreeMap::new(),
+        BTreeMap::from([
+            ("eth.axl".to_string(), Decimal::percent(40)),
+            ("eth.wh".to_string(), Decimal::percent(40)),
+            ("wsteth.axl".to_string(), Decimal::percent(20)),
+        ]),
+        BTreeMap::new(),
+        vec![
+            (Scope::denom("eth.axl"), (Decimal::zero(), Decimal::percent(40))),
+            (Scope::denom("eth.wh"), (Decimal::zero(), Decimal::percent(40))),
+            (Scope::denom("wsteth.axl"), (Decimal::zero(), Decimal::percent(20))),
+        ],
+    )]
+    #[case::no_updated_asset_weights(
+        BTreeMap::from([
+            ("eth.axl".to_string(), Decimal::percent(20)),
+            ("eth.wh".to_string(), Decimal::percent(60)),
+            ("wsteth.axl".to_string(), Decimal::percent(20)),
+        ]),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        vec![
+            (Scope::denom("eth.axl"), (Decimal::percent(20), Decimal::zero())),
+            (Scope::denom("eth.wh"), (Decimal::percent(60), Decimal::zero())),
+            (Scope::denom("wsteth.axl"), (Decimal::percent(20), Decimal::zero())),
+        ],
+    )]
+    #[case(
+        BTreeMap::from([
+            ("eth.axl".to_string(), Decimal::percent(20)),
+            ("eth.wh".to_string(), Decimal::percent(60)),
+            ("wsteth.axl".to_string(), Decimal::percent(20)),
+        ]),
+        BTreeMap::from([
+            ("axelar".to_string(), Decimal::percent(40)),
+            ("wormhole".to_string(), Decimal::percent(60)),
+        ]),
+        BTreeMap::from([
+            ("eth.axl".to_string(), Decimal::percent(40)),
+            ("eth.wh".to_string(), Decimal::percent(40)),
+            ("wsteth.axl".to_string(), Decimal::percent(20)),
+        ]),
+        BTreeMap::from([
+            ("axelar".to_string(), Decimal::percent(60)),
+            ("wormhole".to_string(), Decimal::percent(40)),
+        ]),
+        vec![
+            (Scope::denom("eth.axl"), (Decimal::percent(20), Decimal::percent(40))),
+            (Scope::denom("eth.wh"), (Decimal::percent(60), Decimal::percent(40))),
+            (Scope::denom("wsteth.axl"), (Decimal::percent(20), Decimal::percent(20))),
+            (Scope::asset_group("axelar"), (Decimal::percent(40), Decimal::percent(60))),
+            (Scope::asset_group("wormhole"), (Decimal::percent(60), Decimal::percent(40))),
+        ],
+    )]
+    fn test_construct_scope_value_pairs(
+        #[case] prev_asset_weights: BTreeMap<String, Decimal>,
+        #[case] prev_asset_group_weights: BTreeMap<String, Decimal>,
+        #[case] updated_asset_weights: BTreeMap<String, Decimal>,
+        #[case] updated_asset_group_weights: BTreeMap<String, Decimal>,
+        #[case] expected_scope_value_pairs: Vec<(Scope, (Decimal, Decimal))>,
+    ) {
+        let mut scope_value_pairs = construct_scope_value_pairs(
+            prev_asset_weights,
+            updated_asset_weights,
+            prev_asset_group_weights,
+            updated_asset_group_weights,
+        )
+        .unwrap();
+
+        // assert by disregard order
+        scope_value_pairs.sort_by_key(|(scope, _)| scope.key());
+        let mut expected_scope_value_pairs = expected_scope_value_pairs;
+        expected_scope_value_pairs.sort_by_key(|(scope, _)| scope.key());
+
+        assert_eq!(scope_value_pairs, expected_scope_value_pairs);
+    }
+
+    #[test]
+    fn test_clean_up_drained_corrupted_assets_group() {
+        let sender = Addr::unchecked("addr1");
+        let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[(
+            sender.to_string().as_str(),
+            &[coin(2000000000000u128, "alloyed")],
+        )]);
+
+        let transmuter = Transmuter::new();
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_normalization_factor(&mut deps.storage, 100u128.into())
+            .unwrap();
+
+        let init_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()])
+                    .mark_as_corrupted()
+                    .clone(),
+            )]),
+        };
+        transmuter.pool.save(&mut deps.storage, &init_pool).unwrap();
+
+        // Add a rebalancing config for the group
+        transmuter
+            .rebalancer
+            .add_config(
+                &mut deps.storage,
+                Scope::asset_group("group1"),
+                RebalancingConfig::limit_only(Decimal::percent(60)).unwrap(),
+            )
+            .unwrap();
+
+        let mut pool = transmuter.pool.load(&deps.storage).unwrap();
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        pool = transmuter.pool.load(&deps.storage).unwrap();
+        assert_eq!(pool, init_pool);
+
+        pool.exit_pool(&[coin(1000000000000u128, "denom2")])
+            .unwrap();
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        let expected_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom3".to_string()])
+                    .mark_as_corrupted()
+                    .clone(),
+            )]),
+        };
+        assert_eq!(pool, expected_pool);
+
+        // Check that the rebalancing config for group1 is still exists
+        let rebalancing_configs = transmuter
+            .rebalancer
+            .get_config_by_scope(&deps.storage, &Scope::asset_group("group1"))
+            .unwrap();
+        assert!(rebalancing_configs.is_some());
+
+        // Save the updated pool
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        pool.exit_pool(&[coin(1000000000000u128, "denom3")])
+            .unwrap();
+
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        let expected_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::new(),
+        };
+        assert_eq!(pool, expected_pool);
+
+        // Check that the rebalancing config for group1 is removed
+        let rebalancing_configs = transmuter
+            .rebalancer
+            .get_config_by_scope(&deps.storage, &Scope::asset_group("group1"))
+            .unwrap();
+        assert_eq!(rebalancing_configs, None);
+    }
+
+    #[test]
+    fn test_clean_up_drained_corrupted_assets_group_not_corrupted() {
+        let mut deps = mock_dependencies();
+        let transmuter = Transmuter::new();
+
+        // Initialize the pool with non-corrupted assets and groups
+        let init_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
+            )]),
+        };
+
+        transmuter.pool.save(&mut deps.storage, &init_pool).unwrap();
+
+        // Register a limiter for the group
+        transmuter
+            .rebalancer
+            .add_config(
+                &mut deps.storage,
+                Scope::asset_group("group1"),
+                RebalancingConfig::limit_only(Decimal::one()).unwrap(),
+            )
+            .unwrap();
+
+        let mut pool = transmuter.pool.load(&deps.storage).unwrap();
+        assert_eq!(pool, init_pool);
+
+        // Drain denom2 from the pool
+        pool.exit_pool(&[coin(1000000000000u128, "denom2")])
+            .unwrap();
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        // Check that the pool remains unchanged
+        let expected_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::zero(), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::from(1000000000000u128), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
+            )]),
+        };
+        assert_eq!(pool, expected_pool);
+
+        // Check that the rebalancing config for group1 is still registered
+        let rebalancing_configs = transmuter
+            .rebalancer
+            .get_config_by_scope(&deps.storage, &Scope::asset_group("group1"))
+            .unwrap();
+        assert!(rebalancing_configs.is_some());
+
+        // Save the updated pool
+        transmuter.pool.save(&mut deps.storage, &pool).unwrap();
+
+        // Drain denom3 from the pool
+        pool.exit_pool(&[coin(1000000000000u128, "denom3")])
+            .unwrap();
+
+        let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
+        assert_eq!(res, Ok(()));
+
+        // Check that the pool remains unchanged except for the drained assets
+        let expected_pool = TransmuterPool {
+            pool_assets: vec![
+                Asset::new(Uint128::from(1000000000000u128), "denom1", 1u128).unwrap(),
+                Asset::new(Uint128::zero(), "denom2", 10u128).unwrap(),
+                Asset::new(Uint128::zero(), "denom3", 100u128).unwrap(),
+            ],
+            asset_groups: BTreeMap::from([(
+                "group1".to_string(),
+                AssetGroup::new(vec!["denom2".to_string(), "denom3".to_string()]),
+            )]),
+        };
+        assert_eq!(pool, expected_pool);
+
+        // Check that the rebalancing config for group1 is still registered
+        let rebalancing_configs = transmuter
+            .rebalancer
+            .get_config_by_scope(&deps.storage, &Scope::asset_group("group1"))
+            .unwrap();
+        assert!(rebalancing_configs.is_some());
     }
 }

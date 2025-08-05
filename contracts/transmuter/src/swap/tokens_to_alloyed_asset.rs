@@ -240,3 +240,129 @@ fn create_alloyed_asset_mint_msg(
         mint_to_address: mint_to_address.to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cosmwasm_std::{coin, testing::MOCK_CONTRACT_ADDR, to_json_binary, Addr};
+    use osmosis_std::types::osmosis::tokenfactory::v1beta1::MsgMint;
+    use rstest::rstest;
+
+    use crate::{
+        asset::Asset,
+        contract::Transmuter,
+        swap::common::{Entrypoint, SwapExactAmountInResponseData, SwapExactAmountOutResponseData},
+    };
+
+    #[rstest]
+    #[case(
+        Entrypoint::Exec,
+        SwapToAlloyedConstraint::ExactIn {
+            tokens_in: &[coin(100, "denom1")],
+            token_out_min_amount: Uint128::one(),
+        },
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(MsgMint {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(coin(10000u128, "alloyed").into()),
+                mint_to_address: "addr1".to_string()
+            })),
+    )]
+    #[case(
+        Entrypoint::Sudo,
+        SwapToAlloyedConstraint::ExactIn {
+            tokens_in: &[coin(100, "denom1")],
+            token_out_min_amount: Uint128::one(),
+        },
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .set_data(to_json_binary(&SwapExactAmountInResponseData {
+                token_out_amount: Uint128::new(10000u128)
+            }).unwrap())
+            .add_message(MsgMint {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(coin(10000u128, "alloyed").into()),
+                mint_to_address: "addr1".to_string()
+            })),
+    )]
+    #[case(
+        Entrypoint::Exec,
+        SwapToAlloyedConstraint::ExactOut {
+            token_in_denom: "denom1",
+            token_in_max_amount: Uint128::new(100),
+            token_out_amount: Uint128::new(10000u128)
+        },
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .add_message(MsgMint {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(coin(10000u128, "alloyed").into()),
+                mint_to_address: "addr1".to_string()
+            })),
+    )]
+    #[case(
+        Entrypoint::Sudo,
+        SwapToAlloyedConstraint::ExactOut {
+            token_in_denom: "denom1",
+            token_in_max_amount: Uint128::new(100),
+            token_out_amount: Uint128::new(10000u128)
+        },
+        Addr::unchecked("addr1"),
+        Ok(Response::new()
+            .set_data(to_json_binary(&SwapExactAmountOutResponseData {
+                token_in_amount: Uint128::new(100u128)
+            }).unwrap())
+            .add_message(MsgMint {
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+                amount: Some(coin(10000u128, "alloyed").into()),
+                mint_to_address: "addr1".to_string()
+            })),
+    )]
+    fn test_swap_tokens_to_alloyed_asset(
+        #[case] entrypoint: Entrypoint,
+        #[case] constraint: SwapToAlloyedConstraint,
+        #[case] mint_to_address: Addr,
+        #[case] expected_res: Result<Response, ContractError>,
+    ) {
+        use std::collections::BTreeMap;
+
+        use cosmwasm_std::testing::{mock_dependencies, mock_env};
+
+        let mut deps = mock_dependencies();
+        let transmuter = Transmuter::new();
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_normalization_factor(&mut deps.storage, 100u128.into())
+            .unwrap();
+
+        transmuter
+            .pool
+            .save(
+                &mut deps.storage,
+                &TransmuterPool {
+                    pool_assets: vec![
+                        Asset::new(Uint128::from(1000u128), "denom1", 1u128).unwrap(),
+                        Asset::new(Uint128::from(1000u128), "denom2", 10u128).unwrap(),
+                    ],
+                    asset_groups: BTreeMap::new(),
+                },
+            )
+            .unwrap();
+
+        let res = transmuter.swap_tokens_to_alloyed_asset(
+            entrypoint,
+            constraint,
+            mint_to_address,
+            deps.as_mut(),
+            mock_env(),
+        );
+
+        assert_eq!(res, expected_res);
+    }
+}
