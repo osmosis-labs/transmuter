@@ -221,25 +221,90 @@ Swaps need to conform either `SwapExactAmountIn` or `SwapExactAmountOut` and we 
 
 
 ### Swap is beneficial and we distribute incentive
-The simpliest solution here is to make the pool in debt to the swapping account and allow claiming later.
 
-The reason here is that, we can't control or predict the token that will end up in the incentive pool, only its value that we have some control over. Because a swap can, for example:
+If swap is beneficial, we need to calculate the incentive amount to be distributed.
 
-- `SwapExactAmountIn` from A -> B
-- make A's position worse
-- make B's position better
-- total is worse, so collect fee
-- fee collected in B (token out)
+- for `SwapExactAmountIn`, the incentive will be added to token out denom since amount in is constant.
+- for `SwapExactAmountOut`, the incentive will rebate part of the amount in since amount out is constant.
 
-as oppose to the same balance shift but `SwapExactAmountOut` instead, the collected fee will be in A.
+These changes in amount in and out must be reflected in route calculation, which leads to arbitrage opportunity which incentivize the rebalancing.
 
-It's the same effect to the liquidity pool but it's collecting different token to the incentive pool (eventhough the total value is the same).
+In some case, the incentive pool might not have enough tokens to incentivize the rebalance, the protocol will cap the incentive amount to the total value of the incentive pool and start self healing process which will be discussed in the next section.
 
-If we always have enough amount to pay incentive as token out (on `SwapExactAmountIn`) or as subsidizing token in (on `SwapExactAmountOut`), that would be ideal, because it's obvious to user (and any kind of swap route provider) when a swap is incentivized, but we can't gurantee that.
+In case any specific token is not enough to incentivize the rebalance and there are other tokens that can be used to incentivize the rebalance, the protocol will attempt to perform an internal swap to make the token enough to incentivize the rebalance. 
+- It will start swapping all required incentive from token with largest amount into required denom.
+- If it's not enough, it will continue swapping from token with second largest amount into required denom, and so on until it has enough.
+- If any of the swap failed, it will skip that token and continue with the next token
+- If all swap failed, it will not incentivize the first-order user swap.
 
-So making the pool in debt, and the interacting account can later claim their incentive in any token available in the incentive pool is simpliest and most effective given we are building bot to do the rebalancing.
+Here is the break down of possible scenarios of the internal swap and how to resolve them.
 
-Total debt must never exceed total incentive pool, if such case happen when calculating an incentive, deduct the excess incentive from that swap.
+
+#### Scenario 1 — **Incentive Amplified**
+Both the user swap and the internal swap are beneficial and incentivized.
+
+| Asset | Initial Bal | After Swap Bal | % After Swap | Ideal Lower | Ideal Upper | Rate   |
+|-------|-------------|----------------|--------------|-------------|-------------|--------|
+| **A** | 24          | 25             | 25.00%       | 25.00%      | 40.00%      | 1.00%  |
+| **B** | 40          | 39             | 39.00%       | 25.00%      | 40.00%      | 1.00%  |
+| **C** | 36          | 36             | 36.00%       | 37.00%      | 40.00%      | 2.00%  |
+
+- **Swap**: Exact out `A → B`, **A** is the incentivized asset.  
+- Incentive pool has **0 A** but enough **C**.  
+
+**Internal Swap**:  
+- `C → A` (beneficial for A), also incentivized.  
+
+**Outcome**:
+- First-order incentive from user swap: `+0.01`.
+- Internal swap incentive: `+0.0001`.
+- **Decision**: **Cap payout to first-order incentive (`+0.01`)**
+
+
+
+#### Scenario 2 — **Incentive Negated**
+User swap is beneficial but the internal swap is harmful enough to completely negate the incentive.
+
+
+| Asset | Initial Bal | After Swap Bal | % After Swap | Ideal Lower | Ideal Upper | Rate    |
+|-------|-------------|----------------|--------------|-------------|-------------|---------|
+| **A** | 24          | 25             | 25.00%       | 25.00%      | 40.00%      | 1.00%   |
+| **B** | 39          | 39             | 39.00%       | 25.00%      | 40.00%      | 1.00%   |
+| **C** | 36          | 36.01          | 36.01%       | 25.00%      | 36.00%      | 100.00% |
+
+- **Swap**: Exact out `A → B`, **A** is the incentivized asset.  
+- Incentive pool has **0 A** but enough **C**.
+
+**Internal Swap**:
+- `C → A` (harmful for C), fee large enough to offset incentive.
+
+**Outcome**:
+- First-order incentive: `+0.01`.
+- Internal swap fee: `-0.0101`.
+- Net: `-0.0001` (fully negated and sign flipped).
+- **Decision**: **Skip incentive entirely**. This is an extreme case and unlikely in practice.
+
+
+#### Scenario 3 — **Incentive Partially Negated*
+User swap is beneficial, internal swap is harmful but not enough to fully negate it.
+
+| Asset | Initial Bal | After Swap Bal | % After Swap | Ideal Lower | Ideal Upper | Rate   |
+|-------|-------------|----------------|--------------|-------------|-------------|--------|
+| **A** | 24          | 25             | 25.00%       | 25.00%      | 40.00%      | 1.00%  |
+| **B** | 39          | 39.01          | 39.01%       | 25.00%      | 39.00%      | 1.00%  |
+| **C** | 36          | 35.99          | 35.99%       | 36.00%      | 40.00%      | 1.00%  |
+
+- **Swap**: Exact out `A → B`, **B** is the incentivized asset.  
+- Incentive pool has **0 B** but enough **C**.
+
+**Internal Swap**:
+- `B → C` (harmful for C), reduces incentive.
+
+**Outcome**:
+- First-order incentive: `+0.02`.
+- Internal swap fee: `-0.0002`.
+- Net: `+0.0198`.
+- **Decision**: **Pay reduced incentive**.
 
 ## When the incentive pool doesn't have enough to incentivize the rebalance
 
