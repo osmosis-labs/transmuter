@@ -161,7 +161,7 @@ impl Transmuter {
                 mint_to_address: env.contract.address.to_string(),
             }),
             // incentive doesn't require minting or burning anything
-            Adjustment::CreditIncentive { .. } => response,
+            Adjustment::Incentivize { .. } => response,
             Adjustment::None => response,
         };
 
@@ -481,12 +481,6 @@ mod tests {
 
         // Fee should be collected in alloyed asset
         assert_eq!(incentive_pool_balances, updated_incentive_pool_balances);
-
-        let credits = transmuter
-            .incentive_pool
-            .get_all_incentive_credits(&deps.storage, None, None)
-            .unwrap();
-        assert_eq!(credits, vec![]);
 
         // rebalance it back
 

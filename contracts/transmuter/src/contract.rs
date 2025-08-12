@@ -55,9 +55,6 @@ pub mod key {
     pub const MODERATOR: &str = "moderator";
     pub const REBALANCER: &str = "rebalancer";
     pub const INCENTIVE_POOL_BALANCES: &str = "incentive_pool_balances";
-    pub const INCENTIVE_POOL_OUTSTANDING_CREDITS: &str = "incentive_pool_outstanding_credits";
-    pub const INCENTIVE_POOL_TOTAL_OUTSTANDING_CREDITS: &str =
-        "incentive_pool_total_outstanding_credits";
 }
 
 #[contract]
@@ -74,11 +71,7 @@ impl Transmuter {
             ),
             role: Role::new(key::ADMIN, key::MODERATOR),
             rebalancer: Rebalancer::new(key::REBALANCER),
-            incentive_pool: IncentivePool::new(
-                key::INCENTIVE_POOL_BALANCES,
-                key::INCENTIVE_POOL_OUTSTANDING_CREDITS,
-                key::INCENTIVE_POOL_TOTAL_OUTSTANDING_CREDITS,
-            ),
+            incentive_pool: IncentivePool::new(key::INCENTIVE_POOL_BALANCES),
         }
     }
 

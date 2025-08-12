@@ -66,7 +66,7 @@ pub fn rebalancing_adjustment_for_exact_in(
 /// Adjust token out for exact in.
 ///
 /// If adjustment value is negative, fee take from the token_out, so we require additional token_out to pay for the fee.
-/// If adjustment value is positive, incentive is credited to the beneficiary, return the token_out as is.
+/// If adjustment value is positive, incentive sender
 /// If adjustment value is zero, no adjustment is made, return the token_out as is.
 fn adjust_exact_in(
     token_out: Coin,
@@ -82,8 +82,8 @@ fn adjust_exact_in(
             token_out_norm_factor,
             total_adjustment_value,
         ),
-        // positive adjustment value means incentive credit to the beneficiary
-        Ordering::Greater => credit_incentive(token_out, total_adjustment_value),
+        // positive adjustment value means incentivize sender
+        Ordering::Greater => incentivize(token_out, total_adjustment_value),
         // zero adjustment means no adjustment
         Ordering::Equal => Ok((token_out, Adjustment::None)),
     }
@@ -92,7 +92,7 @@ fn adjust_exact_in(
 /// Adjust token in for exact out.
 ///
 /// If adjustment value is negative, fee take from the token_in, so we require additional token_in to pay for the fee.
-/// If adjustment value is positive, incentive is credited to the beneficiary, return the token_in as is.
+/// If adjustment value is positive, incentivize sender.
 /// If adjustment value is zero, no adjustment is made, return the token_in as is.
 fn adjust_exact_out(
     token_in: Coin,
@@ -108,8 +108,8 @@ fn adjust_exact_out(
             std_norm_factor,
             total_adjustment_value,
         )?,
-        // positive adjustment value means incentive credit to the beneficiary
-        Ordering::Greater => credit_incentive(token_in, total_adjustment_value)?,
+        // positive adjustment value means incentivize sender
+        Ordering::Greater => incentivize(token_in, total_adjustment_value)?,
         // zero adjustment means no adjustment
         Ordering::Equal => (token_in, Adjustment::None),
     })
@@ -168,13 +168,13 @@ fn increase_and_deduct_fee_from_token_in(
         },
     ))
 }
-fn credit_incentive(
+fn incentivize(
     token_out: Coin,
     total_adjustment_value: Int256,
 ) -> Result<(Coin, Adjustment), ContractError> {
     Ok((
         token_out,
-        Adjustment::CreditIncentive {
+        Adjustment::Incentivize {
             incentive: total_adjustment_value.abs().try_into()?,
         },
     ))

@@ -6,7 +6,7 @@ use crate::{
     ContractError,
 };
 use cosmwasm_std::{Addr, Decimal, Deps, DepsMut, Int256, SignedDecimal256, Uint128, Uint256};
-use std::{cmp::Ordering, collections::BTreeMap};
+use std::cmp::Ordering;
 use transmuter_math::rebalancing::{
     compute_total_effective_adjustment_rate, config::RebalancingConfig, round_adjustment,
 };
@@ -49,14 +49,6 @@ impl Transmuter {
         let total_normalized_incentive_pool_balance =
             self.total_normalized_incentive_pool_balance(deps.storage, &pool)?;
 
-        let total_incentive_credits = self
-            .incentive_pool
-            .get_total_incentive_credits(deps.storage)?;
-
-        // available incentive that can be distributed
-        let available_incentive =
-            total_normalized_incentive_pool_balance.saturating_sub(total_incentive_credits);
-
         // check limits only if pool assets are not zero, calculate adjustment value
         let mut total_adjustment_rate = SignedDecimal256::zero();
         if let Some(updated_asset_weights) = pool.asset_weights()? {
@@ -79,7 +71,7 @@ impl Transmuter {
                 // incentive pool is unhealthy if total incentive required to rebalance
                 // is greater than avaialable incentive pool
                 let is_incentive_pool_unhealthy =
-                    total_incentive_required_to_rebalance > available_incentive;
+                    total_incentive_required_to_rebalance > total_normalized_incentive_pool_balance;
 
                 // compute total adjustment rate based on the incentive pool health
                 total_adjustment_rate = self.compute_total_adjustment_rate(
@@ -104,8 +96,15 @@ impl Transmuter {
         // Apply adjustment effect on the swap output and return the adjustment information
         let (output, adjustment) = rebalancing_adjustment(output, total_adjustment_value)?;
 
+        match adjustment {
+            Adjustment::Incentivize { incentive } => {}
+            _ => {}
+        }
+
         // Update incentive pool accounting due to the adjustment
-        self.update_incentive_pool_accounting(deps, &pool, beneficiary, &adjustment)?;
+        if let Adjustment::DeductFee { ref fee } = adjustment {
+            self.incentive_pool.add_tokens(deps.storage, &fee)?;
+        }
 
         Ok((pool, output, adjustment))
     }
@@ -234,41 +233,5 @@ impl Transmuter {
         let total_adjustment_value = total_adjustment_rate.checked_mul(total_balance)?;
 
         Ok(round_adjustment(total_adjustment_value)?)
-    }
-
-    fn update_incentive_pool_accounting(
-        &self,
-        deps: DepsMut,
-        pool: &TransmuterPool,
-        beneficiary: &Addr,
-        adjustment: &Adjustment,
-    ) -> Result<(), ContractError> {
-        match adjustment {
-            Adjustment::DeductFee { ref fee } => {
-                self.incentive_pool.add_tokens(deps.storage, &fee)?;
-            }
-            Adjustment::CreditIncentive { incentive } => {
-                let mut pool_denom_factors = pool
-                    .pool_assets
-                    .iter()
-                    .map(|asset| (asset.denom().to_string(), asset.normalization_factor()))
-                    .collect::<BTreeMap<_, _>>();
-
-                let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
-                let alloyed_norm_factor =
-                    self.alloyed_asset.get_normalization_factor(deps.storage)?;
-                pool_denom_factors.insert(alloyed_denom, alloyed_norm_factor);
-
-                self.incentive_pool.credit_incentive(
-                    deps.storage,
-                    &beneficiary,
-                    incentive.clone(),
-                    &pool_denom_factors,
-                )?;
-            }
-            Adjustment::None => {}
-        }
-
-        Ok(())
     }
 }

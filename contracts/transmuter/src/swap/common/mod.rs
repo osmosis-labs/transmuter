@@ -43,8 +43,8 @@ pub enum SwapVariant {
 pub enum Adjustment {
     /// Deduct fee from the output amount
     DeductFee { fee: Coin },
-    /// Credit incentive to the beneficiary in a normalized amount
-    CreditIncentive { incentive: Uint128 },
+    /// Incentivize sender, the value here is the normalized amount of incentive
+    Incentivize { incentive: Uint128 },
     /// No adjustment
     None,
 }

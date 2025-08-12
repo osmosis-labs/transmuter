@@ -176,13 +176,6 @@ pub enum ContractError {
         requested: Uint128,
     },
 
-    #[error("Insufficient incentive credit for user {user}: available {available}, requested {requested}")]
-    InsufficientIncentiveCredit {
-        user: Addr,
-        available: Uint128,
-        requested: Uint128,
-    },
-
     #[error("{0}")]
     OverflowError(#[from] OverflowError),
 

@@ -331,12 +331,6 @@ mod tests {
             }
         );
 
-        let credits = transmuter
-            .incentive_pool
-            .get_all_incentive_credits(&deps.storage, None, None)
-            .unwrap();
-        assert_eq!(credits, vec![]);
-
         // swap back with the same amount
         let res = transmuter
             .swap_non_alloyed_exact_amount_in(
@@ -366,68 +360,8 @@ mod tests {
             ]
         );
 
-        let credits = transmuter
-            .incentive_pool
-            .get_all_incentive_credits(&deps.storage, None, None)
-            .unwrap();
-        assert_eq!(
-            credits,
-            vec![(sender.clone(), fee * Uint128::from(100u128))]
-        );
-
-        let pool_denom_factors = pool
-            .pool_assets
-            .iter()
-            .map(|asset| (asset.denom().to_string(), asset.normalization_factor()))
-            .collect::<BTreeMap<_, _>>();
-
-        let err = transmuter
-            .incentive_pool
-            .redeem_incentive(
-                &mut deps.storage,
-                &sender,
-                vec![coin(fee.u128() + 1, "denom1")],
-                &pool_denom_factors,
-            )
-            .unwrap_err();
-
-        assert_eq!(
-            err,
-            ContractError::InsufficientIncentiveCredit {
-                user: sender.clone(),
-                available: fee * Uint128::from(100u128),
-                requested: (fee + Uint128::from(1u128)) * Uint128::from(100u128),
-            }
-        );
-
-        transmuter
-            .incentive_pool
-            .redeem_incentive(
-                &mut deps.storage,
-                &sender,
-                vec![coin(fee.u128(), "denom1")],
-                &pool_denom_factors,
-            )
-            .unwrap();
-
         incentive_pool_balances
             .sub(coin(fee.u128(), "denom1"))
             .unwrap();
-
-        let credits = transmuter
-            .incentive_pool
-            .get_all_incentive_credits(&deps.storage, None, None)
-            .unwrap();
-
-        assert_eq!(credits, vec![]);
-
-        let updated_incentive_pool_balances = transmuter
-            .incentive_pool
-            .get_all_pool_balances(&deps.storage)
-            .unwrap()
-            .try_into()
-            .unwrap();
-
-        assert_eq!(incentive_pool_balances, updated_incentive_pool_balances);
     }
 }
