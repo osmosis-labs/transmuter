@@ -49,7 +49,6 @@ impl Transmuter {
                 token_out_min_amount,
             } => self.swap_tokens_to_alloyed_asset_exact_in(
                 entrypoint,
-                &sender,
                 tokens_in.to_owned(),
                 token_out_min_amount,
                 alloyed_denom.clone(),
@@ -64,7 +63,6 @@ impl Transmuter {
                 token_out_amount,
             } => self.swap_tokens_to_alloyed_asset_exact_out(
                 entrypoint,
-                &sender,
                 token_in_denom,
                 token_in_max_amount,
                 token_out_amount,
@@ -103,7 +101,6 @@ impl Transmuter {
     fn swap_tokens_to_alloyed_asset_exact_in(
         &self,
         entrypoint: Entrypoint,
-        sender: &Addr,
         tokens_in: Vec<Coin>,
         token_out_min_amount: Uint128,
         alloyed_denom: String,
@@ -137,13 +134,8 @@ impl Transmuter {
             token_out_norm_factor,
         );
 
-        let (pool, token_out, adjustment) = self.rebalancer_pass(
-            deps.branch(),
-            pool,
-            &sender,
-            run_pool,
-            rebalancing_adjustment,
-        )?;
+        let (pool, token_out, adjustment) =
+            self.rebalancer_pass(deps.branch(), pool, run_pool, rebalancing_adjustment)?;
 
         let response = set_data_if_sudo(
             response,
@@ -171,7 +163,6 @@ impl Transmuter {
     fn swap_tokens_to_alloyed_asset_exact_out(
         &self,
         entrypoint: Entrypoint,
-        sender: &Addr,
         token_in_denom: &str,
         token_in_max_amount: Uint128,
         token_out_amount: Uint128,
@@ -203,13 +194,8 @@ impl Transmuter {
             token_in_norm_factor,
         );
 
-        let (pool, token_in, _adjustment) = self.rebalancer_pass(
-            deps.branch(),
-            pool,
-            &sender,
-            run_pool,
-            rebalancing_adjustment,
-        )?;
+        let (pool, token_in, _adjustment) =
+            self.rebalancer_pass(deps.branch(), pool, run_pool, rebalancing_adjustment)?;
 
         // Unlike exact in case where token out is alloyed, there is no separate mint target required here
         // Because fee is collected from the token_in
@@ -511,7 +497,7 @@ mod tests {
         assert_eq!(
             messages,
             vec![MsgMint {
-                amount: Some(coin(amount_out_before_fee.u128(), "alloyed").into()),
+                amount: Some(coin((amount_out_before_fee + fee).u128(), "alloyed").into()),
                 mint_to_address: sender.to_string(),
                 sender: MOCK_CONTRACT_ADDR.to_string(),
             }]
@@ -523,6 +509,10 @@ mod tests {
             pool.get_pool_asset_by_denom("denom3").unwrap().amount(),
             Uint128::from(5_000_000_000_000u128) + amount_out_before_fee
         );
+
+        incentive_pool_balances
+            .sub(coin(fee.u128(), "alloyed"))
+            .unwrap();
 
         // check incentive pool state
         let updated_incentive_pool_balances: Coins = transmuter

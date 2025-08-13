@@ -1,5 +1,5 @@
 use cosmwasm_std::{
-    Addr, CheckedFromRatioError, CheckedMultiplyRatioError, Coin, ConversionOverflowError, Decimal,
+    CheckedFromRatioError, CheckedMultiplyRatioError, Coin, ConversionOverflowError, Decimal,
     DecimalRangeExceeded, DivideByZeroError, OverflowError, SignedDecimal256RangeExceeded,
     StdError, Uint128, Uint64,
 };

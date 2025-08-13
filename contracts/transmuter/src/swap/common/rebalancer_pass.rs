@@ -5,7 +5,9 @@ use crate::{
     transmuter_pool::TransmuterPool,
     ContractError,
 };
-use cosmwasm_std::{Addr, Decimal, Deps, DepsMut, Int256, SignedDecimal256, Uint128, Uint256};
+use cosmwasm_std::{
+    coin, Coin, Decimal, Deps, DepsMut, Int256, SignedDecimal256, Uint128, Uint256,
+};
 use std::cmp::Ordering;
 use transmuter_math::rebalancing::{
     compute_total_effective_adjustment_rate, config::RebalancingConfig, round_adjustment,
@@ -21,19 +23,16 @@ impl Transmuter {
     /// - Applies incentives or fees based on whether the operation helps or harms pool balance
     /// - Updates the incentive pool accordingly
     /// - Checks limits
-    pub fn rebalancer_pass<RunPoolOutput, RunPool, RebalancingAdjustment>(
+    pub fn rebalancer_pass<RunPool, RebalancingAdjustment>(
         &self,
         deps: DepsMut,
         pool: TransmuterPool,
-        beneficiary: &Addr,
         run_pool: RunPool,
         rebalancing_adjustment: RebalancingAdjustment,
-    ) -> Result<(TransmuterPool, RunPoolOutput, Adjustment), ContractError>
+    ) -> Result<(TransmuterPool, Coin, Adjustment), ContractError>
     where
-        RunPool:
-            FnOnce(Deps, TransmuterPool) -> Result<(TransmuterPool, RunPoolOutput), ContractError>,
-        RebalancingAdjustment:
-            FnOnce(RunPoolOutput, Int256) -> Result<(RunPoolOutput, Adjustment), ContractError>,
+        RunPool: FnOnce(Deps, TransmuterPool) -> Result<(TransmuterPool, Coin), ContractError>,
+        RebalancingAdjustment: FnOnce(Coin, Int256) -> Result<(Coin, Adjustment), ContractError>,
     {
         let prev_asset_weights = pool.asset_weights()?.unwrap_or_default();
         let prev_asset_group_weights = pool.asset_group_weights()?.unwrap_or_default();
@@ -94,19 +93,23 @@ impl Transmuter {
         )?;
 
         // Apply adjustment effect on the swap output and return the adjustment information
-        let (output, adjustment) = rebalancing_adjustment(output, total_adjustment_value)?;
+        let (adjusted_output, adjustment) =
+            rebalancing_adjustment(output.clone(), total_adjustment_value)?;
 
         match adjustment {
-            Adjustment::Incentivize { incentive } => {}
-            _ => {}
+            Adjustment::Incentivize { ref incentive } => {
+                self.incentive_pool
+                    .remove_tokens(deps.storage, &incentive)?;
+
+                // TODO: if not enought, preceed with internal swap, we can run rebalancing pass recursively with a flag
+            }
+            Adjustment::DeductFee { ref fee } => {
+                self.incentive_pool.add_tokens(deps.storage, &fee)?;
+            }
+            Adjustment::None => {}
         }
 
-        // Update incentive pool accounting due to the adjustment
-        if let Adjustment::DeductFee { ref fee } = adjustment {
-            self.incentive_pool.add_tokens(deps.storage, &fee)?;
-        }
-
-        Ok((pool, output, adjustment))
+        Ok((pool, adjusted_output, adjustment))
     }
 
     /// Compute total incentive required to rebalance the pool to ideal balance.

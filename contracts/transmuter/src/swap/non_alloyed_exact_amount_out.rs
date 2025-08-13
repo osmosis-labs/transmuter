@@ -32,13 +32,8 @@ impl Transmuter {
             token_in_norm_factor,
         );
 
-        let (mut pool, actual_token_in, _adjustment) = self.rebalancer_pass(
-            deps.branch(),
-            pool,
-            &sender,
-            run_pool,
-            rebalancing_adjustment,
-        )?;
+        let (mut pool, actual_token_in, _adjustment) =
+            self.rebalancer_pass(deps.branch(), pool, run_pool, rebalancing_adjustment)?;
 
         self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
 
@@ -345,7 +340,7 @@ mod tests {
         assert_eq!(
             data,
             SwapExactAmountInResponseData {
-                token_out_amount: amount_in_before_fee,
+                token_out_amount: amount_in_before_fee + fee,
             }
         );
 
@@ -363,5 +358,14 @@ mod tests {
         incentive_pool_balances
             .sub(coin(fee.u128(), "denom1"))
             .unwrap();
+
+        let updated_incentive_pool_balances: Coins = transmuter
+            .incentive_pool
+            .get_all_pool_balances(&deps.storage)
+            .unwrap()
+            .try_into()
+            .unwrap();
+
+        assert_eq!(incentive_pool_balances, updated_incentive_pool_balances);
     }
 }

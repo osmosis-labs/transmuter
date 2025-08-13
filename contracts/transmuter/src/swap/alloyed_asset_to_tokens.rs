@@ -64,7 +64,6 @@ impl Transmuter {
                 token_out_denom,
                 token_out_min_amount,
                 token_in_amount,
-                &sender,
                 deps.branch(),
             )?,
             SwapFromAlloyedConstraint::ExactOut {
@@ -74,7 +73,6 @@ impl Transmuter {
                 entrypoint,
                 tokens_out,
                 token_in_max_amount,
-                &sender,
                 deps.branch(),
             )?,
         };
@@ -116,7 +114,6 @@ impl Transmuter {
         token_out_denom: &str,
         token_out_min_amount: Uint128,
         token_in_amount: Uint128,
-        sender: &Addr,
         mut deps: DepsMut,
     ) -> Result<(TransmuterPool, Uint128, Vec<Coin>, Adjustment, Response), ContractError> {
         let mut pool: TransmuterPool = self.pool.load(deps.storage)?;
@@ -152,13 +149,8 @@ impl Transmuter {
                 token_out_norm_factor,
             );
 
-            (pool, token_out, adjustment) = self.rebalancer_pass(
-                deps.branch(),
-                pool,
-                &sender,
-                run_pool,
-                rebalancing_adjustment,
-            )?;
+            (pool, token_out, adjustment) =
+                self.rebalancer_pass(deps.branch(), pool, run_pool, rebalancing_adjustment)?;
         }
 
         let response = set_data_if_sudo(
@@ -179,7 +171,6 @@ impl Transmuter {
         entrypoint: Entrypoint,
         tokens_out: &[Coin],
         token_in_max_amount: Uint128,
-        sender: &Addr,
         mut deps: DepsMut,
     ) -> Result<(TransmuterPool, Uint128, Vec<Coin>, Adjustment, Response), ContractError> {
         let response = Response::new();
@@ -214,13 +205,8 @@ impl Transmuter {
                 token_in_norm_factor,
             );
 
-            (pool, token_in, adjustment) = self.rebalancer_pass(
-                deps.branch(),
-                pool,
-                &sender,
-                run_pool,
-                rebalancing_adjustment,
-            )?;
+            (pool, token_in, adjustment) =
+                self.rebalancer_pass(deps.branch(), pool, run_pool, rebalancing_adjustment)?;
         }
 
         let response = set_data_if_sudo(
@@ -915,7 +901,7 @@ mod tests {
         assert_eq!(
             messages,
             vec![MsgMint {
-                amount: Some(coin(amount_out_before_fee.u128(), "alloyed").into()),
+                amount: Some(coin((amount_out_before_fee + fee).u128(), "alloyed").into()),
                 mint_to_address: sender.to_string(),
                 sender: MOCK_CONTRACT_ADDR.to_string(),
             }]
@@ -927,6 +913,10 @@ mod tests {
             pool.get_pool_asset_by_denom("denom3").unwrap().amount(),
             Uint128::from(5_000_000_000_000u128) + amount_out_before_fee
         );
+
+        incentive_pool_balances
+            .sub(coin(fee.u128(), "alloyed"))
+            .unwrap();
 
         // check incentive pool state
         let updated_incentive_pool_balances: Coins = transmuter

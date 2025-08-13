@@ -83,7 +83,12 @@ fn adjust_exact_in(
             total_adjustment_value,
         ),
         // positive adjustment value means incentivize sender
-        Ordering::Greater => incentivize(token_out, total_adjustment_value),
+        Ordering::Greater => incentivize_by_increasing_token_out(
+            token_out,
+            std_norm_factor,
+            token_out_norm_factor,
+            total_adjustment_value,
+        ),
         // zero adjustment means no adjustment
         Ordering::Equal => Ok((token_out, Adjustment::None)),
     }
@@ -109,7 +114,12 @@ fn adjust_exact_out(
             total_adjustment_value,
         )?,
         // positive adjustment value means incentivize sender
-        Ordering::Greater => incentivize(token_in, total_adjustment_value)?,
+        Ordering::Greater => incentivize_by_decreasing_token_in(
+            token_in,
+            std_norm_factor,
+            token_in_norm_factor,
+            total_adjustment_value,
+        )?,
         // zero adjustment means no adjustment
         Ordering::Equal => (token_in, Adjustment::None),
     })
@@ -168,14 +178,47 @@ fn increase_and_deduct_fee_from_token_in(
         },
     ))
 }
-fn incentivize(
+
+fn incentivize_by_increasing_token_out(
     token_out: Coin,
+    std_norm_factor: Uint128,
+    token_out_norm_factor: Uint128,
     total_adjustment_value: Int256,
 ) -> Result<(Coin, Adjustment), ContractError> {
+    let incentive_amount = convert_amount(
+        total_adjustment_value.abs().try_into()?,
+        std_norm_factor,
+        token_out_norm_factor,
+        &crate::asset::Rounding::Down,
+    )?;
+    let incentive = coin(incentive_amount.u128(), token_out.denom.clone());
+
+    let token_out_amount = token_out.amount.checked_add(incentive_amount)?;
+
     Ok((
-        token_out,
-        Adjustment::Incentivize {
-            incentive: total_adjustment_value.abs().try_into()?,
-        },
+        coin(token_out_amount.u128(), token_out.denom),
+        Adjustment::Incentivize { incentive },
+    ))
+}
+
+fn incentivize_by_decreasing_token_in(
+    token_in: Coin,
+    std_norm_factor: Uint128,
+    token_in_norm_factor: Uint128,
+    total_adjustment_value: Int256,
+) -> Result<(Coin, Adjustment), ContractError> {
+    let incentive_amount = convert_amount(
+        total_adjustment_value.abs().try_into()?,
+        std_norm_factor,
+        token_in_norm_factor,
+        &crate::asset::Rounding::Down,
+    )?;
+    let incentive = coin(incentive_amount.u128(), token_in.denom.clone());
+
+    let token_in_amount = token_in.amount.checked_sub(incentive_amount)?;
+
+    Ok((
+        coin(token_in_amount.u128(), token_in.denom),
+        Adjustment::Incentivize { incentive },
     ))
 }
