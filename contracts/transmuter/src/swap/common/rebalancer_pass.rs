@@ -5,9 +5,7 @@ use crate::{
     transmuter_pool::TransmuterPool,
     ContractError,
 };
-use cosmwasm_std::{
-    coin, Coin, Decimal, Deps, DepsMut, Int256, SignedDecimal256, Uint128, Uint256,
-};
+use cosmwasm_std::{Coin, Decimal, Deps, DepsMut, Int256, SignedDecimal256, Uint128, Uint256};
 use std::cmp::Ordering;
 use transmuter_math::rebalancing::{
     compute_total_effective_adjustment_rate, config::RebalancingConfig, round_adjustment,

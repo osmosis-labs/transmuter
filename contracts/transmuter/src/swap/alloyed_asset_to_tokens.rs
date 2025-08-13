@@ -342,6 +342,8 @@ impl Transmuter {
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
+
     use super::*;
 
     use cosmwasm_std::testing::mock_env;

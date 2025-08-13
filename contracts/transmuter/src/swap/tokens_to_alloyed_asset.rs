@@ -229,6 +229,8 @@ fn create_alloyed_asset_mint_msg(
 
 #[cfg(test)]
 mod tests {
+    #![allow(deprecated)]
+
     use super::*;
     use cosmwasm_std::{
         coin,
