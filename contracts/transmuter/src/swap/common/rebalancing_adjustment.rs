@@ -12,7 +12,7 @@ pub fn rebalancing_adjustment_for_exact_out(
     token_in_max_amount: Uint128,
     std_norm_factor: Uint128,
     token_in_norm_factor: Uint128,
-) -> Box<dyn FnOnce(Coin, Int256) -> Result<(Coin, Adjustment), ContractError>> {
+) -> Box<dyn Fn(Coin, Int256) -> Result<(Coin, Adjustment), ContractError>> {
     Box::new(move |token_in: Coin, total_adjustment_value: Int256| {
         // If adjustment value is negative, fee take from the token_in, so we require addtional token_in // to pay for the fee.
         // Otherwise, return the token_in as is
@@ -42,7 +42,7 @@ pub fn rebalancing_adjustment_for_exact_in(
     token_out_min_amount: Uint128,
     std_norm_factor: Uint128,
     token_out_norm_factor: Uint128,
-) -> Box<dyn FnOnce(Coin, Int256) -> Result<(Coin, Adjustment), ContractError>> {
+) -> Box<dyn Fn(Coin, Int256) -> Result<(Coin, Adjustment), ContractError>> {
     Box::new(move |token_out: Coin, total_adjustment_value: Int256| {
         let (token_out, adjustment) = adjust_exact_in(
             token_out,
