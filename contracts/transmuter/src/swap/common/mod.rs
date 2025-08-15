@@ -40,6 +40,7 @@ pub enum SwapVariant {
 }
 
 /// Adjustment to the output amount after swap
+#[derive(PartialEq, Debug)]
 pub enum Adjustment {
     /// Deduct fee from the output amount or increase input amount
     DeductFee { fee: Coin },
