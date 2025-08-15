@@ -45,180 +45,15 @@ impl Transmuter {
         )?;
 
         match first_order_adjustment {
-            Adjustment::Incentivize { ref incentive } => {
-                // check if incentive pool has enough balance for the incentive
-                let incentive_denom_balance = self
-                    .incentive_pool
-                    .get_pool_balance(deps.storage, &incentive.denom)?;
-
-                let additional_incentive_needed =
-                    incentive.amount.saturating_sub(incentive_denom_balance);
-
-                // if not enought, proceed with internal swap
-                if additional_incentive_needed > Uint128::zero() {
-                    // use token that has highest balance as substitute token to perform internal swap to
-                    // additional incentive needed
-                    let Some(substitute_token_denom) = self
-                        .incentive_pool
-                        .get_all_pool_balances(deps.storage)?
-                        .iter()
-                        .max_by_key(|c| c.amount)
-                        .map(|c| c.denom.clone())
-                    else {
-                        // if no substitute token available, abort the internal swap. Gives no incentive.
-                        return Ok((first_order_pool, first_order_output, Adjustment::None));
-                    };
-
-                    // When perform internal swap, contract balance stays the same
-                    // but in this this updated `second_order_pool`:
-                    // - substitute_token will be recorded as increased in the liquidity pool,
-                    //   but will later decreased from the incentive pool for the same amount.
-                    //   The account balance is kept on this side.
-                    //
-                    // - incentive token will be recorded as decreased in the liquidity pool.
-                    //   This creates free incentive token to be distributed as incentive.
-                    //
-                    // The free incentive token will become part of token out in case of exact in
-                    // or part of subsidized token in in case of exact out.
-
-                    let token_out =
-                        coin(additional_incentive_needed.u128(), incentive.denom.clone());
-
-                    let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
-
-                    // TODO: review and refactor this part
-                    let Ok((
-                        second_order_pool,
-                        substitute_token,
-                        second_order_total_adjustment_value,
-                    )) = (match (
-                        incentive.denom == alloyed_denom,
-                        substitute_token_denom == alloyed_denom,
-                    ) {
-                        // swap alloyed to token
-                        (true, _) => {
-                            let token_in_norm_factor =
-                                self.alloyed_asset.get_normalization_factor(deps.storage)?;
-
-                            let tokens_out = vec![token_out.clone()];
-                            let tokens_out_with_norm_factor = first_order_pool
-                                .pair_coins_with_normalization_factor(&tokens_out)?;
-
-                            let in_amount = swap_from_alloyed::in_amount_via_exact_out(
-                                Uint128::MAX,
-                                token_in_norm_factor,
-                                tokens_out_with_norm_factor,
-                            )?;
-
-                            let token_in = coin(in_amount.u128(), substitute_token_denom);
-
-                            self.run_pool_and_compute_adjustment_value(
-                                deps.as_ref(),
-                                first_order_pool.clone(),
-                                |_: Deps, mut pool: TransmuterPool| {
-                                    pool.exit_pool(&tokens_out)?;
-                                    Ok((pool, token_in.clone()))
-                                },
-                            )
-                        }
-
-                        // swap token to alloyed
-                        (_, true) => {
-                            let token_in_norm_factor = first_order_pool
-                                .get_pool_asset_by_denom(&substitute_token_denom)?
-                                .normalization_factor();
-                            let in_amount = swap_to_alloyed::in_amount_via_exact_out(
-                                token_in_norm_factor,
-                                Uint128::MAX,
-                                additional_incentive_needed,
-                                self.alloyed_asset.get_normalization_factor(deps.storage)?,
-                            )?;
-                            let token_in = coin(in_amount.u128(), substitute_token_denom);
-
-                            self.run_pool_and_compute_adjustment_value(
-                                deps.as_ref(),
-                                first_order_pool.clone(),
-                                |_deps: Deps, mut pool: TransmuterPool| {
-                                    pool.join_pool(&[token_in.clone()])?;
-                                    Ok((pool, token_in))
-                                },
-                            )
-                        }
-
-                        // swap token to token
-                        (_, _) => self.run_pool_and_compute_adjustment_value(
-                            deps.as_ref(),
-                            first_order_pool.clone(),
-                            |deps: Deps, pool: TransmuterPool| {
-                                self.in_amt_given_out(
-                                    deps,
-                                    pool,
-                                    token_out.clone(),
-                                    substitute_token_denom,
-                                )
-                            },
-                        ),
-                    })
-                    else {
-                        // if internal swap failed, adjust nothing
-                        return Ok((first_order_pool, first_order_output, Adjustment::None));
-                    };
-
-                    let updated_total_adjustment_value = first_order_total_adjustment_value
-                        .checked_add(second_order_total_adjustment_value)?;
-
-                    // if internal swap is helpful or neutral, return the original output and adjustment
-                    if updated_total_adjustment_value >= first_order_total_adjustment_value {
-                        self.incentive_pool.remove_tokens(
-                            deps.storage,
-                            &coin(incentive_denom_balance.u128(), incentive.denom.clone()),
-                        )?;
-                        self.incentive_pool
-                            .remove_tokens(deps.storage, &substitute_token)?;
-                        Ok((
-                            first_order_pool,
-                            first_order_adjusted_output,
-                            first_order_adjustment,
-                        ))
-                    } else {
-                        if updated_total_adjustment_value <= Int256::zero() {
-                            // If internal swap is harmful and fully negated the original incentive,
-                            // abort the internal swap. Gives no incentive.
-                            Ok((first_order_pool, first_order_output, Adjustment::None))
-                        } else {
-                            // If internal swap is harmful and partially negated the original incentive,
-                            // adjust first order output with updated total adjustment value.
-                            let (readjusted_output, second_order_adjustment) =
-                                rebalancing_adjustment(
-                                    first_order_output.clone(),
-                                    updated_total_adjustment_value,
-                                )?;
-
-                            self.incentive_pool.remove_tokens(
-                                deps.storage,
-                                &coin(incentive_denom_balance.u128(), incentive.denom.clone()),
-                            )?;
-                            self.incentive_pool
-                                .remove_tokens(deps.storage, &substitute_token)?;
-
-                            Ok((
-                                second_order_pool,
-                                readjusted_output,
-                                second_order_adjustment,
-                            ))
-                        }
-                    }
-                } else {
-                    self.incentive_pool
-                        .remove_tokens(deps.storage, &incentive)?;
-
-                    Ok((
-                        first_order_pool,
-                        first_order_adjusted_output,
-                        first_order_adjustment,
-                    ))
-                }
-            }
+            Adjustment::Incentivize { incentive } => self.incentivize(
+                deps,
+                incentive,
+                first_order_pool,
+                first_order_output,
+                first_order_total_adjustment_value,
+                first_order_adjusted_output,
+                rebalancing_adjustment,
+            ),
             Adjustment::DeductFee { ref fee } => {
                 self.incentive_pool.add_tokens(deps.storage, &fee)?;
                 Ok((
@@ -232,6 +67,272 @@ impl Transmuter {
                 first_order_adjusted_output,
                 first_order_adjustment,
             )),
+        }
+    }
+
+    /// Incentivize is more complex than taking fee since there are cases where there is not enough incentive token
+    /// to be given out. In such cases, we need to perform internal incentive swap to get additional incentive token.
+    /// That process itself could result in change of the pool balance, which could affect the total adjustment value.
+    ///
+    /// The `first_order` prefix means the result from the first pass of incentive calculation,
+    /// the `second_order` is the result from the internal incentive swap.
+    ///
+    /// This function handles the internal incentive swap and returns the updated pool, output and adjustment.
+    fn incentivize<RebalancingAdjustment>(
+        &self,
+        deps: DepsMut,
+        first_order_incentive: Coin,
+        first_order_pool: TransmuterPool,
+        first_order_output: Coin,
+        first_order_total_adjustment_value: Int256,
+        first_order_adjusted_output: Coin,
+        rebalancing_adjustment: RebalancingAdjustment,
+    ) -> Result<(TransmuterPool, Coin, Adjustment), ContractError>
+    where
+        RebalancingAdjustment: Fn(Coin, Int256) -> Result<(Coin, Adjustment), ContractError>,
+    {
+        // check if incentive pool has enough balance for the incentive
+        let incentive_denom_balance = self
+            .incentive_pool
+            .get_pool_balance(deps.storage, &first_order_incentive.denom)?;
+
+        // if not enought, proceed with internal incentive swap
+        if incentive_denom_balance < first_order_incentive.amount {
+            self.incentivize_with_internal_incentive_swap(
+                deps,
+                first_order_incentive,
+                first_order_pool,
+                first_order_output,
+                first_order_total_adjustment_value,
+                first_order_adjusted_output,
+                incentive_denom_balance,
+                rebalancing_adjustment,
+            )
+        } else {
+            self.incentive_pool
+                .remove_tokens(deps.storage, &first_order_incentive)?;
+
+            Ok((
+                first_order_pool,
+                first_order_adjusted_output,
+                Adjustment::Incentivize {
+                    incentive: first_order_incentive,
+                },
+            ))
+        }
+    }
+
+    /// Internal incentive swap is a process of swapping substitute token to incentive token so that
+    /// the incentive pool has enough balance to distribute the incentive.
+    ///
+    /// The result of the internal incentive swap can be divided largely into 3 cases:
+    /// - Second order total adjustment value is positive or zero:
+    ///     This means internal swap is helpful or neutral, reward swapper with the original incentive.
+    /// - Second order total adjustment value partially negated the original incentive:
+    ///     This means internal swap is harmful, but not fully negated the original incentive.
+    ///     Adjust the output with the updated total adjustment value.
+    /// - Second order total adjustment value fully negated the original incentive:
+    ///     This means internal swap is harmful and fully negated the original incentive.
+    ///     Abort the internal incentive swap. Gives no incentive.
+    ///
+    /// When perform internal incentive swap, contract balance stays the same.
+    /// The swap will create `second_order_pool` which is the updated pool state after swap
+    /// with the following changes:
+    /// - substitute_token will be recorded as increased in the liquidity pool,
+    ///   but will later decreased from the incentive pool for the same amount.
+    ///   Essentially record same amount of token in the contract balance into different incentive/liquidity pool.
+    ///
+    /// - incentive token will be recorded as decreased in the liquidity pool.
+    ///   This creates free incentive token to be distributed as incentive.
+    ///
+    /// The free incentive token will become part of token out in case of exact in
+    /// or part of subsidized token in in case of exact out.
+    fn incentivize_with_internal_incentive_swap<RebalancingAdjustment>(
+        &self,
+        deps: DepsMut,
+        first_order_incentive: Coin,
+        first_order_pool: TransmuterPool,
+        first_order_output: Coin,
+        first_order_total_adjustment_value: Int256,
+        first_order_adjusted_output: Coin,
+        incentive_denom_balance: Uint128,
+        rebalancing_adjustment: RebalancingAdjustment,
+    ) -> Result<(TransmuterPool, Coin, Adjustment), ContractError>
+    where
+        RebalancingAdjustment: Fn(Coin, Int256) -> Result<(Coin, Adjustment), ContractError>,
+    {
+        let additional_incentive_token_needed = coin(
+            first_order_incentive
+                .amount
+                .saturating_sub(incentive_denom_balance)
+                .u128(),
+            first_order_incentive.denom.clone(),
+        );
+
+        // use token that has highest balance as substitute token to perform internal incentive swap to
+        // get additional incentive token needed
+        let Some(substitute_token_denom) = self
+            .incentive_pool
+            .get_all_pool_balances(deps.storage)?
+            .iter()
+            .max_by_key(|c| c.amount)
+            .map(|c| c.denom.clone())
+        else {
+            // if no substitute token available, abort the internal incentive swap. Gives no incentive.
+            return Ok((first_order_pool, first_order_output, Adjustment::None));
+        };
+
+        // perform internal incentive swap
+        let Ok((second_order_pool, substitute_token, second_order_total_adjustment_value)) = self
+            .internal_incentive_swap(
+                deps.as_ref(),
+                &first_order_incentive,
+                first_order_pool.clone(),
+                additional_incentive_token_needed,
+                substitute_token_denom,
+            )
+        else {
+            // if internal incentive swap failed, adjust nothing
+            return Ok((first_order_pool, first_order_output, Adjustment::None));
+        };
+
+        let updated_total_adjustment_value =
+            first_order_total_adjustment_value.checked_add(second_order_total_adjustment_value)?;
+
+        match updated_total_adjustment_value {
+            // if internal incentive swap is helpful or neutral, return the original output and adjustment
+            u if u >= first_order_total_adjustment_value => {
+                self.incentive_pool.remove_tokens(
+                    deps.storage,
+                    &coin(
+                        incentive_denom_balance.u128(),
+                        first_order_incentive.denom.clone(),
+                    ),
+                )?;
+                self.incentive_pool
+                    .remove_tokens(deps.storage, &substitute_token)?;
+                Ok((
+                    first_order_pool,
+                    first_order_adjusted_output,
+                    Adjustment::Incentivize {
+                        incentive: first_order_incentive,
+                    },
+                ))
+            }
+            // If internal incentive swap is harmful and fully negated the original incentive,
+            // abort the internal incentive swap. Gives no incentive.
+            u if u <= Int256::zero() => {
+                Ok((first_order_pool, first_order_output, Adjustment::None))
+            }
+            // If internal incentive swap is harmful and partially negated the original incentive,
+            // adjust first order output with updated total adjustment value.
+            // u if u > Int256::zero()
+            _ => {
+                let (readjusted_output, second_order_adjustment) = rebalancing_adjustment(
+                    first_order_output.clone(),
+                    updated_total_adjustment_value,
+                )?;
+
+                self.incentive_pool.remove_tokens(
+                    deps.storage,
+                    &coin(
+                        incentive_denom_balance.u128(),
+                        first_order_incentive.denom.clone(),
+                    ),
+                )?;
+                self.incentive_pool
+                    .remove_tokens(deps.storage, &substitute_token)?;
+
+                Ok((
+                    second_order_pool,
+                    readjusted_output,
+                    second_order_adjustment,
+                ))
+            }
+        }
+    }
+
+    /// Internal incentive swap is a process of swapping substitute token to incentive token so that
+    /// the incentive pool has enough balance to distribute the incentive.
+    ///
+    /// It use exact out only because it has expected output amount.
+    fn internal_incentive_swap(
+        &self,
+        deps: Deps,
+        first_order_incentive: &Coin,
+        first_order_pool: TransmuterPool,
+        additional_incentive_token_needed: Coin,
+        substitute_token_denom: String,
+    ) -> Result<(TransmuterPool, Coin, Int256), ContractError> {
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+
+        match (
+            first_order_incentive.denom == alloyed_denom,
+            substitute_token_denom == alloyed_denom,
+        ) {
+            // swap alloyed to token
+            (true, _) => {
+                let token_in_norm_factor =
+                    self.alloyed_asset.get_normalization_factor(deps.storage)?;
+
+                let tokens_out = vec![additional_incentive_token_needed.clone()];
+                let tokens_out_with_norm_factor =
+                    first_order_pool.pair_coins_with_normalization_factor(&tokens_out)?;
+
+                let in_amount = swap_from_alloyed::in_amount_via_exact_out(
+                    Uint128::MAX,
+                    token_in_norm_factor,
+                    tokens_out_with_norm_factor,
+                )?;
+
+                let token_in = coin(in_amount.u128(), substitute_token_denom);
+
+                self.run_pool_and_compute_adjustment_value(
+                    deps,
+                    first_order_pool,
+                    |_: Deps, mut pool: TransmuterPool| {
+                        pool.exit_pool(&tokens_out)?;
+                        Ok((pool, token_in.clone()))
+                    },
+                )
+            }
+
+            // swap token to alloyed
+            (_, true) => {
+                let token_in_norm_factor = first_order_pool
+                    .get_pool_asset_by_denom(&substitute_token_denom)?
+                    .normalization_factor();
+                let in_amount = swap_to_alloyed::in_amount_via_exact_out(
+                    token_in_norm_factor,
+                    Uint128::MAX,
+                    additional_incentive_token_needed.amount,
+                    self.alloyed_asset.get_normalization_factor(deps.storage)?,
+                )?;
+                let token_in = coin(in_amount.u128(), substitute_token_denom);
+
+                self.run_pool_and_compute_adjustment_value(
+                    deps,
+                    first_order_pool,
+                    |_deps: Deps, mut pool: TransmuterPool| {
+                        pool.join_pool(&[token_in.clone()])?;
+                        Ok((pool, token_in))
+                    },
+                )
+            }
+
+            // swap token to token
+            (_, _) => self.run_pool_and_compute_adjustment_value(
+                deps,
+                first_order_pool,
+                |deps: Deps, pool: TransmuterPool| {
+                    self.in_amt_given_out(
+                        deps,
+                        pool,
+                        additional_incentive_token_needed.clone(),
+                        substitute_token_denom,
+                    )
+                },
+            ),
         }
     }
 
