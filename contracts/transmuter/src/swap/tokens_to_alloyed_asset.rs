@@ -128,6 +128,7 @@ impl Transmuter {
             Ok((pool, token_out))
         };
 
+        dbg!("rebalancing_adjustment_for_exact_in");
         let rebalancing_adjustment = rebalancing_adjustment_for_exact_in(
             token_out_min_amount,
             std_norm_factor,

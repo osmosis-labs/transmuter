@@ -1,5 +1,5 @@
 use crate::{
-    alloyed_asset::{swap_from_alloyed, swap_to_alloyed},
+    asset::{convert_amount, Rounding},
     contract::Transmuter,
     scope::Scope,
     swap::common::{construct_scope_value_pairs, Adjustment},
@@ -7,9 +7,9 @@ use crate::{
     ContractError,
 };
 use cosmwasm_std::{
-    coin, Coin, Decimal, Deps, DepsMut, Int256, SignedDecimal256, Storage, Uint128, Uint256,
+    coin, ensure, Coin, Decimal, Deps, DepsMut, Int256, SignedDecimal256, Uint128, Uint256,
 };
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::BTreeMap};
 use transmuter_math::rebalancing::{
     compute_total_effective_adjustment_rate, config::RebalancingConfig, round_adjustment,
 };
@@ -168,6 +168,16 @@ impl Transmuter {
                 .u128(),
             first_order_incentive.denom.clone(),
         );
+        let std_norm_factor = first_order_pool.std_norm_factor()?;
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+        let alloyed_normalization_factor =
+            self.alloyed_asset.get_normalization_factor(deps.storage)?;
+        let swappable_asset_norm_factors = first_order_pool
+            .pool_assets
+            .iter()
+            .map(|c| (c.denom().to_string(), c.normalization_factor()))
+            .chain(vec![(alloyed_denom, alloyed_normalization_factor)])
+            .collect::<BTreeMap<String, Uint128>>();
 
         // use token that has highest balance as substitute token to perform internal incentive swap to
         // get additional incentive token needed
@@ -175,7 +185,21 @@ impl Transmuter {
             .incentive_pool
             .get_all_pool_balances(deps.storage)?
             .iter()
-            .max_by_key(|c| c.amount)
+            .max_by_key(|c| {
+                if let Some(normalization_factor) =
+                    swappable_asset_norm_factors.get(c.denom.as_str())
+                {
+                    convert_amount(
+                        c.amount,
+                        *normalization_factor,
+                        std_norm_factor,
+                        &Rounding::Down,
+                    )
+                    .unwrap_or_default()
+                } else {
+                    Uint128::zero()
+                }
+            })
             .map(|c| c.denom.clone())
         else {
             // if no substitute token available, abort the internal incentive swap. Gives no incentive.
@@ -186,7 +210,6 @@ impl Transmuter {
         let Ok((second_order_pool, substitute_token, second_order_total_adjustment_value)) = self
             .internal_incentive_swap(
                 deps.as_ref(),
-                &first_order_incentive,
                 first_order_pool.clone(),
                 additional_incentive_token_needed,
                 substitute_token_denom,
@@ -202,15 +225,12 @@ impl Transmuter {
         match updated_total_adjustment_value {
             // if internal incentive swap is helpful or neutral, return the original output and adjustment
             u if u >= first_order_total_adjustment_value => {
-                self.incentive_pool.remove_tokens(
-                    deps.storage,
-                    &coin(
-                        incentive_denom_balance.u128(),
-                        first_order_incentive.denom.clone(),
-                    ),
-                )?;
+                // remove substitute token from incentive pool, as this is eseentially what got swapped as token in
+                // and the swap result is the incentive pay out which will not be add to incentive pool here since it will
+                // be paid out right away.
                 self.incentive_pool
                     .remove_tokens(deps.storage, &substitute_token)?;
+
                 Ok((
                     first_order_pool,
                     first_order_adjusted_output,
@@ -226,6 +246,7 @@ impl Transmuter {
             }
             // If internal incentive swap is harmful and partially negated the original incentive,
             // adjust first order output with updated total adjustment value.
+            // The incentive pool should pay out
             // u if u > Int256::zero()
             _ => {
                 let (readjusted_output, second_order_adjustment) = rebalancing_adjustment(
@@ -233,15 +254,19 @@ impl Transmuter {
                     updated_total_adjustment_value,
                 )?;
 
-                self.incentive_pool.remove_tokens(
-                    deps.storage,
-                    &coin(
-                        incentive_denom_balance.u128(),
-                        first_order_incentive.denom.clone(),
-                    ),
-                )?;
+                // remove token in for internal swap
                 self.incentive_pool
                     .remove_tokens(deps.storage, &substitute_token)?;
+
+                // add token out for internal swap
+                self.incentive_pool
+                    .add_tokens(deps.storage, &first_order_incentive)?;
+
+                // remove the actual incentive pay out
+                if let Adjustment::Incentivize { ref incentive } = second_order_adjustment {
+                    self.incentive_pool
+                        .remove_tokens(deps.storage, &incentive)?;
+                }
 
                 Ok((
                     second_order_pool,
@@ -259,81 +284,38 @@ impl Transmuter {
     fn internal_incentive_swap(
         &self,
         deps: Deps,
-        first_order_incentive: &Coin,
         first_order_pool: TransmuterPool,
         additional_incentive_token_needed: Coin,
         substitute_token_denom: String,
     ) -> Result<(TransmuterPool, Coin, Int256), ContractError> {
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
-
-        match (
-            first_order_incentive.denom == alloyed_denom,
-            substitute_token_denom == alloyed_denom,
-        ) {
-            // swap alloyed to token
-            (true, _) => {
-                let token_in_norm_factor =
-                    self.alloyed_asset.get_normalization_factor(deps.storage)?;
-
-                let tokens_out = vec![additional_incentive_token_needed.clone()];
-                let tokens_out_with_norm_factor =
-                    first_order_pool.pair_coins_with_normalization_factor(&tokens_out)?;
-
-                let in_amount = swap_from_alloyed::in_amount_via_exact_out(
-                    Uint128::MAX,
-                    token_in_norm_factor,
-                    tokens_out_with_norm_factor,
+        self.run_pool_and_compute_adjustment_value(
+            deps,
+            first_order_pool,
+            |deps: Deps, pool: TransmuterPool| {
+                let (pool, token_in) = self.in_amt_given_out(
+                    deps,
+                    pool,
+                    additional_incentive_token_needed.clone(),
+                    substitute_token_denom,
                 )?;
 
-                let token_in = coin(in_amount.u128(), substitute_token_denom);
+                // check if incentive pool has enough token to swap
+                let incentive_pool_substitute_token_balance = self
+                    .incentive_pool
+                    .get_pool_balance(deps.storage, &token_in.denom)?;
 
-                self.run_pool_and_compute_adjustment_value(
-                    deps,
-                    first_order_pool,
-                    |_: Deps, mut pool: TransmuterPool| {
-                        pool.exit_pool(&tokens_out)?;
-                        Ok((pool, token_in.clone()))
-                    },
-                )
-            }
+                ensure!(
+                    token_in.amount <= incentive_pool_substitute_token_balance,
+                    ContractError::InsufficientIncentivePool {
+                        denom: token_in.denom,
+                        available: incentive_pool_substitute_token_balance,
+                        requested: token_in.amount,
+                    }
+                );
 
-            // swap token to alloyed
-            (_, true) => {
-                let token_in_norm_factor = first_order_pool
-                    .get_pool_asset_by_denom(&substitute_token_denom)?
-                    .normalization_factor();
-                let in_amount = swap_to_alloyed::in_amount_via_exact_out(
-                    token_in_norm_factor,
-                    Uint128::MAX,
-                    additional_incentive_token_needed.amount,
-                    self.alloyed_asset.get_normalization_factor(deps.storage)?,
-                )?;
-                let token_in = coin(in_amount.u128(), substitute_token_denom);
-
-                self.run_pool_and_compute_adjustment_value(
-                    deps,
-                    first_order_pool,
-                    |_deps: Deps, mut pool: TransmuterPool| {
-                        pool.join_pool(&[token_in.clone()])?;
-                        Ok((pool, token_in))
-                    },
-                )
-            }
-
-            // swap token to token
-            (_, _) => self.run_pool_and_compute_adjustment_value(
-                deps,
-                first_order_pool,
-                |deps: Deps, pool: TransmuterPool| {
-                    self.in_amt_given_out(
-                        deps,
-                        pool,
-                        additional_incentive_token_needed.clone(),
-                        substitute_token_denom,
-                    )
-                },
-            ),
-        }
+                Ok((pool, token_in))
+            },
+        )
     }
 
     fn run_pool_and_compute_adjustment_value<RunPool>(
@@ -535,25 +517,36 @@ impl Transmuter {
 
 #[cfg(test)]
 mod tests {
+    use cosmwasm_std::Storage;
     use rstest::rstest;
     use std::collections::BTreeMap;
 
-    use crate::{asset::Asset, swap::rebalancing_adjustment_for_exact_in};
+    use crate::{
+        asset::Asset,
+        swap::{common::swap_to_alloyed, rebalancing_adjustment_for_exact_in},
+    };
 
     use super::*;
 
+    fn no_config_update(
+        _transmuter: &Transmuter,
+        _storage: &mut dyn Storage,
+    ) -> Result<(), ContractError> {
+        Ok(())
+    }
+
     #[rstest]
     #[case::no_internal_swap(
-        vec![coin(200_000_000u128, "denom2")],
+        vec![coin(200_000_001u128, "denom2")],
         200_000_000u128,
-        vec![],
+        vec![coin(1, "denom2")],
         vec![
             coin(25_000_000_000u128, "denom1"),
             coin(390_000_000_000u128, "denom2"),
             coin(3_600_000_000_000u128, "denom3"),
         ]
     )]
-    #[case::no_internal_swap(
+    #[case::not_enough_incentive_to_swap_to(
         vec![coin(199_999_99u128, "denom2")],
         0u128,
         vec![coin(199_999_99u128, "denom2")],
@@ -566,7 +559,7 @@ mod tests {
     #[case::incentive_partially_negated(
         vec![coin(2_000_000_000u128, "denom3")],
         198_000_000u128,
-        vec![],
+        vec![coin(2_000_000, "denom2")],
         vec![
             coin(25_000_000_000u128, "denom1"),
             coin(389_800_000_000u128, "denom2"),
@@ -756,13 +749,6 @@ mod tests {
         );
     }
 
-    fn no_config_update(
-        _transmuter: &Transmuter,
-        _storage: &mut dyn Storage,
-    ) -> Result<(), ContractError> {
-        Ok(())
-    }
-
     #[rstest]
     #[case::incentive_fully_negated(
         vec![coin(2_000_000_000_000u128, "denom3")],
@@ -776,9 +762,9 @@ mod tests {
         no_config_update
     )]
     #[case::incentive_amplified(
-        vec![coin(20_000_001u128, "denom1")],
+        vec![coin(20u128, "denom2"), coin(2_000_000_001u128, "denom3")],
         20_000_000u128,
-        vec![coin(1u128, "denom1")],
+        vec![coin(20u128, "denom2"), coin(1u128, "denom3")],
         vec![
             coin(25_000_000_000u128, "denom1"),
             coin(390_000_000_000u128, "denom2"),
@@ -961,6 +947,236 @@ mod tests {
                 adjustment,
                 Adjustment::Incentivize {
                     incentive: coin(incentive, "denom1")
+                }
+            )
+        } else {
+            assert_eq!(adjustment, Adjustment::None);
+        };
+
+        assert_eq!(
+            transmuter
+                .incentive_pool
+                .get_all_pool_balances(&deps.storage)
+                .unwrap(),
+            resulted_incentive_pool
+        );
+
+        assert_eq!(
+            pool.pool_assets,
+            resulted_pool_assets
+                .into_iter()
+                .map(|coin| {
+                    Asset::new(
+                        coin.amount,
+                        &coin.denom,
+                        *norm_factors.get(&coin.denom).unwrap(),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    #[rstest]
+    #[case::no_internal_swap(
+        vec![coin(7_590_499_999u128, "alloyed")],
+        7_590_499_999u128,
+        vec![],
+        vec![
+            coin(24_000_000_000u128, "denom1"),
+            coin(400_000_000_000u128, "denom2"),
+            coin(3_600_000_000_000u128, "denom3"),
+        ]
+    )]
+    #[case::not_enough_incentive_to_swap_to(
+        vec![coin(75_904_999u128, "denom1")],
+        0u128,
+        vec![coin(75_904_999u128, "denom1")],
+        vec![
+            coin(24_000_000_000u128, "denom1"),
+            coin(400_000_000_000u128, "denom2"),
+            coin(3_600_000_000_000u128, "denom3"),
+        ]
+    )]
+    #[case::incentive_partially_negated(
+        vec![coin(759_050_000, "denom2")],
+        7_408_327_999,
+        vec![coin(182_172_000u128, "alloyed")],
+        vec![
+            coin(24_000_000_000u128, "denom1"),
+            coin(400_759_050_000u128, "denom2"),
+            coin(3_600_000_000_000u128, "denom3"),
+        ]
+    )]
+    fn test_incentivize_exact_in_with_allloyed(
+        #[case] incentive_pool: Vec<Coin>,
+        #[case] incentive: u128,
+        #[case] resulted_incentive_pool: Vec<Coin>,
+        #[case] resulted_pool_assets: Vec<Coin>,
+    ) {
+        let transmuter = Transmuter::new();
+        let mut deps = cosmwasm_std::testing::mock_dependencies_with_balances(&[]);
+        transmuter
+            .alloyed_asset
+            .set_alloyed_denom(&mut deps.storage, &"alloyed".to_string())
+            .unwrap();
+
+        transmuter
+            .alloyed_asset
+            .set_normalization_factor(&mut deps.storage, 100u128.into())
+            .unwrap();
+
+        let norm_factors = BTreeMap::from([
+            ("denom1".to_string(), 1u128),
+            ("denom2".to_string(), 10u128),
+            ("denom3".to_string(), 100u128),
+        ]);
+
+        transmuter
+            .pool
+            .save(
+                &mut deps.storage,
+                &TransmuterPool {
+                    pool_assets: vec![
+                        Asset::new(
+                            Uint128::from(19_000_000_000u128),
+                            "denom1",
+                            *norm_factors.get("denom1").unwrap(),
+                        )
+                        .unwrap(),
+                        Asset::new(
+                            Uint128::from(400_000_000_000u128),
+                            "denom2",
+                            *norm_factors.get("denom2").unwrap(),
+                        )
+                        .unwrap(),
+                        Asset::new(
+                            Uint128::from(3_600_000_000_000u128),
+                            "denom3",
+                            *norm_factors.get("denom3").unwrap(),
+                        )
+                        .unwrap(),
+                    ],
+                    asset_groups: BTreeMap::new(),
+                },
+            )
+            .unwrap();
+
+        transmuter
+            .rebalancer
+            .add_config(
+                &mut deps.storage,
+                Scope::denom("denom1"),
+                RebalancingConfig::new(
+                    Decimal::percent(40),
+                    Decimal::percent(25),
+                    Decimal::percent(55),
+                    Decimal::percent(10),
+                    Decimal::percent(65),
+                    Decimal::percent(1),
+                    Decimal::percent(2),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        transmuter
+            .rebalancer
+            .add_config(
+                &mut deps.storage,
+                Scope::denom("denom2"),
+                RebalancingConfig::new(
+                    Decimal::percent(39),
+                    Decimal::percent(25),
+                    Decimal::percent(55),
+                    Decimal::percent(10),
+                    Decimal::percent(65),
+                    Decimal::percent(1),
+                    Decimal::percent(2),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        transmuter
+            .rebalancer
+            .add_config(
+                &mut deps.storage,
+                Scope::denom("denom3"),
+                RebalancingConfig::new(
+                    Decimal::bps(3601),
+                    Decimal::percent(36),
+                    Decimal::percent(55),
+                    Decimal::percent(10),
+                    Decimal::percent(65),
+                    Decimal::percent(1),
+                    Decimal::percent(2),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+
+        for coin in incentive_pool {
+            transmuter
+                .incentive_pool
+                .add_tokens(&mut deps.storage, &coin)
+                .unwrap();
+        }
+
+        let token_in = coin(5_000_000_000u128, "denom1");
+        let token_out_denom = "alloyed";
+        let pool = transmuter.pool.load(&deps.storage).unwrap();
+
+        let std_norm_factor = pool.std_norm_factor().unwrap();
+
+        let tokens_in_with_norm_factor = pool
+            .pair_coins_with_normalization_factor(&[token_in.clone()])
+            .unwrap();
+
+        let token_out_norm_factor = transmuter
+            .alloyed_asset
+            .get_normalization_factor(&deps.storage)
+            .unwrap();
+
+        let out_amount_before_fee = swap_to_alloyed::out_amount_via_exact_in(
+            tokens_in_with_norm_factor,
+            Uint128::zero(),
+            token_out_norm_factor,
+        )
+        .unwrap();
+
+        let run_pool = |_deps: Deps, mut pool: TransmuterPool| {
+            pool.join_pool(&[token_in.clone()])?;
+
+            let token_out = coin(out_amount_before_fee.u128(), token_out_denom.to_string());
+
+            Ok((pool, token_out))
+        };
+
+        let expected_token_out_amount = 500_000_000_000u128 + incentive;
+
+        let rebalancing_adjustment = rebalancing_adjustment_for_exact_in(
+            expected_token_out_amount.into(),
+            std_norm_factor,
+            token_out_norm_factor,
+        );
+
+        let (pool, output, adjustment) = transmuter
+            .rebalancer_pass(
+                deps.as_mut(),
+                pool.clone(),
+                run_pool,
+                rebalancing_adjustment,
+            )
+            .unwrap();
+
+        assert_eq!(output, coin(expected_token_out_amount, "alloyed"));
+
+        if incentive > 0 {
+            assert_eq!(
+                adjustment,
+                Adjustment::Incentivize {
+                    incentive: coin(incentive, "alloyed")
                 }
             )
         } else {
