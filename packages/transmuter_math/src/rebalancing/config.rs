@@ -168,7 +168,11 @@ impl RebalancingConfig {
         let ideal_lower_distance = balance.abs_diff(self.ideal_lower);
         let ideal_upper_distance = balance.abs_diff(self.ideal_upper);
 
-        ideal_lower_distance.min(ideal_upper_distance)
+        if ideal_lower_distance < ideal_upper_distance {
+            self.ideal_lower
+        } else {
+            self.ideal_upper
+        }
     }
 }
 

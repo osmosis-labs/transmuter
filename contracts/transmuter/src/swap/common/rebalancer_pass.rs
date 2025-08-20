@@ -558,8 +558,8 @@ mod tests {
     )]
     #[case::incentive_partially_negated(
         vec![coin(2_000_000_000u128, "denom3")],
-        198_000_000u128,
-        vec![coin(2_000_000, "denom2")],
+        199_000_000u128,
+        vec![coin(1_000_000, "denom2")],
         vec![
             coin(25_000_000_000u128, "denom1"),
             coin(389_800_000_000u128, "denom2"),
@@ -1000,8 +1000,8 @@ mod tests {
     )]
     #[case::incentive_partially_negated(
         vec![coin(759_050_000, "denom2")],
-        7_408_327_999,
-        vec![coin(182_172_000u128, "alloyed")],
+        7_499_413_999,
+        vec![coin(91_086_000u128, "alloyed")],
         vec![
             coin(24_000_000_000u128, "denom1"),
             coin(400_759_050_000u128, "denom2"),

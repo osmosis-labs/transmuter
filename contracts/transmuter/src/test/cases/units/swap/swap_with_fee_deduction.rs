@@ -34,7 +34,7 @@ fn test_swap_exact_amount_out_with_fee_deduction() {
     // This swap makes denom1 weight go from 50% to 60%, triggering fee
     let token_out = coin(200_000_000_000u128, "denom2");
     let amount_in_before_fee = Uint128::from(20_000_000_000u128);
-    let expected_fee = Uint128::from(6_000_000_000u128); // group1 + denom1 fees
+    let expected_fee = Uint128::from(4_000_000_000u128); // group1 + denom1 fees
 
     let fee_token = coin(expected_fee.u128(), "denom1");
     let token_in_without_fee = coin(amount_in_before_fee.u128(), "denom1");
@@ -101,6 +101,105 @@ fn test_swap_exact_amount_out_with_fee_deduction() {
 }
 
 #[test]
+fn test_swap_exact_amount_in_incentive() {
+    // ----- setup an unbalanced pool state with incentive pool filled -----
+    let app = OsmosisTestApp::new();
+    let t = setup_test_env(&app);
+    let cp = CosmwasmPool::new(&app);
+
+    let token_out = coin(200_000_000_000u128, "denom2");
+    let amount_in_before_fee = Uint128::from(20_000_000_000u128);
+    let expected_fee = Uint128::from(4_000_000_000u128);
+
+    let fee_token = coin(expected_fee.u128(), "denom1");
+    let token_in_without_fee = coin(amount_in_before_fee.u128(), "denom1");
+    let token_in_with_fee = coin((amount_in_before_fee + expected_fee).u128(), "denom1");
+
+    let swapper_address = t.accounts["swapper"].address().to_string();
+
+    cp.swap_exact_amount_out(
+        MsgSwapExactAmountOut {
+            sender: t.accounts["swapper"].address(),
+            routes: vec![SwapAmountOutRoute {
+                pool_id: t.contract.pool_id,
+                token_in_denom: "denom1".to_string(),
+            }],
+            token_out: Some(token_out.clone().into()),
+            token_in_max_amount: token_in_with_fee.amount.to_string(),
+        },
+        &t.accounts["swapper"],
+    )
+    .unwrap();
+
+    assert_eq!(get_incentive_pool_balances(&t), Coins::from(fee_token));
+    assert_accounting_invariant(&t);
+    // ----- end setup -----
+
+    // swap the same amount with exact out
+    let token_in_before_incentive_rebate = token_out;
+    // this is reduced from what is collected in the first swap, excess fee coming from unhealhy incentive pool healing.
+    let incentive_token = coin(
+        40_000_000_000u128 - 4_000_000_000u128,
+        token_in_before_incentive_rebate.denom.clone(),
+    );
+    let token_in_after_incentive_rebate = coin(
+        (token_in_before_incentive_rebate.amount - incentive_token.amount).u128(),
+        token_in_before_incentive_rebate.denom.clone(),
+    );
+
+    let token_out = token_in_without_fee;
+
+    let mut swapper_balances = get_balances(&t, swapper_address.clone());
+    let mut pool_liquidity = get_pool_liquidity(&t);
+    let mut incentive_pool_balances = get_incentive_pool_balances(&t);
+
+    let result = cp
+        .swap_exact_amount_out(
+            MsgSwapExactAmountOut {
+                sender: t.accounts["swapper"].address(),
+                routes: vec![SwapAmountOutRoute {
+                    pool_id: t.contract.pool_id,
+                    token_in_denom: token_in_after_incentive_rebate.denom.to_string(),
+                }],
+                token_out: Some(token_out.clone().into()),
+                token_in_max_amount: token_in_after_incentive_rebate.amount.to_string(),
+            },
+            &t.accounts["swapper"],
+        )
+        .unwrap();
+
+    // assert swapper balances changes
+    swapper_balances.sub(get_tx_fee(&result)).unwrap();
+    swapper_balances
+        .sub(token_in_after_incentive_rebate.clone())
+        .unwrap();
+    swapper_balances.add(token_out.clone()).unwrap();
+    assert_eq!(swapper_balances, get_balances(&t, swapper_address.clone()));
+
+    // assert pool liquidity changes
+
+    // internal incentive swap
+    let internal_token_in = coin(4_000_000_000, "denom1");
+    let internal_token_out = coin(40_000_000_000, "denom2");
+    pool_liquidity.add(internal_token_in.clone()).unwrap();
+    pool_liquidity.sub(internal_token_out.clone()).unwrap();
+
+    pool_liquidity
+        .add(token_in_before_incentive_rebate)
+        .unwrap();
+    pool_liquidity.sub(token_out.clone()).unwrap();
+    assert_eq!(pool_liquidity, get_pool_liquidity(&t));
+
+    // assert incentive pool changes
+    incentive_pool_balances.sub(internal_token_in).unwrap();
+    incentive_pool_balances.add(internal_token_out).unwrap();
+    incentive_pool_balances.sub(incentive_token).unwrap();
+    assert_eq!(incentive_pool_balances, get_incentive_pool_balances(&t));
+
+    assert_accounting_invariant(&t);
+}
+
+#[test]
 fn test_swap_exact_amount_in_with_fee_deduction() {
     let app = OsmosisTestApp::new();
     let t = setup_test_env(&app);
@@ -110,7 +209,7 @@ fn test_swap_exact_amount_in_with_fee_deduction() {
     // This swap makes denom1 weight go from 50% to 60%, triggering fee
     let token_in = coin(20_000_000_000u128, "denom1");
     let amount_out_before_fee = Uint128::from(200_000_000_000u128);
-    let expected_fee = Uint128::from(60_000_000_000u128); // group1 + denom1 fees
+    let expected_fee = Uint128::from(40_000_000_000u128); // group1 + denom1 fees
     let token_out_amount = amount_out_before_fee - expected_fee;
 
     let fee_token = coin(expected_fee.u128(), "denom2");
@@ -203,10 +302,10 @@ fn test_swap_tokens_to_alloyed_asset_exact_in_with_fee_deduction() {
         coin(125_000_000_000u128, "denom2"), // 1_250_000_000_000 normalized
     ];
 
-    // fee(denom1) = 25_000_000_000_000u128 * (5% * 2%) = 250_000_000_000u128
+    // fee(denom1) = 25_000_000_000_000u128 * (5% * 1%) = 125_000_000_000u128
     // fee(group1) = 25_000_000_000_000u128 * 0% = 0
     let amount_out_before_fee = Uint128::from(3_750_000_000_000u128 + 1_250_000_000_000u128);
-    let fee = Uint128::from(250_000_000_000u128);
+    let fee = Uint128::from(125_000_000_000u128);
     let token_out_amount = amount_out_before_fee - fee;
 
     // Try with correct min out (should succeed)
@@ -264,12 +363,12 @@ fn test_swap_tokens_to_alloyed_asset_exact_out_with_fee_deduction() {
         .unwrap()
         .share_denom;
 
-    // fee(denom1) = 25_000_000_000_000u128 * ((5% * 2%) + (5% * 2%)) = 50_000_000_000
-    // fee(group1) = 25_000_000_000_000u128 * (5% * 2%) = 25_000_000_000
-    // = 50_000_000_000u128
+    // fee(denom1) = 25_000_000_000_000u128 * ((5% * 10%) + (5% * 20%)) = 375_000_000_000
+    // fee(group1) = 25_000_000_000_000u128 * (5% * 10%) = 125_000_000_000
+    // = 500_000_000_000u128
     let token_out_amount = Uint128::from(5_000_000_000_000u128);
     let amount_in_before_fee = Uint128::from(50_000_000_000u128); // 5_000_000_000_000 / 100
-    let fee = Uint128::from(7_500_000_000u128);
+    let fee = Uint128::from(5_000_000_000u128); // 500_000_000_000u / 100
     let token_in_amount = amount_in_before_fee + fee;
 
     // Try with max in too low (should fail)
@@ -358,7 +457,7 @@ fn test_swap_alloyed_asset_to_tokens_exact_in_with_fee_deduction() {
     // 2_000_000_000_000 alloyed in -> denom1
     let token_in_amount = Uint128::from(2_000_000_000_000u128);
     let token_out_amount_before_fee = Uint128::from(20_000_000_000u128);
-    let fee = Uint128::from(444_444_445u128);
+    let fee = Uint128::from(222_222_223u128);
     let token_out_amount = token_out_amount_before_fee - fee;
 
     // send share_denom from provider to swapper with token_in_amount
@@ -460,10 +559,10 @@ fn test_swap_alloyed_asset_to_tokens_exact_out_with_fee_deduction() {
         coin(4_000_000_000_000u128, "denom3"),
     ];
 
-    // fee(denom1) = 20_000_000_000_000 * (5% * 2%) = 200_000_000_000
-    // fee(group1) = 20_000_000_000_000 * (5% * 2%) = 200_000_000_000
+    // fee(denom1) = 20_000_000_000_000 * (5% * 1%) = 100_000_000_000
+    // fee(group1) = 20_000_000_000_000 * (5% * 1%) = 100_000_000_000
     let amount_in_before_fee = Uint128::from(15_000_000_000_000u128);
-    let fee = Uint128::from(400_000_000_000u128);
+    let fee = Uint128::from(200_000_000_000u128);
     let token_in_amount = amount_in_before_fee + fee;
 
     // send share_denom from provider to swapper with token_in_amount
