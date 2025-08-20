@@ -180,6 +180,7 @@ impl RebalancingConfig {
 mod tests {
     use super::*;
     use rstest::rstest;
+    use std::str::FromStr;
 
     #[rstest]
     #[case::valid_parameters(
@@ -479,5 +480,133 @@ mod tests {
 
         let actual_zones = params.zones();
         assert_eq!(actual_zones, expected_zones);
+    }
+
+    #[rstest]
+    #[case::balance_below_ideal_range(
+        Decimal::percent(60), // ideal_upper
+        Decimal::percent(40), // ideal_lower
+        Decimal::percent(30), // balance
+        Decimal::percent(40)  // expected nearest ideal
+    )]
+    #[case::balance_above_ideal_range(
+        Decimal::percent(60), // ideal_upper
+        Decimal::percent(40), // ideal_lower
+        Decimal::percent(70), // balance
+        Decimal::percent(60)  // expected nearest ideal
+    )]
+    #[case::balance_at_ideal_lower(
+        Decimal::percent(60), // ideal_upper
+        Decimal::percent(40), // ideal_lower
+        Decimal::percent(40), // balance
+        Decimal::percent(40)  // expected nearest ideal
+    )]
+    #[case::balance_at_ideal_upper(
+        Decimal::percent(60), // ideal_upper
+        Decimal::percent(40), // ideal_lower
+        Decimal::percent(60), // balance
+        Decimal::percent(60)  // expected nearest ideal
+    )]
+    #[case::balance_at_midpoint_tie_breaker(
+        Decimal::percent(60), // ideal_upper
+        Decimal::percent(40), // ideal_lower
+        Decimal::percent(50), // balance (exactly in middle)
+        Decimal::percent(60)  // expected nearest ideal (tie-breaker goes to upper)
+    )]
+    #[case::balance_very_close_to_lower(
+        Decimal::percent(60), // ideal_upper
+        Decimal::percent(40), // ideal_lower
+        Decimal::percent(39), // balance
+        Decimal::percent(40)  // expected nearest ideal
+    )]
+    #[case::balance_very_close_to_upper(
+        Decimal::percent(60), // ideal_upper
+        Decimal::percent(40), // ideal_lower
+        Decimal::percent(61), // balance
+        Decimal::percent(60)  // expected nearest ideal
+    )]
+    #[case::zero_ideal_range_below(
+        Decimal::percent(50), // ideal_upper
+        Decimal::percent(50), // ideal_lower (same as upper)
+        Decimal::percent(30), // balance
+        Decimal::percent(50)  // expected nearest ideal
+    )]
+    #[case::zero_ideal_range_above(
+        Decimal::percent(50), // ideal_upper
+        Decimal::percent(50), // ideal_lower (same as upper)
+        Decimal::percent(70), // balance
+        Decimal::percent(50)  // expected nearest ideal
+    )]
+    #[case::zero_ideal_range_exact(
+        Decimal::percent(50), // ideal_upper
+        Decimal::percent(50), // ideal_lower (same as upper)
+        Decimal::percent(50), // balance
+        Decimal::percent(50)  // expected nearest ideal
+    )]
+    #[case::wide_range_closer_to_lower(
+        Decimal::percent(90), // ideal_upper
+        Decimal::percent(10), // ideal_lower
+        Decimal::percent(15), // balance
+        Decimal::percent(10)  // expected nearest ideal
+    )]
+    #[case::wide_range_closer_to_upper(
+        Decimal::percent(90), // ideal_upper
+        Decimal::percent(10), // ideal_lower
+        Decimal::percent(85), // balance
+        Decimal::percent(90)  // expected nearest ideal
+    )]
+    #[case::wide_range_midpoint(
+        Decimal::percent(90), // ideal_upper
+        Decimal::percent(10), // ideal_lower
+        Decimal::percent(50), // balance (exactly in middle)
+        Decimal::percent(90)  // expected nearest ideal (tie-breaker goes to upper)
+    )]
+    #[case::extreme_low_balance(
+        Decimal::percent(60), // ideal_upper
+        Decimal::percent(40), // ideal_lower
+        Decimal::zero(),      // balance
+        Decimal::percent(40)  // expected nearest ideal
+    )]
+    #[case::extreme_high_balance(
+        Decimal::percent(60), // ideal_upper
+        Decimal::percent(40), // ideal_lower
+        Decimal::one(),       // balance (100%)
+        Decimal::percent(60)  // expected nearest ideal
+    )]
+    #[case::tight_range_closer_to_lower(
+        Decimal::percent(51), // ideal_upper
+        Decimal::percent(49), // ideal_lower
+        Decimal::from_str("0.495").unwrap(), // balance (49.5%)
+        Decimal::percent(49)  // expected nearest ideal
+    )]
+    #[case::tight_range_closer_to_upper(
+        Decimal::percent(51), // ideal_upper
+        Decimal::percent(49), // ideal_lower
+        Decimal::from_str("0.505").unwrap(), // balance (50.5%)
+        Decimal::percent(51)  // expected nearest ideal
+    )]
+    fn test_nearest_ideal_weight(
+        #[case] ideal_upper: Decimal,
+        #[case] ideal_lower: Decimal,
+        #[case] balance: Decimal,
+        #[case] expected_nearest: Decimal,
+    ) {
+        // Calculate safe critical bounds that won't exceed limits
+        let critical_upper = (ideal_upper + Decimal::percent(10)).min(Decimal::one());
+        let critical_lower = ideal_lower.saturating_sub(Decimal::percent(10));
+
+        let config = RebalancingConfig::new(
+            ideal_upper,
+            ideal_lower,
+            critical_upper,      // critical_upper (ensure valid)
+            critical_lower,      // critical_lower (ensure valid)
+            Decimal::one(),      // limit
+            Decimal::percent(1), // adjustment_rate_strained
+            Decimal::percent(2), // adjustment_rate_critical
+        )
+        .unwrap();
+
+        let result = config.nearest_ideal_weight(balance);
+        assert_eq!(result, expected_nearest);
     }
 }
