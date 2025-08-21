@@ -529,18 +529,8 @@ fn test_swap_alloyed_asset_to_tokens_exact_in_with_fee_deduction() {
     let cp = CosmwasmPool::new(&app);
     let bank = Bank::new(&app);
 
-    // Query the share denom (alloyed asset denom)
-    let share_denom: String = t
-        .contract
-        .query::<crate::contract::GetShareDenomResponse>(&QueryMsg::GetShareDenom {})
-        .unwrap()
-        .share_denom;
-
-    let initial_total_alloyed_asset_supply = t
-        .contract
-        .query::<GetTotalSharesResponse>(&QueryMsg::GetTotalShares {})
-        .unwrap()
-        .total_shares;
+    let initial_total_alloyed_asset_supply = get_alloyed_supply(&t);
+    let share_denom: String = initial_total_alloyed_asset_supply.denom;
 
     // 2_000_000_000_000 alloyed in -> denom1
     let token_in_amount = Uint128::from(2_000_000_000_000u128);
@@ -558,6 +548,10 @@ fn test_swap_alloyed_asset_to_tokens_exact_in_with_fee_deduction() {
         &t.accounts["provider"],
     )
     .unwrap();
+
+    let mut swapper_balances = get_balances(&t, t.accounts["swapper"].address().to_string());
+    let mut pool_liquidity = get_pool_liquidity(&t);
+    let mut incentive_pool_balances = get_incentive_pool_balances(&t);
 
     // Try with min out too high (should fail)
     let err = cp
@@ -578,46 +572,53 @@ fn test_swap_alloyed_asset_to_tokens_exact_in_with_fee_deduction() {
     assert!(err.to_string().contains("Insufficient token out"));
 
     // Try with correct min out (should succeed)
-    cp.swap_exact_amount_in(
-        MsgSwapExactAmountIn {
-            sender: t.accounts["swapper"].address(),
-            routes: vec![SwapAmountInRoute {
-                pool_id: t.contract.pool_id,
-                token_out_denom: "denom1".to_string(),
-            }],
-            token_in: Some(coin(token_in_amount.u128(), &share_denom).into()),
-            token_out_min_amount: token_out_amount.to_string(),
-        },
-        &t.accounts["swapper"],
-    )
-    .unwrap();
-
-    // Check that the swapper has received the correct amount of denom1
-    let balance = bank
-        .query_balance(&QueryBalanceRequest {
-            address: t.accounts["swapper"].address().to_string(),
-            denom: "denom1".to_string(),
-        })
-        .unwrap()
-        .balance
-        .unwrap()
-        .amount
-        .parse::<u128>()
+    let result = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["swapper"].address(),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: "denom1".to_string(),
+                }],
+                token_in: Some(coin(token_in_amount.u128(), &share_denom).into()),
+                token_out_min_amount: token_out_amount.to_string(),
+            },
+            &t.accounts["swapper"],
+        )
         .unwrap();
-    assert_eq!(balance, 1_000_000_000_000 + token_out_amount.u128());
 
-    // Check contract balances and incentive pool
-    verify_contract_balances(&t, fee, "denom1");
+    // assert swapper balances changes
+    swapper_balances.sub(get_tx_fee(&result)).unwrap();
+    swapper_balances
+        .sub(coin(token_in_amount.u128(), share_denom))
+        .unwrap();
+    swapper_balances
+        .add(coin(token_out_amount.u128(), "denom1"))
+        .unwrap();
+    assert_eq!(
+        swapper_balances,
+        get_balances(&t, t.accounts["swapper"].address().to_string())
+    );
 
-    let total_shares = t
-        .contract
-        .query::<GetTotalSharesResponse>(&QueryMsg::GetTotalShares {})
-        .unwrap()
-        .total_shares;
+    // assert pool liquidity changes
+    pool_liquidity
+        .sub(coin(token_out_amount_before_fee.u128(), "denom1"))
+        .unwrap();
+    assert_eq!(pool_liquidity, get_pool_liquidity(&t));
+
+    // assert incentive pool changes
+    incentive_pool_balances
+        .add(coin(fee.u128(), "denom1"))
+        .unwrap();
+    assert_eq!(incentive_pool_balances, get_incentive_pool_balances(&t));
+
+    assert_accounting_invariant(&t);
+
+    let alloyed_asset_supply = get_alloyed_supply(&t);
 
     assert_eq!(
-        total_shares,
-        initial_total_alloyed_asset_supply - token_in_amount
+        alloyed_asset_supply.amount,
+        initial_total_alloyed_asset_supply.amount - token_in_amount
     );
 }
 
