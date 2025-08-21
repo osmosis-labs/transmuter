@@ -1,6 +1,6 @@
 use cosmwasm_std::{coin, Coin, Coins, Decimal, Uint128};
 use osmosis_std::types::{
-    cosmos::bank::v1beta1::{MsgSend, QueryAllBalancesRequest, QueryBalanceRequest},
+    cosmos::bank::v1beta1::{MsgSend, QueryAllBalancesRequest},
     osmosis::poolmanager::v1beta1::{
         MsgSwapExactAmountIn, MsgSwapExactAmountOut, SwapAmountInRoute, SwapAmountOutRoute,
     },
@@ -628,18 +628,8 @@ fn test_swap_alloyed_asset_to_tokens_exact_out_with_fee_deduction() {
     let t = setup_test_env(&app);
     let bank = Bank::new(&app);
 
-    // Query the share denom (alloyed asset denom)
-    let share_denom: String = t
-        .contract
-        .query::<crate::contract::GetShareDenomResponse>(&QueryMsg::GetShareDenom {})
-        .unwrap()
-        .share_denom;
-
-    let initial_total_alloyed_asset_supply = t
-        .contract
-        .query::<GetTotalSharesResponse>(&QueryMsg::GetTotalShares {})
-        .unwrap()
-        .total_shares;
+    let initial_total_alloyed_asset_supply = get_alloyed_supply(&t);
+    let share_denom: String = initial_total_alloyed_asset_supply.denom;
 
     // Multiple tokens out that will make denom1 40%, group1 60%
     let tokens_out = vec![
@@ -665,7 +655,12 @@ fn test_swap_alloyed_asset_to_tokens_exact_out_with_fee_deduction() {
     )
     .unwrap();
 
-    t.contract
+    let mut swapper_balances = get_balances(&t, t.accounts["swapper"].address().to_string());
+    let mut pool_liquidity = get_pool_liquidity(&t);
+    let mut incentive_pool_balances = get_incentive_pool_balances(&t);
+
+    let result = t
+        .contract
         .execute(
             &ExecMsg::ExitPool {
                 tokens_out: tokens_out.clone(),
@@ -675,34 +670,39 @@ fn test_swap_alloyed_asset_to_tokens_exact_out_with_fee_deduction() {
         )
         .unwrap();
 
-    // Check that the swapper has received the correct amounts of tokens out
+    // assert swapper balances changes
+    swapper_balances.sub(get_tx_fee(&result)).unwrap();
+
+    swapper_balances
+        .sub(coin(token_in_amount.u128(), &share_denom))
+        .unwrap();
     for coin_out in &tokens_out {
-        let balance = bank
-            .query_balance(&QueryBalanceRequest {
-                address: t.accounts["swapper"].address().to_string(),
-                denom: coin_out.denom.clone(),
-            })
-            .unwrap()
-            .balance
-            .unwrap()
-            .amount
-            .parse::<u128>()
-            .unwrap();
-        assert_eq!(balance, 1_000_000_000_000 + coin_out.amount.u128());
+        swapper_balances.add(coin_out.clone()).unwrap();
     }
+    assert_eq!(
+        swapper_balances,
+        get_balances(&t, t.accounts["swapper"].address().to_string())
+    );
 
-    // Check contract balances and incentive pool
-    verify_contract_balances(&t, fee, &share_denom);
+    // assert pool liquidity changes
+    for coin_out in &tokens_out {
+        pool_liquidity.sub(coin_out.clone()).unwrap();
+    }
+    assert_eq!(pool_liquidity, get_pool_liquidity(&t));
 
-    let total_shares = t
-        .contract
-        .query::<GetTotalSharesResponse>(&QueryMsg::GetTotalShares {})
-        .unwrap()
-        .total_shares;
+    // assert incentive pool changes
+    incentive_pool_balances
+        .add(coin(fee.u128(), &share_denom))
+        .unwrap();
+    assert_eq!(incentive_pool_balances, get_incentive_pool_balances(&t));
+
+    assert_accounting_invariant(&t);
+
+    let alloyed_asset_supply = get_alloyed_supply(&t);
 
     assert_eq!(
-        total_shares,
-        initial_total_alloyed_asset_supply - amount_in_before_fee
+        alloyed_asset_supply.amount,
+        initial_total_alloyed_asset_supply.amount - amount_in_before_fee
     );
 }
 
@@ -816,65 +816,6 @@ fn setup_test_env<'a>(app: &'a OsmosisTestApp) -> TestEnv<'a> {
         .unwrap();
 
     t
-}
-
-/// Helper function to verify that contract balances equal pool liquidity plus collected fees
-fn verify_contract_balances(
-    t: &crate::test::test_env::TestEnv,
-    expected_fee_amount: Uint128,
-    fee_denom: &str,
-) {
-    let bank = Bank::new(t.app);
-
-    // Query the pool liquidity from the contract
-    let pool_liquidity: GetTotalPoolLiquidityResponse = t
-        .contract
-        .query(&QueryMsg::GetTotalPoolLiquidity {})
-        .unwrap();
-
-    // Query the incentive pool balances from the contract
-    let incentive_pool_balances: GetIncentivePoolBalancesResponse = t
-        .contract
-        .query(&QueryMsg::GetIncentivePoolBalances {})
-        .unwrap();
-
-    // Verify the incentive pool balances
-    for balance in incentive_pool_balances.balances {
-        if balance.denom == fee_denom {
-            assert_eq!(balance.amount, expected_fee_amount);
-        } else {
-            assert_eq!(balance.amount, Uint128::zero());
-        }
-    }
-
-    // For each denom in the pool, verify contract balance
-    for pool_coin in &pool_liquidity.total_pool_liquidity {
-        let contract_balance = bank
-            .query_balance(&QueryBalanceRequest {
-                address: t.contract.contract_addr.to_string(),
-                denom: pool_coin.denom.clone(),
-            })
-            .unwrap()
-            .balance
-            .unwrap();
-
-        let expected_balance = if pool_coin.denom == fee_denom {
-            // For the fee denom, expect pool amount + collected fees
-            pool_coin.amount + expected_fee_amount
-        } else {
-            // For other denoms, expect just the pool amount
-            pool_coin.amount
-        };
-
-        assert_eq!(
-            contract_balance.amount.parse::<u128>().unwrap(),
-            expected_balance.u128(),
-            "Contract balance mismatch for {}: expected {}, got {}",
-            pool_coin.denom,
-            expected_balance,
-            contract_balance.amount
-        );
-    }
 }
 
 /// Asserts that the accounting invariant holds: the total contract balances

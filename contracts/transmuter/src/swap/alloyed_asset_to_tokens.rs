@@ -1,5 +1,7 @@
-use cosmwasm_std::{coin, ensure, Addr, BankMsg, Coin, Deps, DepsMut, Env, Response, Uint128};
-use osmosis_std::types::osmosis::tokenfactory::v1beta1::MsgBurn;
+use cosmwasm_std::{
+    coin, ensure, Addr, BankMsg, Coin, CosmosMsg, Deps, DepsMut, Env, Response, Uint128,
+};
+use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
 
 use crate::{
     alloyed_asset::swap_from_alloyed,
@@ -87,15 +89,16 @@ impl Transmuter {
         self.pool.save(deps.storage, &pool)?;
 
         // We need to burn alloyed asset, which is token in, as it is essentially exiting pool and burn LP token.
-        let burn_alloyed_asset_msg = self.create_burn_alloyed_asset_msg(
-            burn_target,
-            &sender,
-            constraint,
-            in_amount,
-            adjustment,
-            deps.branch(),
-            env,
-        )?;
+        let burn_alloyed_asset_and_send_fee_msgs = self
+            .create_burn_alloyed_asset_msg_and_send_fee_to_the_contract(
+                burn_target,
+                &sender,
+                constraint,
+                in_amount,
+                adjustment,
+                deps.branch(),
+                env,
+            )?;
 
         // Send tokens out to the sender.
         let bank_send_msg = BankMsg::Send {
@@ -104,7 +107,7 @@ impl Transmuter {
         };
 
         Ok(response
-            .add_message(burn_alloyed_asset_msg)
+            .add_messages(burn_alloyed_asset_and_send_fee_msgs)
             .add_message(bank_send_msg))
     }
 
@@ -233,7 +236,9 @@ impl Transmuter {
     /// In that case we keep the fee portion in contract and burn the rest. Incentive pool accounting is handled within [Transmuter::rebalancer_pass].
     ///
     /// Keep burn amount as is otherwise.
-    fn create_burn_alloyed_asset_msg(
+    ///
+    /// If deduct fee, we send the fee portion to the contract in case it directly burns from the sender.
+    fn create_burn_alloyed_asset_msg_and_send_fee_to_the_contract(
         &self,
         burn_target: BurnTarget,
         sender: &Addr,
@@ -242,8 +247,10 @@ impl Transmuter {
         adjustment: Adjustment,
         deps: DepsMut,
         env: Env,
-    ) -> Result<MsgBurn, ContractError> {
-        let burn_from_address = match burn_target {
+    ) -> Result<Vec<CosmosMsg>, ContractError> {
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+        let mut messages = vec![];
+        let burn_from_address = match &burn_target {
             BurnTarget::SenderAccount => {
                 // Check if the sender's shares is sufficient to burn
                 let shares = self.alloyed_asset.get_balance(deps.as_ref(), &sender)?;
@@ -291,23 +298,37 @@ impl Transmuter {
             // If the constraint is exact out, and the adjustment is deduct fee, it means we deduct fee from in amount, which is alloyed
             // In that case we keep the fee portion in contract and burn the rest
             (SwapFromAlloyedConstraint::ExactOut { .. }, Adjustment::DeductFee { fee }) => {
-                in_amount.checked_sub(fee.amount)?
+                // if burn target is sender account, mint the fee portion to the contract
+                // otherwise, deduct the fee from in amount to keep fee portion in contract
+                if let BurnTarget::SenderAccount = burn_target {
+                    messages.push(
+                        MsgMint {
+                            sender: env.contract.address.to_string(),
+                            amount: Some(coin(fee.amount.u128(), &alloyed_denom).into()),
+                            mint_to_address: env.contract.address.to_string(),
+                        }
+                        .into(),
+                    );
+                    in_amount
+                } else {
+                    in_amount.checked_sub(fee.amount)?
+                }
             }
             _ => in_amount,
         };
 
-        let alloyed_asset_to_burn = coin(
-            burn_amount.u128(),
-            self.alloyed_asset.get_alloyed_denom(deps.storage)?,
-        )
-        .into();
+        let alloyed_asset_to_burn = coin(burn_amount.u128(), alloyed_denom).into();
 
-        // burn alloyed assets
-        Ok(MsgBurn {
-            sender: env.contract.address.to_string(),
-            amount: Some(alloyed_asset_to_burn),
-            burn_from_address,
-        })
+        messages.push(
+            MsgBurn {
+                sender: env.contract.address.to_string(),
+                amount: Some(alloyed_asset_to_burn),
+                burn_from_address,
+            }
+            .into(),
+        );
+
+        Ok(messages)
     }
 
     /// Check if the tokens out are all corrupted assets and the pool is empty after exiting.
