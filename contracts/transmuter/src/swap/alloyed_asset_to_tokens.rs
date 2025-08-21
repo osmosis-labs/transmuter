@@ -76,6 +76,7 @@ impl Transmuter {
                 tokens_out,
                 token_in_max_amount,
                 deps.branch(),
+                env.clone(),
             )?,
         };
 
@@ -175,8 +176,9 @@ impl Transmuter {
         tokens_out: &[Coin],
         token_in_max_amount: Uint128,
         mut deps: DepsMut,
+        env: Env,
     ) -> Result<(TransmuterPool, Uint128, Vec<Coin>, Adjustment, Response), ContractError> {
-        let response = Response::new();
+        let mut response = Response::new();
         let mut pool: TransmuterPool = self.pool.load(deps.storage)?;
         let tokens_out_with_norm_factor = pool.pair_coins_with_normalization_factor(tokens_out)?;
 
@@ -210,6 +212,15 @@ impl Transmuter {
 
             (pool, token_in, adjustment) =
                 self.rebalancer_pass(deps.branch(), pool, run_pool, rebalancing_adjustment)?;
+        }
+
+        // burn incentive from the contract, as this is used to subsidize in amount
+        if let Adjustment::Incentivize { ref incentive } = adjustment {
+            response = response.add_message(MsgBurn {
+                sender: env.contract.address.to_string(),
+                amount: Some(incentive.clone().into()),
+                burn_from_address: env.contract.address.to_string(),
+            });
         }
 
         let response = set_data_if_sudo(

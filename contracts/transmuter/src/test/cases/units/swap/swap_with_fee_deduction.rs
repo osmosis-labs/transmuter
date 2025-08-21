@@ -369,12 +369,6 @@ fn test_swap_exact_amount_out_incentive() {
     assert_accounting_invariant(&t);
 }
 
-// TODO:
-// - test_swap_tokens_to_alloyed_asset_exact_in_incentive
-// - test_swap_tokens_to_alloyed_asset_exact_out_incentive
-// - test_swap_alloyed_asset_to_tokens_exact_in_incentive
-// - test_swap_alloyed_asset_to_tokens_exact_out_incentive
-
 #[test]
 fn test_swap_tokens_to_alloyed_asset_exact_in_with_fee_deduction() {
     let app = OsmosisTestApp::new();
@@ -385,6 +379,7 @@ fn test_swap_tokens_to_alloyed_asset_exact_in_with_fee_deduction() {
 
     let mut swapper_balances = get_balances(&t, t.accounts["swapper"].address().to_string());
     let mut pool_liquidity = get_pool_liquidity(&t);
+    let mut incentive_pool_balances = get_incentive_pool_balances(&t);
 
     // Multiple tokens in that will make denom1 55%, denom2 25%
     let tokens_in = vec![
@@ -423,6 +418,12 @@ fn test_swap_tokens_to_alloyed_asset_exact_in_with_fee_deduction() {
     }
     assert_eq!(pool_liquidity, get_pool_liquidity(&t));
 
+    // assert incentive pool changes
+    incentive_pool_balances
+        .add(coin(fee.u128(), alloy_denom))
+        .unwrap();
+    assert_eq!(incentive_pool_balances, get_incentive_pool_balances(&t));
+
     assert_accounting_invariant(&t);
 
     // Check for total alloyed asset total supply
@@ -433,6 +434,84 @@ fn test_swap_tokens_to_alloyed_asset_exact_in_with_fee_deduction() {
         initial_total_alloyed_asset_supply.amount + amount_out_before_fee
     );
 }
+
+#[test]
+fn test_swap_alloyed_asset_to_tokens_exact_out_incentive() {
+    // ----- setup an unbalanced pool state with incentive pool filled -----
+    let app = OsmosisTestApp::new();
+    let t = setup_test_env(&app);
+
+    let initial_total_alloyed_asset_supply = get_alloyed_supply(&t);
+    let alloy_denom = initial_total_alloyed_asset_supply.denom;
+
+    // Multiple tokens in that will make denom1 55%, denom2 25%
+    let tokens_in = vec![
+        coin(37_500_000_000u128, "denom1"), // 3_750_000_000_000 normalized
+        coin(125_000_000_000u128, "denom2"), // 1_250_000_000_000 normalized
+    ];
+
+    // fee(denom1) = 25_000_000_000_000u128 * (5% * 1%) = 125_000_000_000u128
+    // fee(group1) = 25_000_000_000_000u128 * 0% = 0
+    let amount_out_before_fee = Uint128::from(3_750_000_000_000u128 + 1_250_000_000_000u128);
+    let fee = Uint128::from(125_000_000_000u128);
+    let token_out_amount = amount_out_before_fee - fee;
+
+    t.contract
+        .execute(&ExecMsg::JoinPool {}, &tokens_in, &t.accounts["swapper"])
+        .unwrap();
+
+    assert_accounting_invariant(&t);
+    // ----- end setup -----
+
+    let mut swapper_balances = get_balances(&t, t.accounts["swapper"].address().to_string());
+    let mut pool_liquidity = get_pool_liquidity(&t);
+    let mut incentive_pool_balances = get_incentive_pool_balances(&t);
+
+    let tokens_out = tokens_in;
+    let token_in = coin(token_out_amount.u128(), &alloy_denom);
+
+    let result = t
+        .contract
+        .execute(
+            &ExecMsg::ExitPool {
+                tokens_out: tokens_out.clone(),
+            },
+            &[],
+            &t.accounts["swapper"],
+        )
+        .unwrap();
+
+    // assert swapper balances changes
+    swapper_balances.sub(get_tx_fee(&result)).unwrap();
+    for token_out in tokens_out.iter() {
+        swapper_balances.add(token_out.clone()).unwrap();
+    }
+    swapper_balances.sub(token_in.clone()).unwrap();
+    assert_eq!(
+        swapper_balances,
+        get_balances(&t, t.accounts["swapper"].address().to_string())
+    );
+
+    // assert pool liquidity changes
+    for token_out in tokens_out.iter() {
+        pool_liquidity.sub(token_out.clone()).unwrap();
+    }
+
+    assert_eq!(pool_liquidity, get_pool_liquidity(&t));
+
+    // assert incentive pool changes
+    incentive_pool_balances
+        .sub(coin(fee.u128(), alloy_denom))
+        .unwrap();
+    assert_eq!(incentive_pool_balances, get_incentive_pool_balances(&t));
+
+    assert_accounting_invariant(&t);
+}
+
+// TODO:
+// - test_swap_tokens_to_alloyed_asset_exact_in_incentive
+// - test_swap_tokens_to_alloyed_asset_exact_out_incentive
+// - test_swap_alloyed_asset_to_tokens_exact_in_incentive
 
 #[test]
 fn test_swap_tokens_to_alloyed_asset_exact_out_with_fee_deduction() {
