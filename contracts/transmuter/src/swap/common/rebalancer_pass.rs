@@ -225,14 +225,14 @@ impl Transmuter {
         match updated_total_adjustment_value {
             // if internal incentive swap is helpful or neutral, return the original output and adjustment
             u if u >= first_order_total_adjustment_value => {
-                // remove substitute token from incentive pool, as this is eseentially what got swapped as token in
+                // remove substitute token from incentive pool, as this is essentially what got swapped as token in
                 // and the swap result is the incentive pay out which will not be add to incentive pool here since it will
                 // be paid out right away.
                 self.incentive_pool
                     .remove_tokens(deps.storage, &substitute_token)?;
 
                 Ok((
-                    first_order_pool,
+                    second_order_pool,
                     first_order_adjusted_output,
                     Adjustment::Incentivize {
                         incentive: first_order_incentive,
@@ -766,9 +766,9 @@ mod tests {
         20_000_000u128,
         vec![coin(20u128, "denom2"), coin(1u128, "denom3")],
         vec![
-            coin(25_000_000_000u128, "denom1"),
+            coin(24_980_000_000u128, "denom1"),
             coin(390_000_000_000u128, "denom2"),
-            coin(3_600_000_000_000u128, "denom3"),
+            coin(3_602_000_000_000u128, "denom3"),
         ],
         |transmuter: &Transmuter, storage: &mut dyn Storage| {
             transmuter

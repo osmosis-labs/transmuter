@@ -107,6 +107,176 @@ fn test_swap_exact_amount_in_incentive() {
     let t = setup_test_env(&app);
     let cp = CosmwasmPool::new(&app);
 
+    let token_in = coin(20_000_000_000u128, "denom1");
+    let amount_out_before_fee = Uint128::from(200_000_000_000u128);
+    let expected_fee = Uint128::from(40_000_000_000u128); // group1 + denom1 fees
+    let token_out_amount = amount_out_before_fee - expected_fee;
+
+    let fee_token = coin(expected_fee.u128(), "denom2");
+
+    let swapper_address = t.accounts["swapper"].address().to_string();
+
+    // Setup: Use exact amount in to create unbalanced pool and fill incentive pool
+    cp.swap_exact_amount_in(
+        MsgSwapExactAmountIn {
+            sender: t.accounts["swapper"].address(),
+            routes: vec![SwapAmountInRoute {
+                pool_id: t.contract.pool_id,
+                token_out_denom: "denom2".to_string(),
+            }],
+            token_in: Some(token_in.clone().into()),
+            token_out_min_amount: token_out_amount.to_string(),
+        },
+        &t.accounts["swapper"],
+    )
+    .unwrap();
+
+    assert_eq!(get_incentive_pool_balances(&t), Coins::from(fee_token));
+    assert_accounting_invariant(&t);
+    // ----- end setup -----
+
+    let mut swapper_balances = get_balances(&t, swapper_address.clone());
+    let mut pool_liquidity = get_pool_liquidity(&t);
+    let mut incentive_pool_balances = get_incentive_pool_balances(&t);
+
+    let token_out_without_incentive = token_in;
+    let token_in = coin(amount_out_before_fee.u128(), "denom2");
+
+    let incentive_token = coin(
+        4_000_000_000, // 40_000_000_000u128, // - 4_000_000_000u128,
+        token_out_without_incentive.denom.clone(),
+    );
+    let token_out_with_incentive = coin(
+        (token_out_without_incentive.amount + incentive_token.amount).u128(),
+        token_out_without_incentive.denom.clone(),
+    );
+
+    let result = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["swapper"].address(),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: token_out_with_incentive.denom.clone(),
+                }],
+                token_in: Some(token_in.clone().into()),
+                token_out_min_amount: token_out_with_incentive.amount.to_string(),
+            },
+            &t.accounts["swapper"],
+        )
+        .unwrap();
+
+    // assert swapper balances changes
+    swapper_balances.sub(get_tx_fee(&result)).unwrap();
+    swapper_balances.sub(token_in.clone()).unwrap();
+    swapper_balances
+        .add(token_out_with_incentive.clone())
+        .unwrap();
+    assert_eq!(swapper_balances, get_balances(&t, swapper_address.clone()));
+
+    // assert pool liquidity changes
+    pool_liquidity.add(token_in.clone()).unwrap();
+    pool_liquidity
+        .sub(token_out_without_incentive.clone())
+        .unwrap();
+    // internal swap
+    let internal_token_in = coin(40_000_000_000, "denom2");
+    let internal_token_out = coin(4_000_000_000, "denom1");
+    pool_liquidity.add(internal_token_in.clone()).unwrap();
+    pool_liquidity.sub(internal_token_out.clone()).unwrap();
+    assert_eq!(pool_liquidity, get_pool_liquidity(&t));
+
+    // assert incentive pool changes
+    incentive_pool_balances.sub(internal_token_in).unwrap();
+    assert_eq!(incentive_pool_balances, get_incentive_pool_balances(&t));
+
+    assert_accounting_invariant(&t);
+}
+
+#[test]
+fn test_swap_exact_amount_in_with_fee_deduction() {
+    let app = OsmosisTestApp::new();
+    let t = setup_test_env(&app);
+    let cp = CosmwasmPool::new(&app);
+
+    // Test the swap that should require fee deduction from output
+    // This swap makes denom1 weight go from 50% to 60%, triggering fee
+    let token_in = coin(20_000_000_000u128, "denom1");
+    let amount_out_before_fee = Uint128::from(200_000_000_000u128);
+    let expected_fee = Uint128::from(40_000_000_000u128); // group1 + denom1 fees
+    let token_out_amount = amount_out_before_fee - expected_fee;
+
+    let fee_token = coin(expected_fee.u128(), "denom2");
+    let token_out_before_fee = coin(amount_out_before_fee.u128(), "denom2");
+    let token_out_after_fee = coin(token_out_amount.u128(), "denom2");
+
+    let swapper_address = t.accounts["swapper"].address().to_string();
+
+    let mut swapper_balances = get_balances(&t, swapper_address.clone());
+    let mut pool_liquidity = get_pool_liquidity(&t);
+    let mut incentive_pool_balances = get_incentive_pool_balances(&t);
+
+    // Test with min amount too high (should fail)
+    let excessive_min = token_out_amount + Uint128::from(1u128);
+    let err = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["swapper"].address(),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: token_out_before_fee.denom.to_string(),
+                }],
+                token_in: Some(token_in.clone().into()),
+                token_out_min_amount: excessive_min.to_string(),
+            },
+            &t.accounts["swapper"],
+        )
+        .unwrap_err();
+
+    // Should fail due to insufficient token out
+    assert!(err.to_string().contains("Insufficient token out"));
+
+    // Test with appropriate min amount (should succeed)
+    let result = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["swapper"].address(),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: "denom2".to_string(),
+                }],
+                token_in: Some(token_in.clone().into()),
+                token_out_min_amount: token_out_amount.to_string(),
+            },
+            &t.accounts["swapper"],
+        )
+        .unwrap();
+
+    // assert swapper balances changes
+    swapper_balances.sub(get_tx_fee(&result)).unwrap();
+    swapper_balances.sub(token_in.clone()).unwrap();
+    swapper_balances.add(token_out_after_fee.clone()).unwrap();
+    assert_eq!(swapper_balances, get_balances(&t, swapper_address.clone()));
+
+    // assert pool liquidity changes
+    pool_liquidity.add(token_in).unwrap();
+    pool_liquidity.sub(token_out_before_fee).unwrap();
+    assert_eq!(pool_liquidity, get_pool_liquidity(&t));
+
+    // assert incentive pool changes
+    incentive_pool_balances.add(fee_token).unwrap();
+    assert_eq!(incentive_pool_balances, get_incentive_pool_balances(&t));
+
+    assert_accounting_invariant(&t);
+}
+
+#[test]
+fn test_swap_exact_amount_out_incentive() {
+    // ----- setup an unbalanced pool state with incentive pool filled -----
+    let app = OsmosisTestApp::new();
+    let t = setup_test_env(&app);
+    let cp = CosmwasmPool::new(&app);
+
     let token_out = coin(200_000_000_000u128, "denom2");
     let amount_in_before_fee = Uint128::from(20_000_000_000u128);
     let expected_fee = Uint128::from(4_000_000_000u128);
@@ -199,82 +369,12 @@ fn test_swap_exact_amount_in_incentive() {
     assert_accounting_invariant(&t);
 }
 
-#[test]
-fn test_swap_exact_amount_in_with_fee_deduction() {
-    let app = OsmosisTestApp::new();
-    let t = setup_test_env(&app);
-    let cp = CosmwasmPool::new(&app);
-
-    // Test the swap that should require fee deduction from output
-    // This swap makes denom1 weight go from 50% to 60%, triggering fee
-    let token_in = coin(20_000_000_000u128, "denom1");
-    let amount_out_before_fee = Uint128::from(200_000_000_000u128);
-    let expected_fee = Uint128::from(40_000_000_000u128); // group1 + denom1 fees
-    let token_out_amount = amount_out_before_fee - expected_fee;
-
-    let fee_token = coin(expected_fee.u128(), "denom2");
-    let token_out_before_fee = coin(amount_out_before_fee.u128(), "denom2");
-    let token_out_after_fee = coin(token_out_amount.u128(), "denom2");
-
-    let swapper_address = t.accounts["swapper"].address().to_string();
-
-    let mut swapper_balances = get_balances(&t, swapper_address.clone());
-    let mut pool_liquidity = get_pool_liquidity(&t);
-    let mut incentive_pool_balances = get_incentive_pool_balances(&t);
-
-    // Test with min amount too high (should fail)
-    let excessive_min = token_out_amount + Uint128::from(1u128);
-    let err = cp
-        .swap_exact_amount_in(
-            MsgSwapExactAmountIn {
-                sender: t.accounts["swapper"].address(),
-                routes: vec![SwapAmountInRoute {
-                    pool_id: t.contract.pool_id,
-                    token_out_denom: token_out_before_fee.denom.to_string(),
-                }],
-                token_in: Some(token_in.clone().into()),
-                token_out_min_amount: excessive_min.to_string(),
-            },
-            &t.accounts["swapper"],
-        )
-        .unwrap_err();
-
-    // Should fail due to insufficient token out
-    assert!(err.to_string().contains("Insufficient token out"));
-
-    // Test with appropriate min amount (should succeed)
-    let result = cp
-        .swap_exact_amount_in(
-            MsgSwapExactAmountIn {
-                sender: t.accounts["swapper"].address(),
-                routes: vec![SwapAmountInRoute {
-                    pool_id: t.contract.pool_id,
-                    token_out_denom: "denom2".to_string(),
-                }],
-                token_in: Some(token_in.clone().into()),
-                token_out_min_amount: token_out_amount.to_string(),
-            },
-            &t.accounts["swapper"],
-        )
-        .unwrap();
-
-    // assert swapper balances changes
-    swapper_balances.sub(get_tx_fee(&result)).unwrap();
-    swapper_balances.sub(token_in.clone()).unwrap();
-    swapper_balances.add(token_out_after_fee.clone()).unwrap();
-    assert_eq!(swapper_balances, get_balances(&t, swapper_address.clone()));
-
-    // assert pool liquidity changes
-    pool_liquidity.add(token_in).unwrap();
-    pool_liquidity.sub(token_out_before_fee).unwrap();
-    assert_eq!(pool_liquidity, get_pool_liquidity(&t));
-
-    // assert incentive pool changes
-    incentive_pool_balances.add(fee_token).unwrap();
-    assert_eq!(incentive_pool_balances, get_incentive_pool_balances(&t));
-
-    assert_accounting_invariant(&t);
-}
+// TODO:
+// - test_swap_exact_amount_out_incentive
+// - test_swap_tokens_to_alloyed_asset_exact_in_incentive
+// - test_swap_tokens_to_alloyed_asset_exact_out_incentive
+// - test_swap_alloyed_asset_to_tokens_exact_in_incentive
+// - test_swap_alloyed_asset_to_tokens_exact_out_incentive
 
 #[test]
 fn test_swap_tokens_to_alloyed_asset_exact_in_with_fee_deduction() {
@@ -797,7 +897,7 @@ fn verify_contract_balances(
 fn assert_accounting_invariant(t: &crate::test::test_env::TestEnv) {
     let pool_liquidity = get_pool_liquidity(t);
     let incentive_pool_balances = get_incentive_pool_balances(t);
-    let expected_contract_balances = add_coins(pool_liquidity, incentive_pool_balances);
+    let expected_contract_balances = add_coins(pool_liquidity.clone(), incentive_pool_balances);
 
     let contract_balances = get_balances(t, t.contract.contract_addr.to_string());
 
