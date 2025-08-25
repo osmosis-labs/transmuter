@@ -110,6 +110,9 @@ impl Transmuter {
     ) -> Result<(TransmuterPool, Vec<Coin>, Uint128, Response), ContractError> {
         let pool: TransmuterPool = self.pool.load(deps.storage)?;
         let response = Response::new();
+        let alloyed_incentive_pool_balance_before = self
+            .incentive_pool
+            .get_pool_balance(deps.storage, &alloyed_denom)?;
 
         let std_norm_factor = pool.std_norm_factor()?;
         let token_out_norm_factor = alloyed_norm_factor;
@@ -152,8 +155,25 @@ impl Transmuter {
                 amount: Some(fee.into()),
                 mint_to_address: env.contract.address.to_string(),
             }),
-            // incentive doesn't require minting or burning anything
-            Adjustment::Incentivize { .. } => response,
+            // if there is an internal swap and the incetive is in alloyed asset, mint the difference to the contract.
+            Adjustment::Incentivize { .. } => {
+                let incentive_pool_balance_after = self
+                    .incentive_pool
+                    .get_pool_balance(deps.storage, &alloyed_denom)?;
+
+                let diff = incentive_pool_balance_after
+                    .saturating_sub(alloyed_incentive_pool_balance_before);
+
+                if diff > Uint128::zero() {
+                    response.add_message(MsgMint {
+                        sender: env.contract.address.to_string(),
+                        amount: Some(coin(diff.u128(), alloyed_denom).into()),
+                        mint_to_address: env.contract.address.to_string(),
+                    })
+                } else {
+                    response
+                }
+            }
             Adjustment::None => response,
         };
 

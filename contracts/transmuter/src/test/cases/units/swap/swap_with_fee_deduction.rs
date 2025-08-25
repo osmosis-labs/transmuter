@@ -10,8 +10,10 @@ use transmuter_math::rebalancing::config::RebalancingConfig;
 
 use crate::{
     asset::AssetConfig,
-    contract::sv::{ExecMsg, QueryMsg},
-    contract::{GetIncentivePoolBalancesResponse, GetTotalPoolLiquidityResponse},
+    contract::{
+        sv::{ExecMsg, QueryMsg},
+        GetIncentivePoolBalancesResponse, GetShareDenomResponse, GetTotalPoolLiquidityResponse,
+    },
     scope::Scope,
     test::test_env::TestEnvBuilder,
 };
@@ -435,10 +437,94 @@ fn test_swap_tokens_to_alloyed_asset_exact_in_with_fee_deduction() {
     );
 }
 
-// TODO:
-// - test_swap_tokens_to_alloyed_asset_exact_in_incentive
-// - test_swap_tokens_to_alloyed_asset_exact_out_incentive
+#[test]
+fn test_swap_tokens_to_alloyed_asset_exact_in_incentive() {
+    // for this alloyed will be the incentive for the token out
+    // we need to setup empty alloyed in the incentive pool so that we triggers internal swap
+    // to do that, we can simply swap whatever
 
+    // ---- setup incentive pool with some denom other than alloyed
+
+    let app = OsmosisTestApp::new();
+    let t = setup_test_env(&app);
+    let cp = CosmwasmPool::new(&app);
+
+    let alloyed_denom = t
+        .contract
+        .query::<GetShareDenomResponse>(&QueryMsg::GetShareDenom {})
+        .unwrap()
+        .share_denom;
+
+    let swapper_address = t.accounts["swapper"].address().to_string();
+
+    let token_in = coin(10_000_000_000u128 + 1_000_000_000u128, "denom1");
+    let token_out_amount = 100_000_000_000u128;
+
+    cp.swap_exact_amount_out(
+        MsgSwapExactAmountOut {
+            sender: t.accounts["swapper"].address(),
+            routes: vec![SwapAmountOutRoute {
+                pool_id: t.contract.pool_id,
+                token_in_denom: "denom1".to_string(),
+            }],
+            token_out: Some(coin(token_out_amount, "denom2").into()),
+            token_in_max_amount: token_in.amount.to_string(),
+        },
+        &t.accounts["swapper"],
+    )
+    .unwrap();
+
+    assert_accounting_invariant(&t);
+
+    // ----- end setup -----
+
+    let mut swapper_balances = get_balances(&t, swapper_address.clone());
+    let mut pool_liquidity = get_pool_liquidity(&t);
+    let mut incentive_pool_balances = get_incentive_pool_balances(&t);
+
+    let token_in = coin(200_000_000_000, "denom2");
+
+    let amount_out = 2_000_000_000_000u128;
+    let incentive = 95_000_000_000u128;
+    let token_out = coin(amount_out + incentive, alloyed_denom.clone());
+
+    let result = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["swapper"].address(),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: alloyed_denom.clone(),
+                }],
+                token_in: Some(token_in.clone().into()),
+                token_out_min_amount: token_out.amount.to_string(),
+            },
+            &t.accounts["swapper"],
+        )
+        .unwrap();
+
+    swapper_balances.sub(get_tx_fee(&result)).unwrap();
+    swapper_balances.sub(token_in.clone()).unwrap();
+    swapper_balances.add(token_out.clone()).unwrap();
+    assert_eq!(swapper_balances, get_balances(&t, swapper_address.clone()));
+
+    pool_liquidity.add(token_in.clone()).unwrap();
+    pool_liquidity.add(coin(1_000_000_000, "denom1")).unwrap(); // internal swap denom1 -> alloyed
+    assert_eq!(pool_liquidity, get_pool_liquidity(&t));
+
+    incentive_pool_balances
+        .sub(coin(1_000_000_000, "denom1"))
+        .unwrap();
+    incentive_pool_balances
+        .add(coin(5_000_000_000, alloyed_denom))
+        .unwrap();
+    assert_eq!(incentive_pool_balances, get_incentive_pool_balances(&t));
+
+    assert_accounting_invariant(&t);
+}
+
+// TODO:
+// - test_swap_tokens_to_alloyed_asset_exact_out_incentive
 #[test]
 fn test_swap_tokens_to_alloyed_asset_exact_out_with_fee_deduction() {
     let app = OsmosisTestApp::new();
