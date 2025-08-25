@@ -67,6 +67,7 @@ impl Transmuter {
                 token_out_min_amount,
                 token_in_amount,
                 deps.branch(),
+                env.clone(),
             )?,
             SwapFromAlloyedConstraint::ExactOut {
                 tokens_out,
@@ -119,10 +120,16 @@ impl Transmuter {
         token_out_min_amount: Uint128,
         token_in_amount: Uint128,
         mut deps: DepsMut,
+        env: Env,
     ) -> Result<(TransmuterPool, Uint128, Vec<Coin>, Adjustment, Response), ContractError> {
         let mut pool: TransmuterPool = self.pool.load(deps.storage)?;
         let response = Response::new();
         let std_norm_factor = pool.std_norm_factor()?;
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+        let alloyed_incentive_pool_balance_before = self
+            .incentive_pool
+            .get_pool_balance(deps.storage, &alloyed_denom)?;
+
         let token_out_norm_factor = pool
             .get_pool_asset_by_denom(token_out_denom)?
             .normalization_factor();
@@ -156,6 +163,29 @@ impl Transmuter {
             (pool, token_out, adjustment) =
                 self.rebalancer_pass(deps.branch(), pool, run_pool, rebalancing_adjustment)?;
         }
+
+        let alloyed_incentive_pool_balance_after = self
+            .incentive_pool
+            .get_pool_balance(deps.storage, &alloyed_denom)?;
+
+        let diff = alloyed_incentive_pool_balance_before
+            .saturating_sub(alloyed_incentive_pool_balance_after);
+
+        // correct excess alloyed due to internal swap (alloyed -> other denom)
+        // alloyed will only be used for internal swap, so we can safely burn it.
+        // the case where the incentive itself is alloyed will not occur here because
+        // it's a swap from alloyed asset to token exact in, the incentive will be paid in the out token denom.
+        // TODO: This could happen in non-alloyed swap, we need to handle it.
+        let response =
+            if matches!(adjustment, Adjustment::Incentivize { .. }) && diff > Uint128::zero() {
+                response.add_message(MsgBurn {
+                    sender: env.contract.address.to_string(),
+                    amount: Some(coin(diff.u128(), alloyed_denom).into()),
+                    burn_from_address: env.contract.address.to_string(),
+                })
+            } else {
+                response
+            };
 
         let response = set_data_if_sudo(
             response,
