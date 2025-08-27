@@ -1,5 +1,5 @@
 use cosmwasm_std::{coin, ensure, Addr, Coin, Deps, DepsMut, Env, Response, Uint128};
-use osmosis_std::types::osmosis::tokenfactory::v1beta1::MsgMint;
+use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
 
 use crate::{
     alloyed_asset::swap_to_alloyed,
@@ -67,6 +67,7 @@ impl Transmuter {
                 token_in_max_amount,
                 token_out_amount,
                 deps.branch(),
+                &env,
             )?,
         };
 
@@ -187,9 +188,14 @@ impl Transmuter {
         token_in_max_amount: Uint128,
         token_out_amount: Uint128,
         mut deps: DepsMut,
+        env: &Env,
     ) -> Result<(TransmuterPool, Vec<Coin>, Uint128, Response), ContractError> {
         let pool: TransmuterPool = self.pool.load(deps.storage)?;
         let response = Response::new();
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+        let alloyed_incentive_pool_balance_before = self
+            .incentive_pool
+            .get_pool_balance(deps.storage, &alloyed_denom)?;
 
         let std_norm_factor = pool.std_norm_factor()?;
         let token_in_norm_factor = pool
@@ -214,8 +220,27 @@ impl Transmuter {
             token_in_norm_factor,
         );
 
-        let (pool, token_in, _adjustment) =
+        let (pool, token_in, adjustment) =
             self.rebalancer_pass(deps.branch(), pool, run_pool, rebalancing_adjustment)?;
+
+        let incentive_pool_balance_after = self
+            .incentive_pool
+            .get_pool_balance(deps.storage, &alloyed_denom)?;
+
+        let decreased_alloyed =
+            alloyed_incentive_pool_balance_before.saturating_sub(incentive_pool_balance_after);
+
+        let response = if matches!(adjustment, Adjustment::Incentivize { .. })
+            && decreased_alloyed > Uint128::zero()
+        {
+            response.add_message(MsgBurn {
+                sender: env.contract.address.to_string(),
+                amount: Some(coin(decreased_alloyed.u128(), alloyed_denom).into()),
+                burn_from_address: env.contract.address.to_string(),
+            })
+        } else {
+            response
+        };
 
         // Unlike exact in case where token out is alloyed, there is no separate mint target required here
         // Because fee is collected from the token_in

@@ -439,11 +439,7 @@ fn test_swap_tokens_to_alloyed_asset_exact_in_with_fee_deduction() {
 
 #[test]
 fn test_swap_tokens_to_alloyed_asset_exact_in_incentive() {
-    // for this alloyed will be the incentive for the token out
-    // we need to setup empty alloyed in the incentive pool so that we triggers internal swap
-    // to do that, we can simply swap whatever
-
-    // ---- setup incentive pool with some denom other than alloyed
+    // ---- setup incentive pool with some denom other than alloyed ---
 
     let app = OsmosisTestApp::new();
     let t = setup_test_env(&app);
@@ -523,8 +519,6 @@ fn test_swap_tokens_to_alloyed_asset_exact_in_incentive() {
     assert_accounting_invariant(&t);
 }
 
-// TODO:
-// - test_swap_tokens_to_alloyed_asset_exact_out_incentive
 #[test]
 fn test_swap_tokens_to_alloyed_asset_exact_out_with_fee_deduction() {
     let app = OsmosisTestApp::new();
@@ -611,6 +605,78 @@ fn test_swap_tokens_to_alloyed_asset_exact_out_with_fee_deduction() {
         alloyed_asset_supply.amount,
         initial_total_alloyed_asset_supply.amount + token_out_amount
     );
+}
+
+#[test]
+fn test_swap_tokens_to_alloyed_asset_exact_out_incentive() {
+    let app = OsmosisTestApp::new();
+    let t = setup_test_env(&app);
+    let cp = CosmwasmPool::new(&app);
+
+    // ---- setup with only alloyed in the incentive pool ---
+    t.contract
+        .execute(
+            &ExecMsg::JoinPool {},
+            &[
+                coin(10_000_000_000u128, "denom1"),
+                coin(200_000_000_000u128, "denom2"),
+                coin(2_000_000_000_000u128, "denom3"),
+            ],
+            &t.accounts["swapper"],
+        )
+        .unwrap();
+
+    assert_accounting_invariant(&t);
+    // ---- end setup ----
+    let mut swapper_balances = get_balances(&t, t.accounts["swapper"].address().to_string());
+    let mut pool_liquidity = get_pool_liquidity(&t);
+    let mut incentive_pool_balances = get_incentive_pool_balances(&t);
+
+    let alloyed_denom = t
+        .contract
+        .query::<GetShareDenomResponse>(&QueryMsg::GetShareDenom {})
+        .unwrap()
+        .share_denom;
+
+    // Execute swap_exact_amount_out with 1,000,000,000,000 alloyed out and denom1 as token in
+    let token_out = coin(1_000_000_000_000u128, &alloyed_denom);
+    let amount_in_before_incentive_rebate = 10_000_000_000u128;
+    let incentive = 500_000_000u128;
+    let amount_in = amount_in_before_incentive_rebate - incentive;
+    let max_token_in = coin(amount_in, "denom1"); // Set a reasonable max
+
+    let result = cp
+        .swap_exact_amount_out(
+            MsgSwapExactAmountOut {
+                sender: t.accounts["swapper"].address(),
+                routes: vec![SwapAmountOutRoute {
+                    pool_id: t.contract.pool_id,
+                    token_in_denom: "denom1".to_string(),
+                }],
+                token_out: Some(token_out.clone().into()),
+                token_in_max_amount: max_token_in.amount.to_string(),
+            },
+            &t.accounts["swapper"],
+        )
+        .unwrap();
+
+    swapper_balances.sub(get_tx_fee(&result)).unwrap();
+    swapper_balances.sub(coin(amount_in, "denom1")).unwrap();
+    swapper_balances.add(token_out.clone()).unwrap();
+    assert_eq!(
+        swapper_balances,
+        get_balances(&t, t.accounts["swapper"].address().to_string())
+    );
+
+    pool_liquidity.add(coin(amount_in, "denom1")).unwrap();
+    assert_eq!(pool_liquidity, get_pool_liquidity(&t));
+
+    incentive_pool_balances
+        .sub(coin(50_000_000_000, alloyed_denom))
+        .unwrap();
+    assert_eq!(incentive_pool_balances, get_incentive_pool_balances(&t));
+
+    assert_accounting_invariant(&t);
 }
 
 #[test]
@@ -959,9 +1025,9 @@ fn setup_test_env<'a>(app: &'a OsmosisTestApp) -> TestEnv<'a> {
         .with_account(
             "swapper",
             vec![
-                coin(1_000_000_000_000, "denom1"),
-                coin(1_000_000_000_000, "denom2"),
-                coin(1_000_000_000_000, "denom3"),
+                coin(20_000_000_000_000, "denom1"),
+                coin(200_000_000_000_000, "denom2"),
+                coin(2_000_000_000_000_000, "denom3"),
             ],
         )
         .with_account(
