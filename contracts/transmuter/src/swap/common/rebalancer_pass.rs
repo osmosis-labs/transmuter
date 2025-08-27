@@ -468,6 +468,12 @@ impl Transmuter {
                     adjustment
                 };
 
+                deps.api
+                    .debug(&format!(
+                        "----\nscope: {} \n - adjustment: {:?} \n - prev_weight: {:?} \n -  updated_weight: {:?}",
+                        scope, adjustment, prev_weight, updated_weight
+                    ));
+
                 total_adjustment_rate = total_adjustment_rate.checked_add(adjustment)?;
             }
         }
@@ -1140,7 +1146,6 @@ mod tests {
 
         let out_amount_before_fee = swap_to_alloyed::out_amount_via_exact_in(
             tokens_in_with_norm_factor,
-            Uint128::zero(),
             token_out_norm_factor,
         )
         .unwrap();

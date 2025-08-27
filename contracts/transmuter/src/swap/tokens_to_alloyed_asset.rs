@@ -121,7 +121,6 @@ impl Transmuter {
         let tokens_in_with_norm_factor = pool.pair_coins_with_normalization_factor(&tokens_in)?;
         let out_amount_before_fee = swap_to_alloyed::out_amount_via_exact_in(
             tokens_in_with_norm_factor,
-            token_out_min_amount,
             self.alloyed_asset.get_normalization_factor(deps.storage)?,
         )?;
 
@@ -203,7 +202,6 @@ impl Transmuter {
             .normalization_factor();
         let in_amount_before_fee = swap_to_alloyed::in_amount_via_exact_out(
             token_in_norm_factor,
-            token_in_max_amount,
             token_out_amount,
             self.alloyed_asset.get_normalization_factor(deps.storage)?,
         )?;

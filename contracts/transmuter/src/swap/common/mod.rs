@@ -8,9 +8,7 @@ pub mod test_utils;
 pub use rebalancing_adjustment::*;
 pub use response_data::*;
 
-use cosmwasm_std::{
-    coin, ensure, ensure_eq, Coin, Decimal, Deps, StdError, Storage, Uint128, Uint256,
-};
+use cosmwasm_std::{coin, ensure, ensure_eq, Coin, Decimal, Deps, StdError, Storage, Uint256};
 use std::collections::{BTreeMap, HashSet};
 
 use crate::{
@@ -97,7 +95,6 @@ impl Transmuter {
 
                 let token_in_amount = swap_to_alloyed::in_amount_via_exact_out(
                     token_in_norm_factor,
-                    Uint128::MAX,
                     token_out.amount,
                     self.alloyed_asset.get_normalization_factor(deps.storage)?,
                 )?;
@@ -111,7 +108,6 @@ impl Transmuter {
                     .normalization_factor();
 
                 let token_in_amount = swap_from_alloyed::in_amount_via_exact_out(
-                    Uint128::MAX,
                     self.alloyed_asset.get_normalization_factor(deps.storage)?,
                     vec![(token_out.clone(), token_out_norm_factor)],
                 )?;
@@ -158,7 +154,6 @@ impl Transmuter {
 
                 let token_out_amount = swap_to_alloyed::out_amount_via_exact_in(
                     vec![(token_in.clone(), token_in_norm_factor)],
-                    Uint128::zero(),
                     self.alloyed_asset.get_normalization_factor(deps.storage)?,
                 )?;
                 let token_out = coin(token_out_amount.u128(), token_out_denom);
@@ -174,7 +169,6 @@ impl Transmuter {
                     token_in.amount,
                     self.alloyed_asset.get_normalization_factor(deps.storage)?,
                     token_out_norm_factor,
-                    Uint128::zero(),
                 )?;
                 let token_out = coin(token_out_amount.u128(), token_out_denom);
                 pool.exit_pool(&[token_out.clone()])?;
@@ -346,7 +340,7 @@ mod tests {
     use crate::transmuter_pool::AssetGroup;
     use crate::{swap::common::SwapVariant, ContractError};
     use cosmwasm_std::testing::mock_dependencies;
-    use cosmwasm_std::Addr;
+    use cosmwasm_std::{Addr, Uint128};
     use rstest::rstest;
     use transmuter_math::rebalancing::config::RebalancingConfig;
 

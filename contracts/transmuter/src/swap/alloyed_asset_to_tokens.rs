@@ -137,7 +137,6 @@ impl Transmuter {
             token_in_amount,
             self.alloyed_asset.get_normalization_factor(deps.storage)?,
             token_out_norm_factor,
-            token_out_min_amount,
         )?;
 
         let mut token_out = coin(out_amount.u128(), token_out_denom);
@@ -215,7 +214,6 @@ impl Transmuter {
         let token_in_norm_factor = self.alloyed_asset.get_normalization_factor(deps.storage)?;
         let std_norm_factor = pool.std_norm_factor()?;
         let in_amount = swap_from_alloyed::in_amount_via_exact_out(
-            token_in_max_amount,
             token_in_norm_factor,
             tokens_out_with_norm_factor,
         )?;

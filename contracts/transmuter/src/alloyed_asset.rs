@@ -104,7 +104,6 @@ pub mod swap_to_alloyed {
 
     pub fn out_amount_via_exact_in(
         tokens_in_with_norm_factor: Vec<(Coin, Uint128)>,
-        token_out_min_amount: Uint128,
         alloyed_denom_normalization_factor: Uint128,
     ) -> Result<Uint128, ContractError> {
         // swap token for alloyed asset output keeps alloyed asset value <= tokens_in value
@@ -115,14 +114,6 @@ pub mod swap_to_alloyed {
             Rounding::Down,
         )?;
 
-        ensure!(
-            out_amount >= token_out_min_amount,
-            ContractError::InsufficientTokenOut {
-                min_required: token_out_min_amount,
-                amount_out: out_amount
-            }
-        );
-
         Ok(out_amount)
     }
 
@@ -131,7 +122,6 @@ pub mod swap_to_alloyed {
     /// returns token in amount
     pub fn in_amount_via_exact_out(
         token_in_norm_factor: Uint128,
-        token_in_max_amount: Uint128,
         token_out_amount: Uint128,
         alloyed_denom_normalization_factor: Uint128,
     ) -> Result<Uint128, ContractError> {
@@ -141,14 +131,6 @@ pub mod swap_to_alloyed {
             token_in_norm_factor,
             &Rounding::Up,
         )?;
-
-        ensure!(
-            token_in_amount <= token_in_max_amount,
-            ContractError::ExcessiveRequiredTokenIn {
-                limit: token_in_max_amount,
-                required: token_in_amount
-            }
-        );
 
         Ok(token_in_amount)
     }
@@ -161,7 +143,6 @@ pub mod swap_from_alloyed {
         amount_in: Uint128,
         alloyed_denom_normalization_factor: Uint128,
         token_out_norm_factor: Uint128,
-        token_out_min_amount: Uint128,
     ) -> Result<Uint128, ContractError> {
         // swap token from alloyed asset output keeps token_out value <= alloyed asset burnt value (amount_in)
         // makes sure it's not under burning alloyed asset
@@ -172,14 +153,6 @@ pub mod swap_from_alloyed {
             &Rounding::Down,
         )?;
 
-        ensure!(
-            out_amount >= token_out_min_amount,
-            ContractError::InsufficientTokenOut {
-                min_required: token_out_min_amount,
-                amount_out: out_amount
-            }
-        );
-
         Ok(out_amount)
     }
 
@@ -187,7 +160,6 @@ pub mod swap_from_alloyed {
     /// Since it needs to calculate the exact amount of token in
     /// returns token in amount
     pub fn in_amount_via_exact_out(
-        token_in_max_amount: Uint128,
         alloyed_denom_normalization_factor: Uint128,
         tokens_out_with_norm_factor: Vec<(Coin, Uint128)>,
     ) -> Result<Uint128, ContractError> {
@@ -196,14 +168,6 @@ pub mod swap_from_alloyed {
             alloyed_denom_normalization_factor,
             Rounding::Up,
         )?;
-
-        ensure!(
-            token_in_amount <= token_in_max_amount,
-            ContractError::ExcessiveRequiredTokenIn {
-                limit: token_in_max_amount,
-                required: token_in_amount
-            }
-        );
 
         Ok(token_in_amount)
     }
