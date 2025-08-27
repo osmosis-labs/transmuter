@@ -1,8 +1,11 @@
-use cosmwasm_std::{to_json_binary, Addr, BankMsg, Coin, Deps, DepsMut, Response, Uint128};
+use cosmwasm_std::{to_json_binary, Addr, BankMsg, Coin, Deps, DepsMut, Env, Response, Uint128};
 
 use crate::{
     contract::Transmuter,
-    swap::{common::SwapExactAmountOutResponseData, rebalancing_adjustment_for_exact_out},
+    swap::{
+        add_alloyed_balance_correction_message, common::SwapExactAmountOutResponseData,
+        rebalancing_adjustment_for_exact_out,
+    },
     transmuter_pool::TransmuterPool,
     ContractError,
 };
@@ -15,12 +18,18 @@ impl Transmuter {
         token_out: Coin,
         sender: Addr,
         mut deps: DepsMut,
+        env: &Env,
     ) -> Result<Response, ContractError> {
         let pool = self.pool.load(deps.storage)?;
         let std_norm_factor = pool.std_norm_factor()?;
         let token_in_norm_factor = pool
             .get_pool_asset_by_denom(token_in_denom)?
             .normalization_factor();
+
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+        let alloyed_incentive_pool_balance_before = self
+            .incentive_pool
+            .get_pool_balance(deps.storage, &alloyed_denom)?;
 
         let run_pool = |deps: Deps, pool: TransmuterPool| {
             self.in_amt_given_out(deps, pool, token_out.clone(), token_in_denom.to_string())
@@ -32,13 +41,26 @@ impl Transmuter {
             token_in_norm_factor,
         );
 
-        let (mut pool, actual_token_in, _adjustment) =
+        let (mut pool, actual_token_in, adjustment) =
             self.rebalancer_pass(deps.branch(), pool, run_pool, rebalancing_adjustment)?;
 
         self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
 
         // save pool
         self.pool.save(deps.storage, &pool)?;
+
+        let alloyed_incentive_pool_balance_after = self
+            .incentive_pool
+            .get_pool_balance(deps.storage, &alloyed_denom)?;
+
+        let response = add_alloyed_balance_correction_message(
+            Response::new(),
+            &adjustment,
+            alloyed_incentive_pool_balance_before,
+            alloyed_incentive_pool_balance_after,
+            &alloyed_denom,
+            env,
+        );
 
         let send_token_out_to_sender_msg = BankMsg::Send {
             to_address: sender.to_string(),
@@ -49,7 +71,7 @@ impl Transmuter {
             token_in_amount: actual_token_in.amount,
         };
 
-        Ok(Response::new()
+        Ok(response
             .add_message(send_token_out_to_sender_msg)
             .set_data(to_json_binary(&swap_result)?))
     }
@@ -58,7 +80,7 @@ impl Transmuter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cosmwasm_std::testing::mock_dependencies;
+    use cosmwasm_std::testing::{mock_dependencies, mock_env};
     use cosmwasm_std::{coin, from_json, Coins, Decimal};
     use itertools::Itertools;
     use std::collections::BTreeMap;
@@ -161,6 +183,7 @@ mod tests {
             token_out,
             sender,
             deps.as_mut(),
+            &mock_env(),
         );
 
         assert_eq!(res, expected_res);
@@ -218,6 +241,7 @@ mod tests {
                 coin(1000000000000, "denom1"),
                 deps.api.addr_make("sender"),
                 deps.as_mut(),
+                &mock_env(),
             )
             .unwrap();
 
@@ -275,6 +299,7 @@ mod tests {
             token_out.clone(),
             sender.clone(),
             deps.as_mut(),
+            &mock_env(),
         );
 
         assert_eq!(
@@ -291,6 +316,7 @@ mod tests {
             token_out.clone(),
             sender.clone(),
             deps.as_mut(),
+            &mock_env(),
         );
 
         let pool = transmuter.pool.load(&deps.storage).unwrap();
@@ -334,6 +360,7 @@ mod tests {
                 amount_in_before_fee,
                 sender.clone(),
                 deps.as_mut(),
+                &mock_env(),
             )
             .unwrap();
         let data: SwapExactAmountInResponseData = from_json(&res.data.unwrap()).unwrap();

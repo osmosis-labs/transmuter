@@ -468,12 +468,6 @@ impl Transmuter {
                     adjustment
                 };
 
-                deps.api
-                    .debug(&format!(
-                        "----\nscope: {} \n - adjustment: {:?} \n - prev_weight: {:?} \n -  updated_weight: {:?}",
-                        scope, adjustment, prev_weight, updated_weight
-                    ));
-
                 total_adjustment_rate = total_adjustment_rate.checked_add(adjustment)?;
             }
         }

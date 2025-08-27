@@ -5,10 +5,14 @@ mod response_data;
 #[cfg(test)]
 pub mod test_utils;
 
+use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
 pub use rebalancing_adjustment::*;
 pub use response_data::*;
 
-use cosmwasm_std::{coin, ensure, ensure_eq, Coin, Decimal, Deps, StdError, Storage, Uint256};
+use cosmwasm_std::{
+    coin, ensure, ensure_eq, Coin, Decimal, Deps, Env, Response, StdError, Storage, Uint128,
+    Uint256,
+};
 use std::collections::{BTreeMap, HashSet};
 
 use crate::{
@@ -282,6 +286,50 @@ impl Transmuter {
                 },
             )
     }
+}
+
+/// Check the incentive pool if before/after run pool, the balance of alloyed asset has changed.
+/// If so, add the correction message to the response.
+/// If alloyed incentive pool balance is increased, add a mint message to the response.
+/// If alloyed incentive pool balance is decreased, add a burn message to the response.
+pub fn add_alloyed_balance_correction_message(
+    response: Response,
+    adjustment: &Adjustment,
+    alloyed_incentive_pool_balance_before: Uint128,
+    alloyed_incentive_pool_balance_after: Uint128,
+    alloyed_denom: &str,
+    env: &Env,
+) -> Response {
+    // If the adjustment is not incentivize, no need to add the correction message.
+    if !matches!(adjustment, Adjustment::Incentivize { .. }) {
+        return response;
+    }
+
+    let mut response = response;
+
+    let increased =
+        alloyed_incentive_pool_balance_after.saturating_sub(alloyed_incentive_pool_balance_before);
+
+    let decreased =
+        alloyed_incentive_pool_balance_before.saturating_sub(alloyed_incentive_pool_balance_after);
+
+    if increased > Uint128::zero() {
+        response = response.add_message(MsgMint {
+            sender: env.contract.address.to_string(),
+            amount: Some(coin(increased.u128(), alloyed_denom).into()),
+            mint_to_address: env.contract.address.to_string(),
+        })
+    };
+
+    if decreased > Uint128::zero() {
+        response = response.add_message(MsgBurn {
+            sender: env.contract.address.to_string(),
+            amount: Some(coin(decreased.u128(), alloyed_denom).into()),
+            burn_from_address: env.contract.address.to_string(),
+        })
+    };
+
+    response
 }
 
 pub fn construct_scope_value_pairs(

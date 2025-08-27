@@ -8,6 +8,7 @@ use crate::{
     contract::Transmuter,
     corruptable::Corruptable as _,
     swap::{
+        add_alloyed_balance_correction_message,
         common::{
             set_data_if_sudo, Adjustment, Entrypoint, SwapExactAmountInResponseData,
             SwapExactAmountOutResponseData,
@@ -167,24 +168,14 @@ impl Transmuter {
             .incentive_pool
             .get_pool_balance(deps.storage, &alloyed_denom)?;
 
-        let diff = alloyed_incentive_pool_balance_before
-            .saturating_sub(alloyed_incentive_pool_balance_after);
-
-        // correct excess alloyed due to internal swap (alloyed -> other denom)
-        // alloyed will only be used for internal swap, so we can safely burn it.
-        // the case where the incentive itself is alloyed will not occur here because
-        // it's a swap from alloyed asset to token exact in, the incentive will be paid in the out token denom.
-        // TODO: This could happen in non-alloyed swap, we need to handle it.
-        let response =
-            if matches!(adjustment, Adjustment::Incentivize { .. }) && diff > Uint128::zero() {
-                response.add_message(MsgBurn {
-                    sender: env.contract.address.to_string(),
-                    amount: Some(coin(diff.u128(), alloyed_denom).into()),
-                    burn_from_address: env.contract.address.to_string(),
-                })
-            } else {
-                response
-            };
+        let response = add_alloyed_balance_correction_message(
+            response,
+            &adjustment,
+            alloyed_incentive_pool_balance_before,
+            alloyed_incentive_pool_balance_after,
+            &alloyed_denom,
+            &env,
+        );
 
         let response = set_data_if_sudo(
             response,
@@ -207,9 +198,13 @@ impl Transmuter {
         mut deps: DepsMut,
         env: Env,
     ) -> Result<(TransmuterPool, Uint128, Vec<Coin>, Adjustment, Response), ContractError> {
-        let mut response = Response::new();
+        let response = Response::new();
         let mut pool: TransmuterPool = self.pool.load(deps.storage)?;
         let tokens_out_with_norm_factor = pool.pair_coins_with_normalization_factor(tokens_out)?;
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+        let alloyed_incentive_pool_balance_before = self
+            .incentive_pool
+            .get_pool_balance(deps.storage, &alloyed_denom)?;
 
         let token_in_norm_factor = self.alloyed_asset.get_normalization_factor(deps.storage)?;
         let std_norm_factor = pool.std_norm_factor()?;
@@ -242,14 +237,18 @@ impl Transmuter {
                 self.rebalancer_pass(deps.branch(), pool, run_pool, rebalancing_adjustment)?;
         }
 
-        // burn incentive from the contract, as this is used to subsidize in amount
-        if let Adjustment::Incentivize { ref incentive } = adjustment {
-            response = response.add_message(MsgBurn {
-                sender: env.contract.address.to_string(),
-                amount: Some(incentive.clone().into()),
-                burn_from_address: env.contract.address.to_string(),
-            });
-        }
+        let alloyed_incentive_pool_balance_after = self
+            .incentive_pool
+            .get_pool_balance(deps.storage, &alloyed_denom)?;
+
+        let response = add_alloyed_balance_correction_message(
+            response,
+            &adjustment,
+            alloyed_incentive_pool_balance_before,
+            alloyed_incentive_pool_balance_after,
+            &alloyed_denom,
+            &env,
+        );
 
         let response = set_data_if_sudo(
             response,
@@ -949,24 +948,32 @@ mod tests {
             )
             .unwrap();
 
-        let messages = res
-            .messages
-            .into_iter()
-            .map(|m| {
-                let CosmosMsg::Stargate { value, .. } = m.msg else {
-                    panic!("must be Startgate message")
-                };
-                MsgMint::decode(value.as_slice()).unwrap()
-            })
-            .collect::<Vec<_>>();
+        assert_eq!(res.messages.len(), 2);
+
+        let CosmosMsg::Stargate { value, .. } = res.messages[0].msg.clone() else {
+            panic!("must be Startgate message")
+        };
 
         assert_eq!(
-            messages,
-            vec![MsgMint {
+            MsgBurn::decode(value.as_slice()).unwrap(),
+            MsgBurn {
+                amount: Some(coin(fee.u128(), "alloyed").into()),
+                burn_from_address: MOCK_CONTRACT_ADDR.to_string(),
+                sender: MOCK_CONTRACT_ADDR.to_string(),
+            }
+        );
+
+        let CosmosMsg::Stargate { value, .. } = res.messages[1].msg.clone() else {
+            panic!("must be Startgate message")
+        };
+
+        assert_eq!(
+            MsgMint::decode(value.as_slice()).unwrap(),
+            MsgMint {
                 amount: Some(coin((amount_out_before_fee + fee).u128(), "alloyed").into()),
                 mint_to_address: sender.to_string(),
                 sender: MOCK_CONTRACT_ADDR.to_string(),
-            }]
+            }
         );
 
         // check pool state

@@ -1,8 +1,11 @@
-use cosmwasm_std::{to_json_binary, Addr, BankMsg, Coin, Deps, DepsMut, Response, Uint128};
+use cosmwasm_std::{to_json_binary, Addr, BankMsg, Coin, Deps, DepsMut, Env, Response, Uint128};
 
 use crate::{
     contract::Transmuter,
-    swap::{common::SwapExactAmountInResponseData, rebalancing_adjustment_for_exact_in},
+    swap::{
+        add_alloyed_balance_correction_message, common::SwapExactAmountInResponseData,
+        rebalancing_adjustment_for_exact_in,
+    },
     transmuter_pool::TransmuterPool,
     ContractError,
 };
@@ -14,12 +17,17 @@ impl Transmuter {
         token_out_min_amount: Uint128,
         sender: Addr,
         mut deps: DepsMut,
+        env: &Env,
     ) -> Result<Response, ContractError> {
         let pool = self.pool.load(deps.storage)?;
         let std_norm_factor = pool.std_norm_factor()?;
         let token_out_norm_factor = pool
             .get_pool_asset_by_denom(token_out_denom)?
             .normalization_factor();
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+        let alloyed_incentive_pool_balance_before = self
+            .incentive_pool
+            .get_pool_balance(deps.storage, &alloyed_denom)?;
 
         let run_pool = |deps: Deps, pool: TransmuterPool| {
             self.out_amt_given_in(deps, pool, token_in, token_out_denom)
@@ -31,13 +39,26 @@ impl Transmuter {
             token_out_norm_factor,
         );
 
-        let (mut pool, actual_token_out, _adjustment) =
+        let (mut pool, actual_token_out, adjustment) =
             self.rebalancer_pass(deps.branch(), pool, run_pool, rebalancing_adjustment)?;
 
         self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
 
         // save pool
         self.pool.save(deps.storage, &pool)?;
+
+        let alloyed_incentive_pool_balance_after = self
+            .incentive_pool
+            .get_pool_balance(deps.storage, &alloyed_denom)?;
+
+        let response = add_alloyed_balance_correction_message(
+            Response::new(),
+            &adjustment,
+            alloyed_incentive_pool_balance_before,
+            alloyed_incentive_pool_balance_after,
+            &alloyed_denom,
+            env,
+        );
 
         let send_token_out_to_sender_msg = BankMsg::Send {
             to_address: sender.to_string(),
@@ -48,7 +69,7 @@ impl Transmuter {
             token_out_amount: actual_token_out.amount,
         };
 
-        Ok(Response::new()
+        Ok(response
             .add_message(send_token_out_to_sender_msg)
             .set_data(to_json_binary(&swap_result)?))
     }
@@ -66,7 +87,11 @@ mod tests {
             SwapExactAmountOutResponseData,
         },
     };
-    use cosmwasm_std::{coin, from_json, testing::mock_dependencies, Coins, Decimal};
+    use cosmwasm_std::{
+        coin, from_json,
+        testing::{mock_dependencies, mock_env},
+        Coins, Decimal,
+    };
     use itertools::Itertools;
     use rstest::rstest;
     use std::collections::BTreeMap;
@@ -164,6 +189,7 @@ mod tests {
             token_out_min_amount.into(),
             sender,
             deps.as_mut(),
+            &mock_env(),
         );
 
         assert_eq!(res, expected_res);
@@ -221,6 +247,7 @@ mod tests {
                 1000000000000u128.into(),
                 deps.api.addr_make("sender"),
                 deps.as_mut(),
+                &mock_env(),
             )
             .unwrap();
 
@@ -276,6 +303,7 @@ mod tests {
             token_out_amount + Uint128::from(1u128),
             sender.clone(),
             deps.as_mut(),
+            &mock_env(),
         );
 
         assert_eq!(
@@ -292,6 +320,7 @@ mod tests {
             token_out_amount,
             sender.clone(),
             deps.as_mut(),
+            &mock_env(),
         );
 
         let pool = transmuter.pool.load(&deps.storage).unwrap();
@@ -334,6 +363,7 @@ mod tests {
             token_in,
             sender.clone(),
             deps.as_mut(),
+            &mock_env(),
         );
 
         let data: SwapExactAmountOutResponseData = from_json(&res.unwrap().data.unwrap()).unwrap();

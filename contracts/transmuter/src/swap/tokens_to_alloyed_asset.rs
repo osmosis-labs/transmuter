@@ -1,10 +1,11 @@
 use cosmwasm_std::{coin, ensure, Addr, Coin, Deps, DepsMut, Env, Response, Uint128};
-use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
+use osmosis_std::types::osmosis::tokenfactory::v1beta1::MsgMint;
 
 use crate::{
     alloyed_asset::swap_to_alloyed,
     contract::Transmuter,
     swap::{
+        add_alloyed_balance_correction_message,
         common::{
             set_data_if_sudo, Adjustment, Entrypoint, SwapExactAmountInResponseData,
             SwapExactAmountOutResponseData,
@@ -148,6 +149,19 @@ impl Transmuter {
             },
         )?;
 
+        let alloyed_incentive_pool_balance_after = self
+            .incentive_pool
+            .get_pool_balance(deps.storage, &alloyed_denom)?;
+
+        let response = add_alloyed_balance_correction_message(
+            response,
+            &adjustment,
+            alloyed_incentive_pool_balance_before,
+            alloyed_incentive_pool_balance_after,
+            &alloyed_denom,
+            env,
+        );
+
         let response = match adjustment {
             // fee is deducted from the minting token out, mint directly to the contract as it's already recorded as such in the incentive pool
             Adjustment::DeductFee { fee } => response.add_message(MsgMint {
@@ -156,24 +170,7 @@ impl Transmuter {
                 mint_to_address: env.contract.address.to_string(),
             }),
             // if there is an internal swap and the incetive is in alloyed asset, mint the difference to the contract.
-            Adjustment::Incentivize { .. } => {
-                let incentive_pool_balance_after = self
-                    .incentive_pool
-                    .get_pool_balance(deps.storage, &alloyed_denom)?;
-
-                let diff = incentive_pool_balance_after
-                    .saturating_sub(alloyed_incentive_pool_balance_before);
-
-                if diff > Uint128::zero() {
-                    response.add_message(MsgMint {
-                        sender: env.contract.address.to_string(),
-                        amount: Some(coin(diff.u128(), alloyed_denom).into()),
-                        mint_to_address: env.contract.address.to_string(),
-                    })
-                } else {
-                    response
-                }
-            }
+            Adjustment::Incentivize { .. } => response,
             Adjustment::None => response,
         };
 
@@ -221,24 +218,18 @@ impl Transmuter {
         let (pool, token_in, adjustment) =
             self.rebalancer_pass(deps.branch(), pool, run_pool, rebalancing_adjustment)?;
 
-        let incentive_pool_balance_after = self
+        let alloyed_incentive_pool_balance_after = self
             .incentive_pool
             .get_pool_balance(deps.storage, &alloyed_denom)?;
 
-        let decreased_alloyed =
-            alloyed_incentive_pool_balance_before.saturating_sub(incentive_pool_balance_after);
-
-        let response = if matches!(adjustment, Adjustment::Incentivize { .. })
-            && decreased_alloyed > Uint128::zero()
-        {
-            response.add_message(MsgBurn {
-                sender: env.contract.address.to_string(),
-                amount: Some(coin(decreased_alloyed.u128(), alloyed_denom).into()),
-                burn_from_address: env.contract.address.to_string(),
-            })
-        } else {
-            response
-        };
+        let response = add_alloyed_balance_correction_message(
+            response,
+            &adjustment,
+            alloyed_incentive_pool_balance_before,
+            alloyed_incentive_pool_balance_after,
+            &alloyed_denom,
+            env,
+        );
 
         // Unlike exact in case where token out is alloyed, there is no separate mint target required here
         // Because fee is collected from the token_in
@@ -541,11 +532,18 @@ mod tests {
 
         assert_eq!(
             messages,
-            vec![MsgMint {
-                amount: Some(coin((amount_out_before_fee + fee).u128(), "alloyed").into()),
-                mint_to_address: sender.to_string(),
-                sender: MOCK_CONTRACT_ADDR.to_string(),
-            }]
+            vec![
+                MsgMint {
+                    amount: Some(coin(fee.u128(), "alloyed").into()),
+                    mint_to_address: MOCK_CONTRACT_ADDR.to_string(),
+                    sender: MOCK_CONTRACT_ADDR.to_string(),
+                },
+                MsgMint {
+                    amount: Some(coin((amount_out_before_fee + fee).u128(), "alloyed").into()),
+                    mint_to_address: sender.to_string(),
+                    sender: MOCK_CONTRACT_ADDR.to_string(),
+                }
+            ]
         );
 
         // check pool state

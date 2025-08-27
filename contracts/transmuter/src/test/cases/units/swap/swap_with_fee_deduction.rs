@@ -372,6 +372,180 @@ fn test_swap_exact_amount_out_incentive() {
 }
 
 #[test]
+fn test_swap_exact_amount_in_incentive_with_internal_alloyed_swap() {
+    let app = OsmosisTestApp::new();
+    let t = setup_test_env(&app);
+    let cp = CosmwasmPool::new(&app);
+
+    // ---- setup with only alloyed in the incentive pool ---
+    t.contract
+        .execute(
+            &ExecMsg::JoinPool {},
+            &[
+                coin(10_000_000_000u128, "denom1"),
+                coin(200_000_000_000u128, "denom2"),
+                coin(2_000_000_000_000u128, "denom3"),
+            ],
+            &t.accounts["swapper"],
+        )
+        .unwrap();
+
+    assert_accounting_invariant(&t);
+    // ---- end setup ----
+
+    let mut swapper_balances = get_balances(&t, t.accounts["swapper"].address().to_string());
+    let mut pool_liquidity = get_pool_liquidity(&t);
+    let mut incentive_pool_balances = get_incentive_pool_balances(&t);
+
+    let alloyed_denom = t
+        .contract
+        .query::<GetShareDenomResponse>(&QueryMsg::GetShareDenom {})
+        .unwrap()
+        .share_denom;
+
+    // Execute swap exact amount in: 10,000,000,000 denom1 in, 100,000,000,000 denom2 out with 5,000,000,000 incentive to denom2
+    let token_in = coin(10_000_000_000u128, "denom1");
+    let token_out_without_incentive = coin(100_000_000_000u128, "denom2");
+    let incentive_amount = 5_000_000_000u128;
+    let token_out_with_incentive = coin(
+        token_out_without_incentive.amount.u128() + incentive_amount,
+        token_out_without_incentive.denom.clone(),
+    );
+
+    let result = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["swapper"].address(),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: token_out_with_incentive.denom.clone(),
+                }],
+                token_in: Some(token_in.clone().into()),
+                token_out_min_amount: token_out_with_incentive.amount.to_string(),
+            },
+            &t.accounts["swapper"],
+        )
+        .unwrap();
+
+    // assert swapper balances changes
+    swapper_balances.sub(get_tx_fee(&result)).unwrap();
+    swapper_balances.sub(token_in.clone()).unwrap();
+    swapper_balances
+        .add(token_out_with_incentive.clone())
+        .unwrap();
+    assert_eq!(
+        swapper_balances,
+        get_balances(&t, t.accounts["swapper"].address().to_string())
+    );
+
+    // assert pool liquidity changes
+    pool_liquidity.add(token_in.clone()).unwrap();
+    pool_liquidity
+        .sub(token_out_without_incentive.clone())
+        .unwrap();
+
+    // Internal swap: convert alloyed asset to denom2 for incentive
+    let internal_alloyed_in = coin(incentive_amount * 10, &alloyed_denom);
+    let internal_token_out = coin(incentive_amount, "denom2");
+
+    pool_liquidity.sub(internal_token_out.clone()).unwrap();
+    assert_eq!(pool_liquidity, get_pool_liquidity(&t));
+
+    // assert incentive pool changes
+    incentive_pool_balances.sub(internal_alloyed_in).unwrap();
+    assert_eq!(incentive_pool_balances, get_incentive_pool_balances(&t));
+
+    assert_accounting_invariant(&t);
+}
+
+#[test]
+fn test_swap_exact_amount_out_incentive_with_internal_alloyed_swap() {
+    let app = OsmosisTestApp::new();
+    let t = setup_test_env(&app);
+    let cp = CosmwasmPool::new(&app);
+
+    // ---- setup with only alloyed in the incentive pool ---
+    t.contract
+        .execute(
+            &ExecMsg::JoinPool {},
+            &[
+                coin(10_000_000_000u128, "denom1"),
+                coin(200_000_000_000u128, "denom2"),
+                coin(2_000_000_000_000u128, "denom3"),
+            ],
+            &t.accounts["swapper"],
+        )
+        .unwrap();
+
+    assert_accounting_invariant(&t);
+    // ---- end setup ----
+
+    let mut swapper_balances = get_balances(&t, t.accounts["swapper"].address().to_string());
+    let mut pool_liquidity = get_pool_liquidity(&t);
+    let mut incentive_pool_balances = get_incentive_pool_balances(&t);
+
+    let alloyed_denom = t
+        .contract
+        .query::<GetShareDenomResponse>(&QueryMsg::GetShareDenom {})
+        .unwrap()
+        .share_denom;
+
+    // Execute swap exact amount out: 100,000,000,000 denom2 out, with 5,000,000,000 incentive deducted from denom1 in
+    let token_out = coin(100_000_000_000u128, "denom2");
+    let token_in_without_incentive = coin(10_000_000_000u128, "denom1");
+    let incentive_amount = 500_000_000u128;
+    let token_in_with_incentive_deduction = coin(
+        token_in_without_incentive.amount.u128() - incentive_amount,
+        token_in_without_incentive.denom.clone(),
+    );
+
+    let result = cp
+        .swap_exact_amount_out(
+            MsgSwapExactAmountOut {
+                sender: t.accounts["swapper"].address(),
+                routes: vec![SwapAmountOutRoute {
+                    pool_id: t.contract.pool_id,
+                    token_in_denom: token_in_with_incentive_deduction.denom.clone(),
+                }],
+                token_out: Some(token_out.clone().into()),
+                token_in_max_amount: token_in_with_incentive_deduction.amount.to_string(),
+            },
+            &t.accounts["swapper"],
+        )
+        .unwrap();
+
+    // assert swapper balances changes
+    swapper_balances.sub(get_tx_fee(&result)).unwrap();
+    swapper_balances
+        .sub(token_in_with_incentive_deduction.clone())
+        .unwrap();
+    swapper_balances.add(token_out.clone()).unwrap();
+    assert_eq!(
+        swapper_balances,
+        get_balances(&t, t.accounts["swapper"].address().to_string())
+    );
+
+    // assert pool liquidity changes
+    pool_liquidity
+        .add(token_in_without_incentive.clone())
+        .unwrap();
+    pool_liquidity.sub(token_out.clone()).unwrap();
+
+    // Internal swap: convert alloyed asset to denom1 for incentive
+    let internal_alloyed_in = coin(incentive_amount * 100, &alloyed_denom);
+    let internal_token_out = coin(incentive_amount, "denom1");
+
+    pool_liquidity.sub(internal_token_out.clone()).unwrap();
+    assert_eq!(pool_liquidity, get_pool_liquidity(&t));
+
+    // assert incentive pool changes
+    incentive_pool_balances.sub(internal_alloyed_in).unwrap();
+    assert_eq!(incentive_pool_balances, get_incentive_pool_balances(&t));
+
+    assert_accounting_invariant(&t);
+}
+
+#[test]
 fn test_swap_tokens_to_alloyed_asset_exact_in_with_fee_deduction() {
     let app = OsmosisTestApp::new();
     let t = setup_test_env(&app);
