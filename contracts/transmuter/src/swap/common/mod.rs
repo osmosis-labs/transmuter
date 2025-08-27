@@ -6,6 +6,7 @@ mod response_data;
 pub mod test_utils;
 
 use osmosis_std::types::osmosis::tokenfactory::v1beta1::{MsgBurn, MsgMint};
+pub use rebalancer_pass::*;
 pub use rebalancing_adjustment::*;
 pub use response_data::*;
 

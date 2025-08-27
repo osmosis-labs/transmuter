@@ -1,5 +1,11 @@
 use crate::{
-    corruptable::Corruptable, incentive_pool::IncentivePool, rebalancer::Rebalancer, scope::Scope,
+    corruptable::Corruptable,
+    incentive_pool::IncentivePool,
+    rebalancer::Rebalancer,
+    scope::Scope,
+    swap::{
+        rebalancing_adjustment_for_exact_in, rebalancing_adjustment_for_exact_out, DepsVariant,
+    },
 };
 use std::{collections::BTreeMap, iter};
 
@@ -773,7 +779,25 @@ impl Transmuter {
     ) -> Result<CalcOutAmtGivenInResponse, ContractError> {
         self.ensure_valid_swap_fee(swap_fee)?;
         let pool = self.pool.load(deps.storage)?;
-        let (_pool, token_out) = self.out_amt_given_in(deps, pool, token_in, &token_out_denom)?;
+        let std_norm_factor = pool.std_norm_factor()?;
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+        let token_out_norm_factor = if token_out_denom == alloyed_denom {
+            self.alloyed_asset.get_normalization_factor(deps.storage)?
+        } else {
+            pool.get_pool_asset_by_denom(&token_out_denom)?
+                .normalization_factor()
+        };
+
+        let (_, token_out, _) = self.rebalancer_pass(
+            DepsVariant::Deps(deps),
+            pool,
+            |deps, pool| self.out_amt_given_in(deps, pool, token_in.clone(), &token_out_denom),
+            rebalancing_adjustment_for_exact_in(
+                Uint128::zero(),
+                std_norm_factor,
+                token_out_norm_factor,
+            ),
+        )?;
 
         Ok(CalcOutAmtGivenInResponse { token_out })
     }
@@ -788,7 +812,25 @@ impl Transmuter {
     ) -> Result<CalcInAmtGivenOutResponse, ContractError> {
         self.ensure_valid_swap_fee(swap_fee)?;
         let pool = self.pool.load(deps.storage)?;
-        let (_pool, token_in) = self.in_amt_given_out(deps, pool, token_out, token_in_denom)?;
+        let std_norm_factor = pool.std_norm_factor()?;
+        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
+        let token_in_norm_factor = if token_in_denom == alloyed_denom {
+            self.alloyed_asset.get_normalization_factor(deps.storage)?
+        } else {
+            pool.get_pool_asset_by_denom(&token_in_denom)?
+                .normalization_factor()
+        };
+
+        let (_, token_in, _) = self.rebalancer_pass(
+            DepsVariant::Deps(deps),
+            pool,
+            |deps, pool| self.in_amt_given_out(deps, pool, token_out, token_in_denom),
+            rebalancing_adjustment_for_exact_out(
+                Uint128::MAX,
+                std_norm_factor,
+                token_in_norm_factor,
+            ),
+        )?;
 
         Ok(CalcInAmtGivenOutResponse { token_in })
     }

@@ -7,12 +7,18 @@ use crate::{
     ContractError,
 };
 use cosmwasm_std::{
-    coin, ensure, Coin, Decimal, Deps, DepsMut, Int256, SignedDecimal256, Uint128, Uint256,
+    coin, ensure, Coin, CustomQuery, Decimal, Deps, DepsMut, Empty, Int256, SignedDecimal256,
+    Uint128, Uint256,
 };
 use std::{cmp::Ordering, collections::BTreeMap};
 use transmuter_math::rebalancing::{
     compute_total_effective_adjustment_rate, config::RebalancingConfig, round_adjustment,
 };
+
+pub enum DepsVariant<'a, C: CustomQuery = Empty> {
+    Deps(Deps<'a, C>),
+    DepsMut(DepsMut<'a, C>),
+}
 
 impl Transmuter {
     /// Executes core rebalancing logic that applies rebalancing adjustments to a pool operation and check limits.
@@ -26,7 +32,7 @@ impl Transmuter {
     /// - Checks limits
     pub fn rebalancer_pass<RunPool, RebalancingAdjustment>(
         &self,
-        deps: DepsMut,
+        deps: DepsVariant,
         pool: TransmuterPool,
         run_pool: RunPool,
         rebalancing_adjustment: RebalancingAdjustment,
@@ -35,8 +41,12 @@ impl Transmuter {
         RunPool: FnOnce(Deps, TransmuterPool) -> Result<(TransmuterPool, Coin), ContractError>,
         RebalancingAdjustment: Fn(Coin, Int256) -> Result<(Coin, Adjustment), ContractError>,
     {
+        let deps_ref = match &deps {
+            DepsVariant::Deps(d) => d.clone(),
+            DepsVariant::DepsMut(d) => d.as_ref(),
+        };
         let (first_order_pool, first_order_output, first_order_total_adjustment_value) =
-            self.run_pool_and_compute_adjustment_value(deps.as_ref(), pool, run_pool)?;
+            self.run_pool_and_compute_adjustment_value(deps_ref, pool, run_pool)?;
 
         // Apply adjustment effect on the swap output and return the adjustment information
         let (first_order_adjusted_output, first_order_adjustment) = rebalancing_adjustment(
@@ -55,7 +65,9 @@ impl Transmuter {
                 rebalancing_adjustment,
             ),
             Adjustment::DeductFee { ref fee } => {
-                self.incentive_pool.add_tokens(deps.storage, &fee)?;
+                if let DepsVariant::DepsMut(deps) = deps {
+                    self.incentive_pool.add_tokens(deps.storage, &fee)?;
+                }
                 Ok((
                     first_order_pool,
                     first_order_adjusted_output,
@@ -80,7 +92,7 @@ impl Transmuter {
     /// This function handles the internal incentive swap and returns the updated pool, output and adjustment.
     fn incentivize<RebalancingAdjustment>(
         &self,
-        deps: DepsMut,
+        deps: DepsVariant,
         first_order_incentive: Coin,
         first_order_pool: TransmuterPool,
         first_order_output: Coin,
@@ -92,9 +104,14 @@ impl Transmuter {
         RebalancingAdjustment: Fn(Coin, Int256) -> Result<(Coin, Adjustment), ContractError>,
     {
         // check if incentive pool has enough balance for the incentive
-        let incentive_denom_balance = self
-            .incentive_pool
-            .get_pool_balance(deps.storage, &first_order_incentive.denom)?;
+        let incentive_denom_balance = match &deps {
+            DepsVariant::Deps(d) => self
+                .incentive_pool
+                .get_pool_balance(d.storage, &first_order_incentive.denom)?,
+            DepsVariant::DepsMut(d) => self
+                .incentive_pool
+                .get_pool_balance(d.storage, &first_order_incentive.denom)?,
+        };
 
         // if not enought, proceed with internal incentive swap
         if incentive_denom_balance < first_order_incentive.amount {
@@ -109,8 +126,10 @@ impl Transmuter {
                 rebalancing_adjustment,
             )
         } else {
-            self.incentive_pool
-                .remove_tokens(deps.storage, &first_order_incentive)?;
+            if let DepsVariant::DepsMut(deps) = deps {
+                self.incentive_pool
+                    .remove_tokens(deps.storage, &first_order_incentive)?;
+            }
 
             Ok((
                 first_order_pool,
@@ -149,7 +168,7 @@ impl Transmuter {
     /// or part of subsidized token in in case of exact out.
     fn incentivize_with_internal_incentive_swap<RebalancingAdjustment>(
         &self,
-        deps: DepsMut,
+        deps: DepsVariant,
         first_order_incentive: Coin,
         first_order_pool: TransmuterPool,
         first_order_output: Coin,
@@ -169,9 +188,16 @@ impl Transmuter {
             first_order_incentive.denom.clone(),
         );
         let std_norm_factor = first_order_pool.std_norm_factor()?;
-        let alloyed_denom = self.alloyed_asset.get_alloyed_denom(deps.storage)?;
-        let alloyed_normalization_factor =
-            self.alloyed_asset.get_normalization_factor(deps.storage)?;
+        let (alloyed_denom, alloyed_normalization_factor) = match &deps {
+            DepsVariant::Deps(d) => (
+                self.alloyed_asset.get_alloyed_denom(d.storage)?,
+                self.alloyed_asset.get_normalization_factor(d.storage)?,
+            ),
+            DepsVariant::DepsMut(d) => (
+                self.alloyed_asset.get_alloyed_denom(d.storage)?,
+                self.alloyed_asset.get_normalization_factor(d.storage)?,
+            ),
+        };
         let swappable_asset_norm_factors = first_order_pool
             .pool_assets
             .iter()
@@ -181,9 +207,11 @@ impl Transmuter {
 
         // use token that has highest balance as substitute token to perform internal incentive swap to
         // get additional incentive token needed
-        let Some(substitute_token_denom) = self
-            .incentive_pool
-            .get_all_pool_balances(deps.storage)?
+        let pool_balances = match &deps {
+            DepsVariant::Deps(d) => self.incentive_pool.get_all_pool_balances(d.storage)?,
+            DepsVariant::DepsMut(d) => self.incentive_pool.get_all_pool_balances(d.storage)?,
+        };
+        let Some(substitute_token_denom) = pool_balances
             .iter()
             .max_by_key(|c| {
                 if let Some(normalization_factor) =
@@ -207,9 +235,13 @@ impl Transmuter {
         };
 
         // perform internal incentive swap
+        let deps_ref = match &deps {
+            DepsVariant::Deps(d) => d.clone(),
+            DepsVariant::DepsMut(d) => d.as_ref(),
+        };
         let Ok((second_order_pool, substitute_token, second_order_total_adjustment_value)) = self
             .internal_incentive_swap(
-                deps.as_ref(),
+                deps_ref,
                 first_order_pool.clone(),
                 additional_incentive_token_needed,
                 substitute_token_denom,
@@ -228,8 +260,10 @@ impl Transmuter {
                 // remove substitute token from incentive pool, as this is essentially what got swapped as token in
                 // and the swap result is the incentive pay out which will not be add to incentive pool here since it will
                 // be paid out right away.
-                self.incentive_pool
-                    .remove_tokens(deps.storage, &substitute_token)?;
+                if let DepsVariant::DepsMut(deps) = deps {
+                    self.incentive_pool
+                        .remove_tokens(deps.storage, &substitute_token)?;
+                }
 
                 Ok((
                     second_order_pool,
@@ -254,18 +288,20 @@ impl Transmuter {
                     updated_total_adjustment_value,
                 )?;
 
-                // remove token in for internal swap
-                self.incentive_pool
-                    .remove_tokens(deps.storage, &substitute_token)?;
-
-                // add token out for internal swap
-                self.incentive_pool
-                    .add_tokens(deps.storage, &first_order_incentive)?;
-
-                // remove the actual incentive pay out
-                if let Adjustment::Incentivize { ref incentive } = second_order_adjustment {
+                if let DepsVariant::DepsMut(deps) = deps {
+                    // remove token in for internal swap
                     self.incentive_pool
-                        .remove_tokens(deps.storage, &incentive)?;
+                        .remove_tokens(deps.storage, &substitute_token)?;
+
+                    // add token out for internal swap
+                    self.incentive_pool
+                        .add_tokens(deps.storage, &first_order_incentive)?;
+
+                    // remove the actual incentive pay out
+                    if let Adjustment::Incentivize { ref incentive } = second_order_adjustment {
+                        self.incentive_pool
+                            .remove_tokens(deps.storage, &incentive)?;
+                    }
                 }
 
                 Ok((
@@ -705,7 +741,7 @@ mod tests {
 
         let (pool, output, adjustment) = transmuter
             .rebalancer_pass(
-                deps.as_mut(),
+                DepsVariant::DepsMut(deps.as_mut()),
                 pool.clone(),
                 run_pool,
                 rebalancing_adjustment,
@@ -933,7 +969,7 @@ mod tests {
 
         let (pool, output, adjustment) = transmuter
             .rebalancer_pass(
-                deps.as_mut(),
+                DepsVariant::DepsMut(deps.as_mut()),
                 pool.clone(),
                 run_pool,
                 rebalancing_adjustment,
@@ -1162,7 +1198,7 @@ mod tests {
 
         let (pool, output, adjustment) = transmuter
             .rebalancer_pass(
-                deps.as_mut(),
+                DepsVariant::DepsMut(deps.as_mut()),
                 pool.clone(),
                 run_pool,
                 rebalancing_adjustment,

@@ -12,7 +12,8 @@ use crate::{
     asset::AssetConfig,
     contract::{
         sv::{ExecMsg, QueryMsg},
-        GetIncentivePoolBalancesResponse, GetShareDenomResponse, GetTotalPoolLiquidityResponse,
+        CalcInAmtGivenOutResponse, CalcOutAmtGivenInResponse, GetIncentivePoolBalancesResponse,
+        GetShareDenomResponse, GetTotalPoolLiquidityResponse,
     },
     scope::Scope,
     test::test_env::TestEnvBuilder,
@@ -67,6 +68,17 @@ fn test_swap_exact_amount_out_with_fee_deduction() {
 
     // Should fail due to excessive token in required
     assert!(err.to_string().contains("Excessive token in required"));
+
+    // test query
+    let res = t
+        .contract
+        .query::<CalcInAmtGivenOutResponse>(&QueryMsg::CalcInAmtGivenOut {
+            token_out: token_out.clone().into(),
+            token_in_denom: token_in_with_fee.denom.clone(),
+            swap_fee: Decimal::zero(),
+        })
+        .unwrap();
+    assert_eq!(res.token_in, token_in_with_fee.clone());
 
     // Test with sufficient max amount (should succeed)
     let result = cp
@@ -153,6 +165,17 @@ fn test_swap_exact_amount_in_incentive() {
         token_out_without_incentive.denom.clone(),
     );
 
+    // test query
+    let res = t
+        .contract
+        .query::<CalcOutAmtGivenInResponse>(&QueryMsg::CalcOutAmtGivenIn {
+            token_in: token_in.clone().into(),
+            token_out_denom: token_out_with_incentive.denom.clone(),
+            swap_fee: Decimal::zero(),
+        })
+        .unwrap();
+    assert_eq!(res.token_out, token_out_with_incentive.clone());
+
     let result = cp
         .swap_exact_amount_in(
             MsgSwapExactAmountIn {
@@ -237,6 +260,17 @@ fn test_swap_exact_amount_in_with_fee_deduction() {
 
     // Should fail due to insufficient token out
     assert!(err.to_string().contains("Insufficient token out"));
+
+    // test query
+    let res = t
+        .contract
+        .query::<CalcOutAmtGivenInResponse>(&QueryMsg::CalcOutAmtGivenIn {
+            token_in: token_in.clone().into(),
+            token_out_denom: token_out_before_fee.denom.clone(),
+            swap_fee: Decimal::zero(),
+        })
+        .unwrap();
+    assert_eq!(res.token_out, token_out_after_fee.clone());
 
     // Test with appropriate min amount (should succeed)
     let result = cp
@@ -325,6 +359,17 @@ fn test_swap_exact_amount_out_incentive() {
     let mut pool_liquidity = get_pool_liquidity(&t);
     let mut incentive_pool_balances = get_incentive_pool_balances(&t);
 
+    // test query
+    let res = t
+        .contract
+        .query::<CalcInAmtGivenOutResponse>(&QueryMsg::CalcInAmtGivenOut {
+            token_out: token_out.clone().into(),
+            token_in_denom: token_in_after_incentive_rebate.denom.clone(),
+            swap_fee: Decimal::zero(),
+        })
+        .unwrap();
+    assert_eq!(res.token_in, token_in_after_incentive_rebate.clone());
+
     let result = cp
         .swap_exact_amount_out(
             MsgSwapExactAmountOut {
@@ -412,6 +457,17 @@ fn test_swap_exact_amount_in_incentive_with_internal_alloyed_swap() {
         token_out_without_incentive.denom.clone(),
     );
 
+    // test query
+    let res = t
+        .contract
+        .query::<CalcOutAmtGivenInResponse>(&QueryMsg::CalcOutAmtGivenIn {
+            token_in: token_in.clone().into(),
+            token_out_denom: token_out_with_incentive.denom.clone(),
+            swap_fee: Decimal::zero(),
+        })
+        .unwrap();
+    assert_eq!(res.token_out, token_out_with_incentive.clone());
+
     let result = cp
         .swap_exact_amount_in(
             MsgSwapExactAmountIn {
@@ -498,6 +554,17 @@ fn test_swap_exact_amount_out_incentive_with_internal_alloyed_swap() {
         token_in_without_incentive.amount.u128() - incentive_amount,
         token_in_without_incentive.denom.clone(),
     );
+
+    // test query
+    let res = t
+        .contract
+        .query::<CalcInAmtGivenOutResponse>(&QueryMsg::CalcInAmtGivenOut {
+            token_out: token_out.clone().into(),
+            token_in_denom: token_in_with_incentive_deduction.denom.clone(),
+            swap_fee: Decimal::zero(),
+        })
+        .unwrap();
+    assert_eq!(res.token_in, token_in_with_incentive_deduction.clone());
 
     let result = cp
         .swap_exact_amount_out(
@@ -658,6 +725,17 @@ fn test_swap_tokens_to_alloyed_asset_exact_in_incentive() {
     let incentive = 95_000_000_000u128;
     let token_out = coin(amount_out + incentive, alloyed_denom.clone());
 
+    // test query
+    let res = t
+        .contract
+        .query::<CalcOutAmtGivenInResponse>(&QueryMsg::CalcOutAmtGivenIn {
+            token_in: token_in.clone().into(),
+            token_out_denom: token_out.denom.clone(),
+            swap_fee: Decimal::zero(),
+        })
+        .unwrap();
+    assert_eq!(res.token_out, token_out.clone());
+
     let result = cp
         .swap_exact_amount_in(
             MsgSwapExactAmountIn {
@@ -730,6 +808,17 @@ fn test_swap_tokens_to_alloyed_asset_exact_out_with_fee_deduction() {
         )
         .unwrap_err();
     assert!(err.to_string().contains("Excessive token in required"));
+
+    // test query
+    let res = t
+        .contract
+        .query::<CalcInAmtGivenOutResponse>(&QueryMsg::CalcInAmtGivenOut {
+            token_out: coin(token_out_amount.u128(), &share_denom).into(),
+            token_in_denom: "denom1".to_string(),
+            swap_fee: Decimal::zero(),
+        })
+        .unwrap();
+    assert_eq!(res.token_in, coin(token_in_amount.u128(), "denom1"));
 
     // Try with correct max in (should succeed)
     let result = cp
@@ -819,6 +908,17 @@ fn test_swap_tokens_to_alloyed_asset_exact_out_incentive() {
     let amount_in = amount_in_before_incentive_rebate - incentive;
     let max_token_in = coin(amount_in, "denom1"); // Set a reasonable max
 
+    // test query
+    let res = t
+        .contract
+        .query::<CalcInAmtGivenOutResponse>(&QueryMsg::CalcInAmtGivenOut {
+            token_out: token_out.clone().into(),
+            token_in_denom: "denom1".to_string(),
+            swap_fee: Decimal::zero(),
+        })
+        .unwrap();
+    assert_eq!(res.token_in, max_token_in.clone());
+
     let result = cp
         .swap_exact_amount_out(
             MsgSwapExactAmountOut {
@@ -901,6 +1001,17 @@ fn test_swap_alloyed_asset_to_tokens_exact_in_with_fee_deduction() {
         .unwrap_err();
 
     assert!(err.to_string().contains("Insufficient token out"));
+
+    // test query
+    let res = t
+        .contract
+        .query::<CalcOutAmtGivenInResponse>(&QueryMsg::CalcOutAmtGivenIn {
+            token_in: coin(token_in_amount.u128(), &share_denom).into(),
+            token_out_denom: "denom1".to_string(),
+            swap_fee: Decimal::zero(),
+        })
+        .unwrap();
+    assert_eq!(res.token_out, coin(token_out_amount.u128(), "denom1"));
 
     // Try with correct min out (should succeed)
     let result = cp
@@ -990,6 +1101,17 @@ fn test_swap_alloyed_asset_to_tokens_exact_in_incentive() {
 
     let token_out = coin(amount_out + incentive, "denom1");
     let token_in = coin(4_875_000_000_000u128, &alloy_denom);
+
+    // test query
+    let res = t
+        .contract
+        .query::<CalcOutAmtGivenInResponse>(&QueryMsg::CalcOutAmtGivenIn {
+            token_in: token_in.clone().into(),
+            token_out_denom: token_out.denom.clone(),
+            swap_fee: Decimal::zero(),
+        })
+        .unwrap();
+    assert_eq!(res.token_out, token_out.clone());
 
     let result = cp
         .swap_exact_amount_in(

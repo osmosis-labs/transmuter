@@ -7,6 +7,7 @@ use crate::{
     alloyed_asset::swap_from_alloyed,
     contract::Transmuter,
     corruptable::Corruptable as _,
+    swap::common::DepsVariant,
     swap::{
         add_alloyed_balance_correction_message,
         common::{
@@ -160,8 +161,12 @@ impl Transmuter {
                 token_out_norm_factor,
             );
 
-            (pool, token_out, adjustment) =
-                self.rebalancer_pass(deps.branch(), pool, run_pool, rebalancing_adjustment)?;
+            (pool, token_out, adjustment) = self.rebalancer_pass(
+                DepsVariant::DepsMut(deps.branch()),
+                pool,
+                run_pool,
+                rebalancing_adjustment,
+            )?;
         }
 
         let alloyed_incentive_pool_balance_after = self
@@ -233,8 +238,12 @@ impl Transmuter {
                 token_in_norm_factor,
             );
 
-            (pool, token_in, adjustment) =
-                self.rebalancer_pass(deps.branch(), pool, run_pool, rebalancing_adjustment)?;
+            (pool, token_in, adjustment) = self.rebalancer_pass(
+                DepsVariant::DepsMut(deps.branch()),
+                pool,
+                run_pool,
+                rebalancing_adjustment,
+            )?;
         }
 
         let alloyed_incentive_pool_balance_after = self

@@ -4,7 +4,7 @@ use crate::{
     contract::Transmuter,
     swap::{
         add_alloyed_balance_correction_message, common::SwapExactAmountOutResponseData,
-        rebalancing_adjustment_for_exact_out,
+        rebalancing_adjustment_for_exact_out, DepsVariant,
     },
     transmuter_pool::TransmuterPool,
     ContractError,
@@ -41,8 +41,12 @@ impl Transmuter {
             token_in_norm_factor,
         );
 
-        let (mut pool, actual_token_in, adjustment) =
-            self.rebalancer_pass(deps.branch(), pool, run_pool, rebalancing_adjustment)?;
+        let (mut pool, actual_token_in, adjustment) = self.rebalancer_pass(
+            DepsVariant::DepsMut(deps.branch()),
+            pool,
+            run_pool,
+            rebalancing_adjustment,
+        )?;
 
         self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
 
