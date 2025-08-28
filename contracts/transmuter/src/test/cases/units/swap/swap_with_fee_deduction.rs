@@ -1313,11 +1313,359 @@ fn test_swap_alloyed_asset_to_tokens_exact_out_incentive() {
     assert_accounting_invariant(&t);
 }
 
+#[test]
+fn test_swap_alloyed_asset_to_tokens_incentive_with_corrupted_asset() {
+    // ----- setup an unbalanced pool state with incentive pool filled -----
+    let app = OsmosisTestApp::new();
+    let t = setup_test_env(&app);
+    let cp = CosmwasmPool::new(&app);
+
+    let initial_total_alloyed_asset_supply = get_alloyed_supply(&t);
+    let alloy_denom = initial_total_alloyed_asset_supply.denom;
+
+    // Multiple tokens in that will make denom1 55%, denom2 25%
+    let tokens_in = vec![
+        coin(37_500_000_000u128, "denom1"), // 3_750_000_000_000 normalized
+        coin(125_000_000_000u128, "denom2"), // 1_250_000_000_000 normalized
+    ];
+
+    // fee(denom1) = 25_000_000_000_000u128 * (5% * 1%) = 125_000_000_000u128
+    // fee(group1) = 25_000_000_000_000u128 * 0% = 0
+    t.contract
+        .execute(&ExecMsg::JoinPool {}, &tokens_in, &t.accounts["swapper"])
+        .unwrap();
+
+    assert_accounting_invariant(&t);
+    // ----- end setup -----
+
+    // Mark "denom1" as corrupted asset
+    t.contract
+        .execute(
+            &ExecMsg::MarkCorruptedScopes {
+                scopes: vec![Scope::denom("denom1")],
+            },
+            &[],
+            &t.accounts["moderator"],
+        )
+        .unwrap();
+
+    let mut swapper_balances = get_balances(&t, t.accounts["swapper"].address().to_string());
+    let mut pool_liquidity = get_pool_liquidity(&t);
+    let mut incentive_pool_balances = get_incentive_pool_balances(&t);
+
+    let amount_out = 48_750_000_000u128;
+
+    // denom1 amount that actually got swapped from alloyed in the internal swap as first order incentive
+    let incentive_before_correction = 799_689_440u128;
+    let incentive = 709_926_485u128;
+
+    let token_out = coin(amount_out + incentive, "denom1");
+    let token_in = coin(4_875_000_000_000u128, &alloy_denom);
+
+    // test query
+    let res = t
+        .contract
+        .query::<CalcOutAmtGivenInResponse>(&QueryMsg::CalcOutAmtGivenIn {
+            token_in: token_in.clone().into(),
+            token_out_denom: token_out.denom.clone(),
+            swap_fee: Decimal::zero(),
+        })
+        .unwrap();
+    assert_eq!(res.token_out, token_out.clone());
+
+    let result = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["swapper"].address(),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: token_out.denom.clone(),
+                }],
+                token_in: Some(token_in.clone().into()),
+                token_out_min_amount: (amount_out).to_string(),
+            },
+            &t.accounts["swapper"],
+        )
+        .unwrap();
+
+    // assert swapper balances changes
+    swapper_balances.sub(get_tx_fee(&result)).unwrap();
+    swapper_balances.add(token_out.clone()).unwrap();
+    swapper_balances.sub(token_in.clone()).unwrap();
+    assert_eq!(
+        swapper_balances,
+        get_balances(&t, t.accounts["swapper"].address().to_string())
+    );
+
+    // assert pool liquidity changes
+    pool_liquidity
+        .sub(coin(amount_out + incentive_before_correction, "denom1"))
+        .unwrap();
+    assert_eq!(pool_liquidity, get_pool_liquidity(&t));
+
+    // assert incentive pool changes
+    incentive_pool_balances
+        .add(coin(incentive_before_correction - incentive, "denom1"))
+        .unwrap();
+
+    incentive_pool_balances
+        .sub(coin(incentive_before_correction * 100, &alloy_denom))
+        .unwrap();
+    assert_eq!(incentive_pool_balances, get_incentive_pool_balances(&t));
+
+    assert_accounting_invariant(&t);
+
+    // bank send shares from provider to swapper
+    let bank = Bank::new(&app);
+    bank.send(
+        MsgSend {
+            from_address: t.accounts["provider"].address().to_string(),
+            to_address: t.accounts["swapper"].address().to_string(),
+            amount: vec![coin(8_795_031_056_000u128, &alloy_denom).into()],
+        },
+        &t.accounts["provider"],
+    )
+    .unwrap();
+
+    let remaining_denom1 = coin(87_950_310_560u128, "denom1");
+    let remaining_denom1_incentive = coin(89_762_955u128, "denom1");
+    let result = t
+        .contract
+        .execute(
+            &ExecMsg::ExitPool {
+                tokens_out: vec![remaining_denom1.clone()],
+            },
+            &[],
+            &t.accounts["swapper"],
+        )
+        .unwrap();
+
+    // assert swapper balances changes
+    swapper_balances.sub(get_tx_fee(&result)).unwrap();
+    swapper_balances.add(remaining_denom1.clone()).unwrap();
+    swapper_balances
+        .add(remaining_denom1_incentive.clone())
+        .unwrap();
+    assert_eq!(
+        swapper_balances,
+        get_balances(&t, t.accounts["swapper"].address().to_string())
+    );
+
+    // assert pool liquidity changes
+    pool_liquidity.sub(remaining_denom1.clone()).unwrap();
+    assert_eq!(pool_liquidity, get_pool_liquidity(&t));
+
+    // assert incentive pool changes
+    incentive_pool_balances
+        .sub(remaining_denom1_incentive)
+        .unwrap();
+    assert_eq!(incentive_pool_balances, get_incentive_pool_balances(&t));
+}
+
+#[test]
+fn test_swap_non_alloyed_asset_exact_out_incentive_with_corrupted_asset() {
+    // ----- setup an unbalanced pool state with incentive pool filled -----
+    let app = OsmosisTestApp::new();
+    let t = setup_test_env(&app);
+    let cp = CosmwasmPool::new(&app);
+
+    cp.swap_exact_amount_out(
+        MsgSwapExactAmountOut {
+            sender: t.accounts["swapper"].address(),
+            routes: vec![SwapAmountOutRoute {
+                pool_id: t.contract.pool_id,
+                token_in_denom: "denom1".to_string(),
+            }],
+            token_in_max_amount: "100000000000".to_string(),
+            token_out: Some(coin(100_000_000_000, "denom2").into()),
+        },
+        &t.accounts["swapper"],
+    )
+    .unwrap();
+
+    assert_accounting_invariant(&t);
+    // ----- end setup -----
+
+    // Mark "denom1" as corrupted asset
+    t.contract
+        .execute(
+            &ExecMsg::MarkCorruptedScopes {
+                scopes: vec![Scope::denom("denom1")],
+            },
+            &[],
+            &t.accounts["moderator"],
+        )
+        .unwrap();
+
+    // remove group 1 limiter
+    t.contract
+        .execute(
+            &ExecMsg::RemoveRebalancingConfig {
+                scope: Scope::asset_group("group1"),
+            },
+            &[],
+            &t.accounts["admin"],
+        )
+        .unwrap();
+
+    let mut swapper_balances = get_balances(&t, t.accounts["swapper"].address().to_string());
+    let mut pool_liquidity = get_pool_liquidity(&t);
+    let mut incentive_pool_balances = get_incentive_pool_balances(&t);
+
+    let result = cp
+        .swap_exact_amount_out(
+            MsgSwapExactAmountOut {
+                sender: t.accounts["swapper"].address(),
+                routes: vec![SwapAmountOutRoute {
+                    pool_id: t.contract.pool_id,
+                    token_in_denom: "denom3".to_string(),
+                }],
+                token_in_max_amount: "12400000000000".to_string(),
+                token_out: Some(coin(110_000_000_000, "denom1").into()),
+            },
+            &t.accounts["swapper"],
+        )
+        .unwrap();
+
+    // the swap above incur fee, but it drains the corrupted asset so it gets all the incentive remaining as that drained corrupted denom
+    let incentive_to_cleanup = coin(15_000_000_000, "denom1");
+    let fee = coin(1_400_000_000_000, "denom3");
+
+    swapper_balances.sub(get_tx_fee(&result)).unwrap();
+    swapper_balances
+        .add(coin(96_000_000_000, "denom1"))
+        .unwrap();
+    swapper_balances.add(incentive_to_cleanup).unwrap();
+    swapper_balances
+        .sub(coin(11_000_000_000_000, "denom3"))
+        .unwrap();
+    swapper_balances.sub(fee.clone()).unwrap();
+    assert_eq!(
+        swapper_balances,
+        get_balances(&t, t.accounts["swapper"].address().to_string())
+    );
+
+    // assert pool liquidity
+    pool_liquidity.sub(coin(110_000_000_000, "denom1")).unwrap();
+    pool_liquidity
+        .add(coin(11_000_000_000_000, "denom3"))
+        .unwrap();
+    assert_eq!(pool_liquidity, get_pool_liquidity(&t));
+
+    // assert incentive pool
+    incentive_pool_balances
+        .sub(coin(1_000_000_000, "denom1"))
+        .unwrap();
+    incentive_pool_balances.add(fee).unwrap();
+    assert_eq!(incentive_pool_balances, get_incentive_pool_balances(&t));
+
+    assert_accounting_invariant(&t);
+}
+
+#[test]
+fn test_swap_non_alloyed_asset_exact_in_incentive_with_corrupted_asset() {
+    // ----- setup an unbalanced pool state with incentive pool filled -----
+    let app = OsmosisTestApp::new();
+    let t = setup_test_env(&app);
+    let cp = CosmwasmPool::new(&app);
+
+    cp.swap_exact_amount_out(
+        MsgSwapExactAmountOut {
+            sender: t.accounts["swapper"].address(),
+            routes: vec![SwapAmountOutRoute {
+                pool_id: t.contract.pool_id,
+                token_in_denom: "denom1".to_string(),
+            }],
+            token_in_max_amount: "100000000000".to_string(),
+            token_out: Some(coin(100_000_000_000, "denom2").into()),
+        },
+        &t.accounts["swapper"],
+    )
+    .unwrap();
+
+    assert_accounting_invariant(&t);
+    // ----- end setup -----
+
+    // Mark "denom1" as corrupted asset
+    t.contract
+        .execute(
+            &ExecMsg::MarkCorruptedScopes {
+                scopes: vec![Scope::denom("denom1")],
+            },
+            &[],
+            &t.accounts["moderator"],
+        )
+        .unwrap();
+
+    // remove group 1 limiter
+    t.contract
+        .execute(
+            &ExecMsg::RemoveRebalancingConfig {
+                scope: Scope::asset_group("group1"),
+            },
+            &[],
+            &t.accounts["admin"],
+        )
+        .unwrap();
+
+    let mut swapper_balances = get_balances(&t, t.accounts["swapper"].address().to_string());
+    let mut pool_liquidity = get_pool_liquidity(&t);
+    let mut incentive_pool_balances = get_incentive_pool_balances(&t);
+
+    let result = cp
+        .swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: t.accounts["swapper"].address(),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: t.contract.pool_id,
+                    token_out_denom: "denom1".to_string(),
+                }],
+                token_in: Some(coin(11_000_000_000_000, "denom3").into()),
+                token_out_min_amount: "96000000000".to_string(),
+            },
+            &t.accounts["swapper"],
+        )
+        .unwrap();
+
+    // the swap above incur fee, but it drains the corrupted asset so it gets all the incentive remaining as that drained corrupted denom
+    let incentive_to_cleanup = coin(15_000_000_000, "denom1");
+
+    swapper_balances.sub(get_tx_fee(&result)).unwrap();
+    swapper_balances
+        .add(coin(96_000_000_000, "denom1"))
+        .unwrap();
+    swapper_balances.add(incentive_to_cleanup).unwrap();
+    swapper_balances
+        .sub(coin(11_000_000_000_000, "denom3"))
+        .unwrap();
+    assert_eq!(
+        swapper_balances,
+        get_balances(&t, t.accounts["swapper"].address().to_string())
+    );
+
+    // assert pool liquidity
+    pool_liquidity.sub(coin(110_000_000_000, "denom1")).unwrap();
+    pool_liquidity
+        .add(coin(11_000_000_000_000, "denom3"))
+        .unwrap();
+    assert_eq!(pool_liquidity, get_pool_liquidity(&t));
+
+    // assert incentive pool
+    incentive_pool_balances
+        .sub(coin(1_000_000_000, "denom1"))
+        .unwrap();
+    assert_eq!(incentive_pool_balances, get_incentive_pool_balances(&t));
+
+    assert_accounting_invariant(&t);
+}
+
 fn setup_test_env<'a>(app: &'a OsmosisTestApp) -> TestEnv<'a> {
     let admin = app.init_account(&[coin(100_000u128, "uosmo")]).unwrap();
+    let moderator = app.init_account(&[coin(100_000u128, "uosmo")]).unwrap();
 
     let t = TestEnvBuilder::new()
         .with_account("admin", vec![])
+        .with_account("moderator", vec![])
         .with_account(
             "swapper",
             vec![
@@ -1352,7 +1700,7 @@ fn setup_test_env<'a>(app: &'a OsmosisTestApp) -> TestEnv<'a> {
             alloyed_asset_subdenom: "usd".to_string(),
             alloyed_asset_normalization_factor: Uint128::new(100),
             admin: Some(admin.address()),
-            moderator: "osmo1cyyzpxplxdzkeea7kwsydadg87357qnahakaks".to_string(),
+            moderator: moderator.address(),
         })
         .build(&app);
 

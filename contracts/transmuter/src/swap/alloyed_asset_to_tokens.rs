@@ -89,7 +89,19 @@ impl Transmuter {
             ContractError::ZeroValueOperation {}
         );
 
-        self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
+        let corrupted_incentive_to_cleanup =
+            self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
+
+        // send all remaining corrupted incentives to cleanup to sender
+        let response = if !corrupted_incentive_to_cleanup.is_empty() {
+            response.add_message(BankMsg::Send {
+                to_address: sender.to_string(),
+                amount: corrupted_incentive_to_cleanup,
+            })
+        } else {
+            response
+        };
+
         self.pool.save(deps.storage, &pool)?;
 
         // We need to burn alloyed asset, which is token in, as it is essentially exiting pool and burn LP token.

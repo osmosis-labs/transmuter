@@ -124,6 +124,10 @@ impl TestEnvBuilder {
         let instantiate_msg = self.instantiate_msg.expect("instantiate msg not set");
         let instantiate_msg = InstantiateMsg {
             admin: accounts.get("admin").map(|admin| admin.address()),
+            moderator: accounts
+                .get("moderator")
+                .map(|admin| admin.address())
+                .unwrap_or_else(|| instantiate_msg.moderator),
             ..instantiate_msg
         };
 

@@ -48,7 +48,19 @@ impl Transmuter {
             rebalancing_adjustment,
         )?;
 
-        self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
+        let corrupted_incentive_to_cleanup =
+            self.clean_up_drained_corrupted_assets(deps.storage, &mut pool)?;
+
+        // send all remaining corrupted incentives to cleanup to sender
+        let response = Response::new();
+        let response = if !corrupted_incentive_to_cleanup.is_empty() {
+            response.add_message(BankMsg::Send {
+                to_address: sender.to_string(),
+                amount: corrupted_incentive_to_cleanup,
+            })
+        } else {
+            response
+        };
 
         // save pool
         self.pool.save(deps.storage, &pool)?;
@@ -58,7 +70,7 @@ impl Transmuter {
             .get_pool_balance(deps.storage, &alloyed_denom)?;
 
         let response = add_alloyed_balance_correction_message(
-            Response::new(),
+            response,
             &adjustment,
             alloyed_incentive_pool_balance_before,
             alloyed_incentive_pool_balance_after,

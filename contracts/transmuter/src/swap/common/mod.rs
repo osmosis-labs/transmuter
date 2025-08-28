@@ -216,18 +216,37 @@ impl Transmuter {
     }
 
     /// remove corrupted assets from the pool & remove all rebalancing configs for that denom
-    /// when each corrupted asset is all redeemed
+    /// when each corrupted asset is all redeemed.
+    ///
+    /// If there's remaining incentive after removing the asset, add it to the incentives to clean up.
+    /// It will be all sent to the sender who triggers the cleanup.
     pub fn clean_up_drained_corrupted_assets(
         &self,
         storage: &mut dyn Storage,
         pool: &mut TransmuterPool,
-    ) -> Result<(), ContractError> {
+    ) -> Result<Vec<Coin>, ContractError> {
         // remove corrupted assets
+
+        let mut incentives_to_clean_up: Vec<Coin> = vec![];
         for corrupted in pool.clone().corrupted_assets() {
             if corrupted.amount().is_zero() {
                 pool.remove_asset(corrupted.denom())?;
                 self.rebalancer
                     .unchecked_remove_config(storage, Scope::denom(corrupted.denom()))?;
+
+                let remaining_incentive = coin(
+                    self.incentive_pool
+                        .get_pool_balance(storage, &corrupted.denom())?
+                        .u128(),
+                    corrupted.denom(),
+                );
+
+                // if remaining incentive is not zero, add it to the incentives to clean up
+                if remaining_incentive.amount > Uint128::zero() {
+                    self.incentive_pool
+                        .remove_tokens(storage, &remaining_incentive)?;
+                    incentives_to_clean_up.push(remaining_incentive);
+                }
             }
         }
 
@@ -251,7 +270,7 @@ impl Transmuter {
             }
         }
 
-        Ok(())
+        Ok(incentives_to_clean_up)
     }
 
     fn total_normalized_incentive_pool_balance(
@@ -553,7 +572,7 @@ mod tests {
 
         let mut pool = transmuter.pool.load(&deps.storage).unwrap();
         let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
-        assert_eq!(res, Ok(()));
+        assert_eq!(res, Ok(vec![]));
 
         pool = transmuter.pool.load(&deps.storage).unwrap();
         assert_eq!(pool, init_pool);
@@ -563,7 +582,7 @@ mod tests {
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
 
         let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
-        assert_eq!(res, Ok(()));
+        assert_eq!(res, Ok(vec![]));
 
         let expected_pool = TransmuterPool {
             pool_assets: vec![
@@ -593,7 +612,7 @@ mod tests {
             .unwrap();
 
         let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
-        assert_eq!(res, Ok(()));
+        assert_eq!(res, Ok(vec![]));
 
         let expected_pool = TransmuterPool {
             pool_assets: vec![
@@ -650,7 +669,7 @@ mod tests {
         transmuter.pool.save(&mut deps.storage, &pool).unwrap();
 
         let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
-        assert_eq!(res, Ok(()));
+        assert_eq!(res, Ok(vec![]));
 
         // Check that the pool remains unchanged
         let expected_pool = TransmuterPool {
@@ -681,7 +700,7 @@ mod tests {
             .unwrap();
 
         let res = transmuter.clean_up_drained_corrupted_assets(&mut deps.storage, &mut pool);
-        assert_eq!(res, Ok(()));
+        assert_eq!(res, Ok(vec![]));
 
         // Check that the pool remains unchanged except for the drained assets
         let expected_pool = TransmuterPool {
