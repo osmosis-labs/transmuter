@@ -101,6 +101,7 @@ impl SudoMsg {
                         token_out_min_amount,
                         sender,
                         deps,
+                        &env,
                     ),
                 }
                 .map(|res| res.add_attribute("method", "swap_exact_amount_in"))
@@ -156,6 +157,7 @@ impl SudoMsg {
                         token_out,
                         sender,
                         deps,
+                        &env,
                     ),
                 }
                 .map(|res| res.add_attribute("method", "swap_exact_amount_out"))

@@ -109,7 +109,7 @@ impl Rebalancer {
 
     pub fn check_limits(
         &self,
-        storage: &mut dyn Storage,
+        storage: &dyn Storage,
         scope_value_pairs: Vec<(Scope, (Decimal, Decimal))>,
     ) -> Result<(), ContractError> {
         for (scope, (prev_value, value)) in scope_value_pairs {

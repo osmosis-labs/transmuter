@@ -1,5 +1,5 @@
 use cosmwasm_std::{
-    Addr, CheckedFromRatioError, CheckedMultiplyRatioError, Coin, ConversionOverflowError, Decimal,
+    CheckedFromRatioError, CheckedMultiplyRatioError, Coin, ConversionOverflowError, Decimal,
     DecimalRangeExceeded, DivideByZeroError, OverflowError, SignedDecimal256RangeExceeded,
     StdError, Uint128, Uint64,
 };
@@ -172,13 +172,6 @@ pub enum ContractError {
     #[error("Insufficient incentive pool balance for {denom}: available {available}, requested {requested}")]
     InsufficientIncentivePool {
         denom: String,
-        available: Uint128,
-        requested: Uint128,
-    },
-
-    #[error("Insufficient incentive credit for user {user}: available {available}, requested {requested}")]
-    InsufficientIncentiveCredit {
-        user: Addr,
         available: Uint128,
         requested: Uint128,
     },
