@@ -1,5 +1,6 @@
 use crate::{
-    corruptable::Corruptable, incentive_pool::IncentivePool, rebalancer::Rebalancer, scope::Scope,
+    corruptable::Corruptable, ensure_admin_or_moderator_authority, incentive_pool::IncentivePool,
+    rebalancer::Rebalancer, scope::Scope,
 };
 use std::{collections::BTreeMap, iter};
 
@@ -305,8 +306,13 @@ impl Transmuter {
         non_empty_input_required("scopes", &scopes)?;
         nonpayable(&info.funds)?;
 
-        // only moderator can mark corrupted assets
-        ensure_moderator_authority!(info.sender, self.role.moderator, deps.as_ref());
+        // only admin or moderator can mark corrupted assets
+        ensure_admin_or_moderator_authority!(
+            info.sender,
+            self.role.admin,
+            self.role.moderator,
+            deps.as_ref()
+        );
 
         let mut pool = self.pool.load(deps.storage)?;
 
@@ -335,8 +341,13 @@ impl Transmuter {
         non_empty_input_required("scopes", &scopes)?;
         nonpayable(&info.funds)?;
 
-        // only moderator can unmark corrupted assets
-        ensure_moderator_authority!(info.sender, self.role.moderator, deps.as_ref());
+        // only admin or moderator can mark corrupted assets
+        ensure_admin_or_moderator_authority!(
+            info.sender,
+            self.role.admin,
+            self.role.moderator,
+            deps.as_ref()
+        );
 
         let mut pool = self.pool.load(deps.storage)?;
 
@@ -4143,7 +4154,57 @@ mod tests {
         let info = message_info(&admin, &[]);
         instantiate(deps.as_mut(), env.clone(), info, init_msg).unwrap();
 
-        // Mark corrupted scopes
+        // Mark corrupted scope by admin should pass
+        let mark_corrupted_scopes_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedScopes {
+            scopes: vec![Scope::Denom("asset1".to_string())],
+        });
+        let admin_info = message_info(&admin, &[]);
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            admin_info,
+            mark_corrupted_scopes_msg,
+        )
+        .unwrap();
+        assert_eq!(
+            res.attributes,
+            vec![attr("method", "mark_corrupted_scopes")]
+        );
+
+        // Verify that the scope is marked as corrupted
+        // Query the contract to get the corrupted denoms
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedScopes {});
+        let query_res: GetCorrruptedScopesResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+
+        // Check that "asset1" is in the corrupted denoms list
+        assert_eq!(query_res.corrupted_scopes, vec![Scope::denom("asset1")]);
+
+        // Unmark corrupted scope by admin should pass
+        let unmark_corrupted_scopes_msg =
+            ContractExecMsg::Transmuter(ExecMsg::UnmarkCorruptedScopes {
+                scopes: vec![Scope::Denom("asset1".to_string())],
+            });
+        let admin_info = message_info(&admin, &[]);
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            admin_info,
+            unmark_corrupted_scopes_msg,
+        )
+        .unwrap();
+        assert_eq!(
+            res.attributes,
+            vec![attr("method", "unmark_corrupted_scopes")]
+        );
+
+        let query_msg = ContractQueryMsg::Transmuter(QueryMsg::GetCorruptedScopes {});
+        let query_res: GetCorrruptedScopesResponse =
+            from_json(&query(deps.as_ref(), env.clone(), query_msg).unwrap()).unwrap();
+
+        assert_eq!(query_res.corrupted_scopes, vec![]);
+
+        // Mark corrupted scopes by moderator should pass
         let mark_corrupted_scopes_msg = ContractExecMsg::Transmuter(ExecMsg::MarkCorruptedScopes {
             scopes: vec![Scope::Denom("asset1".to_string())],
         });
